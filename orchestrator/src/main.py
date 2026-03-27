@@ -19,7 +19,20 @@ app.add_middleware(
 )
 
 from .routes.ingest import router as ingest_router
+from .routes.documents import router as documents_router
+from .routes.domains import router as domains_router
+from .routes.entities import router as entities_router
+from .routes.jobs import router as jobs_router
+from .routes.simmer import router as simmer_router
+from .routes.stats import router as stats_router
+
 app.include_router(ingest_router)
+app.include_router(documents_router)
+app.include_router(domains_router)
+app.include_router(entities_router)
+app.include_router(jobs_router)
+app.include_router(simmer_router)
+app.include_router(stats_router)
 
 @app.get("/health")
 def health():
