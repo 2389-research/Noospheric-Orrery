@@ -8,10 +8,12 @@ CREATE TABLE IF NOT EXISTS documents (
     title TEXT,
     source_path TEXT,
     content TEXT,
+    content_hash TEXT,
     metadata TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     status TEXT DEFAULT 'pending'
 );
+CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash);
 
 CREATE TABLE IF NOT EXISTS chunks (
     id TEXT PRIMARY KEY,

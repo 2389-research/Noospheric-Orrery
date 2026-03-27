@@ -1,9 +1,10 @@
 import uuid
 import os
 import json
+import hashlib
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropicBedrock
 
 from ..config import get_settings
 from ..db import get_connection
@@ -22,15 +23,37 @@ router = APIRouter()
 async def _ingest_document(title: str, content: str, source_path: str | None) -> dict:
     settings = get_settings()
     conn = get_connection(settings.db_path)
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = AsyncAnthropicBedrock(
+        aws_access_key=settings.aws_access_key,
+        aws_secret_key=settings.aws_secret_key,
+        aws_region=settings.aws_region,
+    )
 
     try:
+        # Dedup: skip if document with same content hash already exists
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+        existing = conn.execute(
+            "SELECT id, status FROM documents WHERE content_hash = ?", (content_hash,)
+        ).fetchone()
+        if existing:
+            domains = [r[0] for r in conn.execute(
+                "SELECT domain_path FROM document_domains WHERE document_id = ?", (existing[0],)
+            ).fetchall()]
+            conn.close()
+            return {
+                "document_id": existing[0],
+                "title": title,
+                "domains": domains,
+                "entity_count": 0,
+                "jobs_queued": [],
+            }
+
         doc_id = str(uuid.uuid4())
 
         # 1. Store document
         conn.execute(
-            "INSERT INTO documents (id, title, source_path, content, status) VALUES (?, ?, ?, ?, 'pending')",
-            (doc_id, title, source_path, content),
+            "INSERT INTO documents (id, title, source_path, content, content_hash, status) VALUES (?, ?, ?, ?, ?, 'pending')",
+            (doc_id, title, source_path, content, content_hash),
         )
 
         # 1b. Chunk and store

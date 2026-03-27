@@ -1,14 +1,18 @@
 import json
 import uuid
 from itertools import combinations
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropicBedrock
 from ..db import get_connection
 from ..config import get_settings
 
 async def run_extract_batch(job: dict, db_path: str) -> None:
     settings = get_settings()
     conn = get_connection(db_path)
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = AsyncAnthropicBedrock(
+        aws_access_key=settings.aws_access_key,
+        aws_secret_key=settings.aws_secret_key,
+        aws_region=settings.aws_region,
+    )
 
     config = json.loads(job["config"]) if job["config"] else {}
     spec_id = config.get("spec_id")

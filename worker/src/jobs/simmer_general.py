@@ -46,6 +46,16 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
     seed_path.write_text(SEED_ONTOLOGY)
     conn.close()
 
+    # Bedrock config from settings
+    bedrock_kwargs = {
+        "api_provider": "bedrock",
+        "aws_access_key": settings.aws_access_key,
+        "aws_secret_key": settings.aws_secret_key,
+        "aws_region": settings.aws_region,
+    }
+
+    print(f"DEBUG: bedrock_kwargs = {bedrock_kwargs}", flush=True)
+
     # Phase 1: Golden set simmering
     golden_result = await refine(
         artifact=str(seed_path),
@@ -58,9 +68,10 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         iterations=settings.simmer_iterations,
         judge_mode="board",
         output_dir=specs_dir / "general_golden",
-        generator_model="claude-sonnet-4-20250514",
-        judge_model="claude-sonnet-4-20250514",
+        generator_model="claude-sonnet-4-6",
+        judge_model="claude-sonnet-4-6",
         background=f"Sample documents are in {sample_dir}. Read them to understand what entity types exist in this corpus.",
+        **bedrock_kwargs,
     )
 
     # Phase 2: Extraction spec simmering
@@ -75,10 +86,11 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         iterations=settings.simmer_iterations,
         judge_mode="board",
         output_dir=specs_dir / "general_spec",
-        generator_model="claude-sonnet-4-20250514",
-        judge_model="claude-sonnet-4-20250514",
-        clerk_model="claude-haiku-4-20250514",
+        generator_model="claude-sonnet-4-6",
+        judge_model="claude-sonnet-4-6",
+        clerk_model="claude-haiku-4-5",
         background=f"This spec will be executed by Haiku. Golden set: {golden_result.best_candidate[:2000]}",
+        **bedrock_kwargs,
     )
 
     # Store spec
