@@ -30,4 +30,23 @@ export const api = {
     }),
   triggerGeneralSimmer: () => fetchAPI<{ job_id: string }>("/simmer/general", { method: "POST" }),
   triggerDomainSimmer: (domain: string) => fetchAPI<{ job_id: string }>(`/simmer/${domain}`, { method: "POST" }),
+  triggerNormalization: () =>
+    fetchAPI<{
+      plural_merges: number;
+      embedding_merges: number;
+      queued_for_review: number;
+      total_entities_before: number;
+      total_entities_after: number;
+    }>("/normalize", { method: "POST" }),
+  getNormalizationSummary: () =>
+    fetchAPI<{
+      merges_by_method: Record<string, number>;
+      total_merges: number;
+      pending_reviews: number;
+      recent_merges: { from: string; to: string; method: string; similarity: number; date: string }[];
+    }>("/normalize/summary"),
+  getReviewQueue: () =>
+    fetchAPI<{ id: string; entity_a: string; entity_b: string; similarity: number }[]>("/normalize/review"),
+  resolveReview: (reviewId: string, action: "merge" | "keep_separate") =>
+    fetchAPI<{ status: string }>(`/normalize/review/${reviewId}?action=${action}`, { method: "POST" }),
 };
