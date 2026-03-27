@@ -1,10 +1,13 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from .config import get_settings
+from .db import init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # db.init_db will be added in Task 2
+    settings = get_settings()
+    init_db(settings.db_path)
     yield
 
 app = FastAPI(title="Noospheric Orrery", lifespan=lifespan)
