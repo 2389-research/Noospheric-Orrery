@@ -1,0 +1,28 @@
+services:
+  orchestrator:
+    build: ./orchestrator
+    ports:
+      - "8000:8000"
+    volumes:
+      - orrery-data:/data
+    env_file: .env
+    depends_on: []
+
+  worker:
+    build: ./worker
+    volumes:
+      - orrery-data:/data
+    env_file: .env
+    depends_on: []
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - orchestrator
+
+volumes:
+  orrery-data:
