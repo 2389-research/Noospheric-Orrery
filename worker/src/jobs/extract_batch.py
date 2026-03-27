@@ -83,3 +83,14 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
         conn.execute("UPDATE documents SET status = 'extracted' WHERE id = ?", (doc_id,))
         conn.commit()
         conn.close()
+
+    # Run normalization after all docs are extracted
+    from ..normalizer import run_batch_normalization
+    norm_conn = get_connection(db_path)
+    try:
+        results = run_batch_normalization(norm_conn)
+        print(f"Normalization: {results}", flush=True)
+    except Exception as e:
+        print(f"Normalization failed: {e}", flush=True)
+    finally:
+        norm_conn.close()
