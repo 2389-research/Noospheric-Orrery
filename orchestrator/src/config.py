@@ -3,9 +3,11 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Settings:
-    anthropic_api_key: str
-    classification_model: str = "claude-sonnet-4-20250514"
-    extraction_model: str = "claude-haiku-4-20250514"
+    aws_access_key: str
+    aws_secret_key: str
+    aws_region: str = "us-east-1"
+    classification_model: str = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+    extraction_model: str = "us.anthropic.claude-haiku-4-20250514-v1:0"
     general_spec_threshold: int = 10
     domain_spec_threshold: int = 20
     simmer_iterations: int = 5
@@ -17,9 +19,11 @@ class Settings:
 
 def get_settings() -> Settings:
     return Settings(
-        anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
-        classification_model=os.environ.get("CLASSIFICATION_MODEL", "claude-sonnet-4-20250514"),
-        extraction_model=os.environ.get("EXTRACTION_MODEL", "claude-haiku-4-20250514"),
+        aws_access_key=os.environ["AWS_ACCESS_KEY"],
+        aws_secret_key=os.environ["AWS_SECRET_KEY"],
+        aws_region=os.environ.get("AWS_REGION", "us-east-1"),
+        classification_model=os.environ.get("CLASSIFICATION_MODEL", "us.anthropic.claude-sonnet-4-20250514-v1:0"),
+        extraction_model=os.environ.get("EXTRACTION_MODEL", "us.anthropic.claude-haiku-4-20250514-v1:0"),
         general_spec_threshold=int(os.environ.get("GENERAL_SPEC_THRESHOLD", "10")),
         domain_spec_threshold=int(os.environ.get("DOMAIN_SPEC_THRESHOLD", "20")),
         simmer_iterations=int(os.environ.get("SIMMER_ITERATIONS", "5")),

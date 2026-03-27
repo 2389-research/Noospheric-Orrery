@@ -3,10 +3,10 @@ name = "orrery-worker"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.40.0",
-    "simmer-sdk>=0.1.0",
-    "sentence-transformers>=3.0.0",
-    "numpy>=1.26.0",
+    "anthropic[bedrock]>=0.40.0",
+    # simmer-sdk installed separately in Dockerfile from local copy
+    # sentence-transformers deferred until embedding normalization is implemented
+    # "sentence-transformers>=3.0.0",
 ]
 
 [project.optional-dependencies]

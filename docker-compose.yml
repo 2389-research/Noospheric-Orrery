@@ -2,9 +2,10 @@ services:
   orchestrator:
     build: ./orchestrator
     ports:
-      - "8000:8000"
+      - "8100:8000"
     volumes:
       - orrery-data:/data
+      - /Users/michaelsugimura/Documents:/host-docs:ro
     env_file: .env
     depends_on: []
 
@@ -18,9 +19,9 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "3000:3000"
+      - "3100:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=http://localhost:8100
     depends_on:
       - orchestrator
 
