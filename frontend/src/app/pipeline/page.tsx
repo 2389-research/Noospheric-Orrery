@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { StatsBar } from "@/components/stats-bar";
 import { DomainTree } from "@/components/domain-tree";
 import { JobsTable } from "@/components/jobs-table";
+import { NormalizationPanel } from "@/components/normalization-panel";
 import { api } from "@/lib/api";
 import type { Stats, DomainInfo, JobInfo } from "@/lib/types";
 
@@ -31,6 +32,9 @@ export default function PipelinePage() {
           </Button>
         </div>
         <DomainTree domains={domains} />
+      </section>
+      <section>
+        <NormalizationPanel />
       </section>
       <section>
         <h2 className="text-lg font-medium mb-4">Jobs</h2>

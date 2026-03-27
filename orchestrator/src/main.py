@@ -25,6 +25,7 @@ from .routes.entities import router as entities_router
 from .routes.jobs import router as jobs_router
 from .routes.simmer import router as simmer_router
 from .routes.stats import router as stats_router
+from .routes.normalize import router as normalize_router
 
 app.include_router(ingest_router)
 app.include_router(documents_router)
@@ -33,6 +34,7 @@ app.include_router(entities_router)
 app.include_router(jobs_router)
 app.include_router(simmer_router)
 app.include_router(stats_router)
+app.include_router(normalize_router)
 
 @app.get("/health")
 def health():
