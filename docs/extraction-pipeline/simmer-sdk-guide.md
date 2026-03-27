@@ -128,6 +128,34 @@ evaluator="python eval_scorer.py --spec {candidate_path} --gold gold_standard/"
 
 Every LLM call is independently configurable. For cost-sensitive pipelines, use haiku for everything. For quality-sensitive work, sonnet across the board.
 
+### AWS Bedrock
+
+The Noospheric Orrery uses Bedrock. Pass credentials via `refine()`:
+
+```python
+result = await refine(
+    ...,
+    api_provider="bedrock",
+    aws_access_key="AKIA...",
+    aws_secret_key="...",
+    aws_region="us-east-1",
+    generator_model="claude-sonnet-4-5",
+    judge_model="claude-sonnet-4-5",
+    clerk_model="claude-haiku-4-5",
+)
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `api_provider` | `"anthropic"` | `"anthropic"` or `"bedrock"` |
+| `aws_access_key` | `None` | AWS IAM access key ID |
+| `aws_secret_key` | `None` | AWS IAM secret access key |
+| `aws_region` | `None` | AWS region (e.g., `"us-east-1"`) |
+
+Model IDs are auto-mapped to Bedrock format. `claude-sonnet-4-5` becomes `us.anthropic.claude-sonnet-4-5-20250929-v1:0`. You can also pass Bedrock IDs directly.
+
+**Note:** Sonnet 4.6 and Opus 4.6 are not yet available on Bedrock. Use `claude-sonnet-4-5` and `claude-haiku-4-5` for now. The mapping will auto-fallback to 4.5 if you pass 4.6 model names.
+
 ### Context & Constraints
 
 | Parameter | Default | Description |
@@ -178,8 +206,14 @@ result = await refine(
         "This spec should discover subdomain-specific types that complement the parent."
     ),
     output_dir=Path("sdk_gold_simmer"),
-    generator_model="claude-sonnet-4-6",
-    judge_model="claude-sonnet-4-6",
+    # Bedrock config
+    api_provider="bedrock",
+    aws_access_key=os.environ["AWS_ACCESS_KEY"],
+    aws_secret_key=os.environ["AWS_SECRET_KEY"],
+    aws_region=os.environ.get("AWS_REGION", "us-east-1"),
+    generator_model="claude-sonnet-4-5",
+    judge_model="claude-sonnet-4-5",
+    clerk_model="claude-haiku-4-5",
 )
 ```
 
@@ -205,8 +239,14 @@ result = await refine(
         "The spec must be executable by Haiku — keep instructions concrete."
     ),
     output_dir=Path("sdk_spec_simmer_haiku"),
-    generator_model="claude-sonnet-4-6",
-    judge_model="claude-sonnet-4-6",
+    # Bedrock config
+    api_provider="bedrock",
+    aws_access_key=os.environ["AWS_ACCESS_KEY"],
+    aws_secret_key=os.environ["AWS_SECRET_KEY"],
+    aws_region=os.environ.get("AWS_REGION", "us-east-1"),
+    generator_model="claude-sonnet-4-5",
+    judge_model="claude-sonnet-4-5",
+    clerk_model="claude-haiku-4-5",
 )
 ```
 
