@@ -10,13 +10,18 @@ export const api = {
   getStats: () => fetchAPI<import("./types").Stats>("/stats"),
   getDocuments: () => fetchAPI<import("./types").DocumentSummary[]>("/documents"),
   getDomains: () => fetchAPI<import("./types").DomainInfo[]>("/domains"),
-  getEntities: (params?: { type?: string; domain?: string }) => {
+  getEntities: (params?: { type?: string; domain?: string; job_id?: string }) => {
     const query = new URLSearchParams();
     if (params?.type) query.set("type", params.type);
     if (params?.domain) query.set("domain", params.domain);
-    return fetchAPI<import("./types").EntitySummary[]>(`/entities?${query}`);
+    if (params?.job_id) query.set("job_id", params.job_id);
+    return fetchAPI<(import("./types").EntitySummary & { is_new?: boolean })[]>(`/entities?${query}`);
   },
-  getJobs: () => fetchAPI<import("./types").JobInfo[]>("/jobs"),
+  getJobs: () => fetchAPI<(import("./types").JobInfo & { results?: import("./types").BatchResults })[]>("/jobs"),
+  getJob: (jobId: string) =>
+    fetchAPI<(import("./types").JobInfo & { results?: import("./types").BatchResults })[]>("/jobs").then(
+      (jobs) => jobs.find((j) => j.id === jobId) ?? null
+    ),
   ingestFile: async (file: File) => {
     const form = new FormData();
     form.append("file", file);
