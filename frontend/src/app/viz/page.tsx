@@ -64,6 +64,13 @@ export default function VizPage() {
 
   return (
     <div className="flex" style={{ height: "calc(100vh - 57px)" }}>
+      {selectedNode && (
+        <GalaxyPanel
+          selectedNode={selectedNode}
+          domainColors={domainColors}
+          onClose={handleClose}
+        />
+      )}
       <iframe
         ref={iframeRef}
         src="/cosmic-viz.html"
@@ -75,13 +82,6 @@ export default function VizPage() {
         }}
         title="Cosmic Knowledge Graph"
       />
-      {selectedNode && (
-        <GalaxyPanel
-          selectedNode={selectedNode}
-          domainColors={domainColors}
-          onClose={handleClose}
-        />
-      )}
     </div>
   );
 }

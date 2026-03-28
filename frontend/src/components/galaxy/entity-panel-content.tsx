@@ -245,7 +245,7 @@ export function EntityPanelContent({
 
   const sectionLabel: React.CSSProperties = {
     fontSize: 9,
-    color: "rgba(100,180,255,0.4)",
+    color: "rgba(140,200,255,0.6)",
     textTransform: "uppercase",
     letterSpacing: "0.08em",
     fontFamily: "'Courier New', monospace",
@@ -268,7 +268,7 @@ export function EntityPanelContent({
         <div style={{ fontSize: 18, color: "#e8eaf0", lineHeight: 1.2, marginBottom: 4 }}>
           {data.name}
         </div>
-        <div style={{ fontSize: 11, color: "rgba(100,180,255,0.4)" }}>
+        <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)" }}>
           {data.source_count} docs across corpus
         </div>
       </div>
@@ -282,7 +282,7 @@ export function EntityPanelContent({
             <div style={{ flex: 1, minWidth: 0 }}>
               {domainEntries.map(([domain, weight]) => {
                 const pct = totalWeight > 0 ? Math.round((weight / totalWeight) * 100) : 0;
-                const domainColor = domainColors[domain] ?? "rgba(100,180,255,0.4)";
+                const domainColor = domainColors[domain] ?? "rgba(140,200,255,0.6)";
                 const shortName = domain.split("/").pop() ?? domain;
                 return (
                   <button
@@ -304,7 +304,7 @@ export function EntityPanelContent({
                     <span style={{ fontSize: 10, color: domainColor, minWidth: 0, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {shortName}
                     </span>
-                    <span style={{ fontSize: 10, color: "rgba(180,195,220,0.65)", flexShrink: 0 }}>
+                    <span style={{ fontSize: 10, color: "rgba(200,215,235,0.85)", flexShrink: 0 }}>
                       {pct}%
                     </span>
                   </button>
@@ -319,15 +319,15 @@ export function EntityPanelContent({
       <div style={sectionStyle}>
         <span style={sectionLabel}>From the Docs</span>
         {loadingSnippets ? (
-          <div style={{ fontSize: 11, color: "rgba(100,180,255,0.4)", fontStyle: "italic" }}>
+          <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)", fontStyle: "italic" }}>
             loading mentions…
           </div>
         ) : snippetError ? (
-          <div style={{ fontSize: 11, color: "rgba(100,180,255,0.4)" }}>
+          <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)" }}>
             couldn&apos;t load snippets
           </div>
         ) : snippets.length === 0 ? (
-          <div style={{ fontSize: 11, color: "rgba(100,180,255,0.4)" }}>
+          <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)" }}>
             no snippets available
           </div>
         ) : (
@@ -342,7 +342,7 @@ export function EntityPanelContent({
                 borderRadius: "0 3px 3px 0",
               }}
             >
-              <div style={{ fontSize: 11, color: "rgba(180,195,220,0.65)", lineHeight: 1.5 }}>
+              <div style={{ fontSize: 11, color: "rgba(200,215,235,0.85)", lineHeight: 1.5 }}>
                 &ldquo;<SnippetText text={snippet} entityName={data.name} />&rdquo;
               </div>
             </div>
@@ -354,15 +354,15 @@ export function EntityPanelContent({
       <div style={sectionStyle}>
         <span style={sectionLabel}>Often Appears With</span>
         {loadingCooc ? (
-          <div style={{ fontSize: 11, color: "rgba(100,180,255,0.4)", fontStyle: "italic" }}>
+          <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)", fontStyle: "italic" }}>
             loading…
           </div>
         ) : coocError ? (
-          <div style={{ fontSize: 11, color: "rgba(100,180,255,0.4)" }}>
+          <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)" }}>
             couldn&apos;t load co-occurrences
           </div>
         ) : cooccurrences.length === 0 ? (
-          <div style={{ fontSize: 11, color: "rgba(100,180,255,0.4)" }}>
+          <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)" }}>
             no co-occurrence data
           </div>
         ) : (
@@ -409,7 +409,7 @@ export function EntityPanelContent({
                 key={i}
                 style={{
                   fontSize: 11,
-                  color: "rgba(100,180,255,0.4)",
+                  color: "rgba(140,200,255,0.6)",
                   textDecoration: "line-through",
                   textDecorationColor: "rgba(100,180,255,0.25)",
                 }}
@@ -435,10 +435,10 @@ export function EntityPanelContent({
                   fontSize: 10, fontFamily: "'Courier New', monospace",
                 }}
               >
-                <span style={{ color: "rgba(180,195,220,0.65)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8 }}>
+                <span style={{ color: "rgba(200,215,235,0.85)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8 }}>
                   {doc.title}
                 </span>
-                <span style={{ color: "rgba(100,180,255,0.4)", flexShrink: 0 }}>
+                <span style={{ color: "rgba(140,200,255,0.6)", flexShrink: 0 }}>
                   {doc.mentions}×
                 </span>
               </div>
