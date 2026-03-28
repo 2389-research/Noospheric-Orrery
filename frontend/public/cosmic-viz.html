@@ -273,16 +273,16 @@ function drawNebula(n, highlighted) {
   }
 }
 
-// State 1: Unformed — wispy cloud, no core
+// State 1: Unformed — very faint wispy cloud, no core, reads as "undiscovered"
 function drawNebulaUnformed(n, bR, r, g, b, isHov) {
-  const brightness = isHov ? 1.8 : 1.0;
-  for (let i = 0; i < 4; i++) {
+  const brightness = isHov ? 1.5 : 1.0;
+  for (let i = 0; i < 3; i++) {
     const angle = n._rot*(1-i*0.15) + i*1.4;
-    const lr = bR*(1.8 - i*0.12);
+    const lr = bR*(1.6 - i*0.12);
     const ox = cos(angle)*bR*0.12, oy = sin(angle)*bR*0.08;
-    const a = (0.025 - i*0.003) * clamp(n.birthScale,0,1) * brightness;
+    const a = (0.015 - i*0.003) * clamp(n.birthScale,0,1) * brightness;
     const ng = ctx.createRadialGradient(n.x+ox,n.y+oy,0,n.x+ox,n.y+oy,lr);
-    ng.addColorStop(0,rgba(r,g,b,a*2)); ng.addColorStop(0.4,rgba(r,g,b,a)); ng.addColorStop(1,'transparent');
+    ng.addColorStop(0,rgba(r,g,b,a*1.5)); ng.addColorStop(0.5,rgba(r,g,b,a*0.5)); ng.addColorStop(1,'transparent');
     ctx.fillStyle = ng; ctx.fillRect(n.x+ox-lr,n.y+oy-lr,lr*2,lr*2);
   }
 }
@@ -338,56 +338,62 @@ function drawNebulaSimmering(n, bR, r, g, b) {
   }
 }
 
-// State 3: Formed — settled cloud with star, spikes scale with maturity
+// State 3: Formed — bright star with cloud, spikes, clearly different from unformed
 function drawNebulaFormed(n, bR, r, g, b, maturity, isHov) {
-  const bright = (0.4 + maturity*0.6) * (isHov ? 1.5 : 1.0);
-  const coreR = bR*(0.08 + maturity*0.06);
+  const bright = (0.5 + maturity*0.5) * (isHov ? 1.4 : 1.0);
+  const coreR = bR*(0.12 + maturity*0.08);
   const breathe = 0.94 + 0.06*sin(tick*0.001);
 
-  // Settled cloud with inner clearing
+  // Settled cloud with inner clearing — brighter than unformed
   for (let i = 0; i < 4; i++) {
     const angle = n._rot*(1-i*0.15) + i*1.4;
     const lr = bR*(1.5 - i*0.08);
     const ox = cos(angle)*bR*0.07, oy = sin(angle)*bR*0.06;
-    const baseA = (0.045 + maturity*0.025 - i*0.005) * clamp(n.birthScale,0,1);
-    const ng = ctx.createRadialGradient(n.x+ox,n.y+oy,bR*0.25, n.x+ox,n.y+oy,lr);
+    const baseA = (0.05 + maturity*0.03 - i*0.005) * clamp(n.birthScale,0,1);
+    const ng = ctx.createRadialGradient(n.x+ox,n.y+oy,bR*0.2, n.x+ox,n.y+oy,lr);
     ng.addColorStop(0,'transparent');
-    ng.addColorStop(0.15,rgba(r,g,b,baseA*1.5));
+    ng.addColorStop(0.12,rgba(r,g,b,baseA*1.8));
     ng.addColorStop(0.5,rgba(r,g,b,baseA));
     ng.addColorStop(1,'transparent');
     ctx.fillStyle = ng; ctx.fillRect(n.x+ox-lr,n.y+oy-lr,lr*2,lr*2);
   }
 
-  // Wide halo
-  const wh = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,bR*0.55);
-  wh.addColorStop(0,rgba(r,g,b,0.09*bright)); wh.addColorStop(0.4,rgba(r,g,b,0.04*bright)); wh.addColorStop(1,'transparent');
-  ctx.fillStyle = wh; ctx.beginPath(); ctx.arc(n.x,n.y,bR*0.55,0,TAU); ctx.fill();
+  // Wide halo — strong glow around star
+  const wh = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,bR*0.7);
+  wh.addColorStop(0,rgba(r,g,b,0.18*bright));
+  wh.addColorStop(0.3,rgba(r,g,b,0.08*bright));
+  wh.addColorStop(1,'transparent');
+  ctx.fillStyle = wh; ctx.beginPath(); ctx.arc(n.x,n.y,bR*0.7,0,TAU); ctx.fill();
 
-  // Inner halo
-  const ih = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,coreR*5);
-  ih.addColorStop(0,rgba(r,g,b,0.28*bright*breathe)); ih.addColorStop(0.4,rgba(r,g,b,0.13*bright)); ih.addColorStop(1,'transparent');
-  ctx.fillStyle = ih; ctx.beginPath(); ctx.arc(n.x,n.y,coreR*5,0,TAU); ctx.fill();
+  // Inner halo — bright
+  const ih = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,coreR*6);
+  ih.addColorStop(0,rgba(r,g,b,0.35*bright*breathe));
+  ih.addColorStop(0.3,rgba(r,g,b,0.18*bright));
+  ih.addColorStop(1,'transparent');
+  ctx.fillStyle = ih; ctx.beginPath(); ctx.arc(n.x,n.y,coreR*6,0,TAU); ctx.fill();
 
-  // Star point — white center
+  // Star point — bright white center, visible
+  ctx.shadowBlur = coreR*3;
+  ctx.shadowColor = `rgba(255,255,255,${0.4*bright})`;
   const sg = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,coreR);
-  sg.addColorStop(0,`rgba(255,255,255,${min(1.0, 1.1*bright*breathe)})`);
-  sg.addColorStop(0.3,rgba(r,g,b,0.7*bright));
+  sg.addColorStop(0,`rgba(255,255,255,${min(1.0, bright*breathe)})`);
+  sg.addColorStop(0.4,rgba(r,g,b,0.8*bright));
   sg.addColorStop(1,'transparent');
   ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(n.x,n.y,coreR,0,TAU); ctx.fill();
+  ctx.shadowBlur = 0;
 
-  // Diffraction spikes at maturity >= 0.5
-  if (maturity >= 0.5) {
-    const spikeLen = coreR*(4 + maturity*10);
-    const spikeA = bright*0.28*breathe;
-    for (let s = 0; s < 4; s++) {
-      const a = s*PI/2;
-      const x2 = n.x+cos(a)*spikeLen, y2 = n.y+sin(a)*spikeLen;
-      const spg = ctx.createLinearGradient(n.x,n.y,x2,y2);
-      spg.addColorStop(0,`rgba(255,255,255,${spikeA})`);
-      spg.addColorStop(1,'transparent');
-      ctx.strokeStyle = spg; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(n.x,n.y); ctx.lineTo(x2,y2); ctx.stroke();
-    }
+  // Diffraction spikes — always show for formed domains, length scales with maturity
+  const spikeLen = bR*(0.5 + maturity*1.5);
+  const spikeA = bright*0.4*breathe;
+  for (let s = 0; s < 4; s++) {
+    const a = s*PI/2;
+    const x2 = n.x+cos(a)*spikeLen, y2 = n.y+sin(a)*spikeLen;
+    const spg = ctx.createLinearGradient(n.x,n.y,x2,y2);
+    spg.addColorStop(0,`rgba(255,255,255,${spikeA})`);
+    spg.addColorStop(0.3,rgba(r,g,b,spikeA*0.5));
+    spg.addColorStop(1,'transparent');
+    ctx.strokeStyle = spg; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(n.x,n.y); ctx.lineTo(x2,y2); ctx.stroke();
   }
 }
 
