@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS entity_sources (
     document_id TEXT REFERENCES documents(id),
     chunk_id TEXT REFERENCES chunks(id),
     extraction_pass TEXT,
-    spec_version INTEGER
+    spec_version INTEGER,
+    job_id TEXT REFERENCES jobs(id)
 );
 
 CREATE TABLE IF NOT EXISTS merge_map (
