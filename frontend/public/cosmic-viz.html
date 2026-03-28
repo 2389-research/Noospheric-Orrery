@@ -680,6 +680,13 @@ canvas.addEventListener('wheel', e => {
 
 // ── PHYSICS ────────────────────────────────────────────────────
 function simTick() {
+  // Grow domain birthScale
+  for (const n of nodes.values()) {
+    if (n.kind === 'domain' && n.birthScale < 1) {
+      n.birthScale = min(1, n.birthScale + 0.02);
+    }
+  }
+
   const entities = [...nodes.values()].filter(n=>n.kind==='entity');
 
   // Entity attraction toward domain centroid(s)
