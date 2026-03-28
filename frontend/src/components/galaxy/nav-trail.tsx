@@ -46,7 +46,7 @@ export function NavTrail({ trail, onNavigate }: NavTrailProps) {
                   border: "none",
                   cursor: "pointer",
                   padding: 0,
-                  color: "rgba(100,180,255,0.45)",
+                  color: "rgba(140,200,255,0.65)",
                   fontFamily: "'Courier New', monospace",
                   fontSize: 10,
                   textDecoration: "underline",

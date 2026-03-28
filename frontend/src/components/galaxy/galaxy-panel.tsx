@@ -140,7 +140,7 @@ export function GalaxyPanel({ selectedNode, domainColors, onClose }: GalaxyPanel
         width: 300,
         flexShrink: 0,
         background: "rgba(6, 13, 34, 0.97)",
-        borderLeft: "1px solid rgba(100,180,255,0.12)",
+        borderRight: "1px solid rgba(100,180,255,0.12)",
         display: "flex",
         flexDirection: "column",
         height: "100%",

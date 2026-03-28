@@ -129,7 +129,7 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity }: Doma
 
   const sectionLabel: React.CSSProperties = {
     fontSize: 9,
-    color: "rgba(100,180,255,0.4)",
+    color: "rgba(140,200,255,0.6)",
     textTransform: "uppercase",
     letterSpacing: "0.08em",
     fontFamily: "'Courier New', monospace",
@@ -146,7 +146,7 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity }: Doma
     <div style={{ fontFamily: "'Courier New', monospace" }}>
       {/* Header */}
       <div style={{ padding: "16px 16px 12px" }}>
-        <div style={{ fontSize: 9, color: "rgba(100,180,255,0.4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>
+        <div style={{ fontSize: 9, color: "rgba(140,200,255,0.6)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>
           Domain
         </div>
         <div style={{ fontSize: 18, color: accentColor, lineHeight: 1.2, marginBottom: 4 }}>
@@ -166,7 +166,7 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity }: Doma
           border: "1px solid rgba(100,180,255,0.15)",
           borderRadius: 3,
           fontSize: 11,
-          color: "rgba(180,195,220,0.65)",
+          color: "rgba(200,215,235,0.85)",
         }}>
           {data.document_count} docs
         </div>
@@ -176,7 +176,7 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity }: Doma
             border: "1px solid rgba(100,180,255,0.15)",
             borderRadius: 3,
             fontSize: 11,
-            color: "rgba(180,195,220,0.65)",
+            color: "rgba(200,215,235,0.85)",
           }}>
             {entityCount} entities
           </div>
@@ -186,7 +186,7 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity }: Doma
       {/* Spec status */}
       <div style={sectionStyle}>
         {loadingSpec ? (
-          <div style={{ fontSize: 11, color: "rgba(100,180,255,0.4)", fontStyle: "italic" }}>
+          <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)", fontStyle: "italic" }}>
             checking spec…
           </div>
         ) : specStatus.isRunning ? (
@@ -199,7 +199,7 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity }: Doma
               flexShrink: 0,
               animation: "pulse 1.5s ease-in-out infinite",
             }} />
-            <span style={{ color: "rgba(180,195,220,0.65)" }}>
+            <span style={{ color: "rgba(200,215,235,0.85)" }}>
               simmering now…{" "}
               {specStatus.jobId && (
                 <a href={`/simmer/${specStatus.jobId}`} style={{ color: "rgba(100,180,255,0.6)", textDecoration: "none" }}>
@@ -211,14 +211,14 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity }: Doma
         ) : specStatus.exists ? (
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#1D9E75", flexShrink: 0 }} />
-            <span style={{ color: "rgba(180,195,220,0.65)" }}>
+            <span style={{ color: "rgba(200,215,235,0.85)" }}>
               spec v{specStatus.version}{specStatus.simmeredAt ? ` · simmered ${relativeTime(specStatus.simmeredAt)}` : ""}
             </span>
           </div>
         ) : (
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
             <span style={{ width: 7, height: 7, borderRadius: "50%", border: "1.5px solid #BA7517", flexShrink: 0 }} />
-            <span style={{ color: "rgba(180,195,220,0.65)" }}>no spec · simmer to extract</span>
+            <span style={{ color: "rgba(200,215,235,0.85)" }}>no spec · simmer to extract</span>
           </div>
         )}
       </div>
@@ -227,15 +227,15 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity }: Doma
       <div style={sectionStyle}>
         <span style={sectionLabel}>Top Entities by Mention</span>
         {loadingEntities ? (
-          <div style={{ fontSize: 11, color: "rgba(100,180,255,0.4)", fontStyle: "italic" }}>
+          <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)", fontStyle: "italic" }}>
             loading entities…
           </div>
         ) : entitiesError ? (
-          <div style={{ fontSize: 11, color: "rgba(100,180,255,0.4)" }}>
+          <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)" }}>
             couldn&apos;t load entities
           </div>
         ) : topEntities.length === 0 ? (
-          <div style={{ fontSize: 11, color: "rgba(100,180,255,0.4)" }}>
+          <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)" }}>
             no entities in this domain
           </div>
         ) : (
@@ -288,7 +288,7 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity }: Doma
                       }}
                     />
                   </div>
-                  <span style={{ fontSize: 10, color: "rgba(180,195,220,0.65)", width: 20, textAlign: "right", flexShrink: 0 }}>
+                  <span style={{ fontSize: 10, color: "rgba(200,215,235,0.85)", width: 20, textAlign: "right", flexShrink: 0 }}>
                     {entity.source_count}
                   </span>
                 </button>
