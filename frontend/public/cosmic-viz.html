@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Noospheric — Cosmic Knowledge Graph</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #01040a; color: #c0c8e0; font-family: 'Courier New', monospace; overflow: hidden; }
+canvas { display: block; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; cursor: grab; z-index: 1; }
+canvas:active { cursor: grabbing; }
+#hud, #controls, #tooltip, #zoom-level {
+  z-index: 10;
+}
+#hud {
+  position: fixed; top: 12px; right: 12px; z-index: 10;
+  background: rgba(6,13,34,0.85); border: 1px solid rgba(100,180,255,0.15);
+  border-radius: 6px; padding: 12px 14px; width: 220px; font-size: 10px;
+  max-height: 50vh; overflow-y: auto;
+}
+#hud h2 { font-size: 10px; color: rgba(100,180,255,0.5); letter-spacing: 2px; margin-bottom: 8px; }
+.dom-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; }
+.dom-row:hover { background: rgba(100,180,255,0.05); }
+.dom-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dom-name { flex: 1; color: #7888a8; font-size: 9px; }
+.dom-count { font-size: 8px; color: #445; }
+#controls {
+  position: fixed; bottom: 12px; left: 12px; z-index: 10; display: flex; gap: 6px;
+}
+#controls button {
+  background: rgba(6,13,34,0.85); border: 1px solid rgba(100,180,255,0.2);
+  color: rgba(130,190,255,0.6); padding: 5px 10px; border-radius: 4px;
+  font: 9px 'Courier New'; cursor: pointer; letter-spacing: 1px;
+}
+#controls button:hover { border-color: rgba(100,180,255,0.5); color: #b4e1ff; }
+#tooltip {
+  position: fixed; z-index: 20; pointer-events: none; display: none;
+  background: rgba(6,13,34,0.92); border: 1px solid rgba(100,180,255,0.2);
+  border-radius: 6px; padding: 8px 12px; max-width: 260px;
+}
+#tooltip .tt-type { color: rgba(100,180,255,0.5); font-size: 8px; letter-spacing: 2px; }
+#tooltip .tt-name { color: #d0d8f0; font-size: 11px; margin: 2px 0; }
+#tooltip .tt-meta { color: rgba(120,140,170,0.5); font-size: 9px; line-height: 1.5; }
+#zoom-level {
+  position: fixed; bottom: 12px; right: 12px; z-index: 10;
+  font-size: 9px; color: rgba(100,180,255,0.3);
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud">
+  <h2>◈ NEBULAE</h2>
+  <div id="domain-list"></div>
+</div>
+
+<div id="controls">
+  <button onclick="ingestDoc()">INGEST DOC</button>
+  <button onclick="docBurst()">DOC BURST ×8</button>
+  <button onclick="triggerSimmer()">SIMMER DOMAIN</button>
+</div>
+
+<div id="tooltip"></div>
+<div id="zoom-level"></div>
+
+<script>
+const {sin, cos, sqrt, hypot, PI, random, min, max, pow, round, floor, abs, log} = Math;
+const TAU = PI * 2;
+const lerp = (a,b,t) => a+(b-a)*t;
+const clamp = (v,lo,hi) => min(hi, max(lo, v));
+const rnd = (lo,hi) => lo+random()*(hi-lo);
+
+function hexRGB(h) {
+  if (!h) return [128,128,128];
+  if (h.startsWith('rgb')) {
+    const m = h.match(/(\d+)/g);
+    return m ? [+m[0],+m[1],+m[2]] : [128,128,128];
+  }
+  h=h.replace('#','');
+  const r=parseInt(h.slice(0,2),16), g=parseInt(h.slice(2,4),16), b=parseInt(h.slice(4,6),16);
+  return [isNaN(r)?128:r, isNaN(g)?128:g, isNaN(b)?128:b];
+}
+function rgba(r,g,b,a) { return `rgba(${r},${g},${b},${a})`; }
+function lighten(hex,f) { const[r,g,b]=hexRGB(hex); return `rgb(${round(r+(255-r)*f)},${round(g+(255-g)*f)},${round(b+(255-b)*f)})`; }
+function darken(hex,f) { const[r,g,b]=hexRGB(hex); return `rgb(${round(r*(1-f))},${round(g*(1-f))},${round(b*(1-f))})`; }
+function blendColors(colors, weights) {
+  let r=0,g=0,b=0,tw=0;
+  colors.forEach((c,i) => {
+    if (!c) return;
+    const rgb=hexRGB(c);
+    if (isNaN(rgb[0])) return;
+    const w=weights[i]||0; r+=rgb[0]*w; g+=rgb[1]*w; b+=rgb[2]*w; tw+=w;
+  });
+  if(tw===0) return '#888888';
+  return `rgb(${round(r/tw)},${round(g/tw)},${round(b/tw)})`;
+}
+
+// Domain palette
+const DOMAIN_COLORS = {
+  'Beginner Fundamentals': '#81d4fa',
+  'Army Painting': '#ffd54f',
+  'Character Painting': '#ef5350',
+  'Airbrush Techniques': '#a855f7',
+  'Blending Techniques': '#14b8a6',
+  'NMM': '#ff8a65',
+  'Weathering & Effects': '#78909c',
+  'OSL & Lighting Effects': '#ffab40',
+  'Competition Painting': '#e040fb',
+  'Kitbashing & Converting': '#84cc16',
+  'Speed Painting': '#26c6da',
+  'Challenge / Entertainment': '#fdd835',
+};
+
+const ENTITY_TYPE_COLORS = {
+  technique:'#f97316', tool:'#a855f7', concept:'#14b8a6', faction:'#6366f1',
+  medium:'#84cc16', color:'#eab308', paint:'#ef4444', paint_brand:'#ec4899',
+  body_area:'#f59e0b', game_system:'#6366f1', assembly:'#d946ef',
+  skill_level:'#06b6d4', aesthetic:'#ec4899', topic:'#64748b',
+  person:'#8b5cf6', model:'#fb923c', basing:'#78716c',
+};
+
+// State
+let W, H, ctx, tick = 0;
+const nodes = new Map(); // id -> node
+const edges = [];
+const comets = [];
+const births = [];
+const sparks = [];
+let hoveredId = null;
+let cosmicData = null;
+
+// Camera
+const cam = { x: 0, y: 0, zoom: 0.7 };
+let dragging = false, didDrag = false, dragStart = {x:0,y:0};
+
+// ── BACKGROUND ─────────────────────────────────────────────────
+const STARS = Array.from({length:400}, () => ({
+  x:random(), y:random(), r:pow(random(),3)*1.6+0.1,
+  a:random()*0.4+0.05, phase:random()*TAU,
+  speed:(random()*0.3+0.05)*(random()<0.5?1:-1),
+}));
+const CLOUDS = [
+  {x:.15,y:.25,r:.28,color:[30,8,80],alpha:.07},
+  {x:.72,y:.65,r:.22,color:[5,35,100],alpha:.06},
+  {x:.50,y:.82,r:.18,color:[80,5,50],alpha:.05},
+  {x:.85,y:.18,r:.15,color:[0,50,70],alpha:.05},
+  {x:.35,y:.50,r:.12,color:[90,60,0],alpha:.04},
+];
+
+function drawBackground() {
+  const g = ctx.createRadialGradient(W/2,H/2,0,W/2,H/2,max(W,H)*0.7);
+  g.addColorStop(0,'#060d22'); g.addColorStop(1,'#01040a');
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  for (const c of CLOUDS) {
+    const ng = ctx.createRadialGradient(c.x*W,c.y*H,0,c.x*W,c.y*H,c.r*min(W,H));
+    ng.addColorStop(0,rgba(c.color[0],c.color[1],c.color[2],c.alpha));
+    ng.addColorStop(0.6,rgba(c.color[0],c.color[1],c.color[2],c.alpha*0.3));
+    ng.addColorStop(1,'transparent');
+    ctx.fillStyle = ng; ctx.fillRect(0,0,W,H);
+  }
+  for (const s of STARS) {
+    const tw = 0.5+0.5*sin(tick*0.004*s.speed+s.phase);
+    ctx.globalAlpha = s.a*tw; ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.arc(s.x*W,s.y*H,s.r,0,TAU); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ── NEBULA (DOMAIN) RENDERER ───────────────────────────────────
+function drawNebula(n) {
+  const [r,g,b] = hexRGB(n.color);
+  const bR = n.radius * clamp(n.birthScale, 0, 1);
+  const pulse = 0.5 + 0.5*sin(tick*0.008+n.phase);
+  n._rot = (n._rot||0) + 0.0003;
+
+  // Gas layers
+  for (let i = 0; i < 4; i++) {
+    const angle = n._rot*(1-i*0.15) + i*1.4;
+    const lr = bR*(2.2+i*0.5+pulse*0.3);
+    const ox = cos(angle)*bR*0.3, oy = sin(angle)*bR*0.25;
+    const a = (0.05-i*0.01)*clamp(n.birthScale,0,1);
+    const ng = ctx.createRadialGradient(n.x+ox,n.y+oy,0,n.x+ox,n.y+oy,lr);
+    ng.addColorStop(0,rgba(r,g,b,a*2)); ng.addColorStop(0.4,rgba(r,g,b,a)); ng.addColorStop(1,'transparent');
+    ctx.fillStyle = ng; ctx.fillRect(n.x+ox-lr,n.y+oy-lr,lr*2,lr*2);
+  }
+
+  // Core glow
+  const cg = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,bR*0.8);
+  cg.addColorStop(0,rgba(r,g,b,0.25)); cg.addColorStop(0.5,rgba(r,g,b,0.08)); cg.addColorStop(1,'transparent');
+  ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(n.x,n.y,bR*0.8,0,TAU); ctx.fill();
+
+  // Label
+  const labelAlpha = n.isSubdomain ? 0.3 : 0.45;
+  const labelSize = n.isSubdomain ? 8 : 10;
+  ctx.fillStyle = rgba(r,g,b,labelAlpha);
+  ctx.font = `${labelSize}px Courier New`; ctx.textAlign = 'center';
+  ctx.fillText(n.label, n.x, n.y + bR*2.2 + 12);
+  if (!n.isSubdomain) {
+    ctx.fillStyle = rgba(r,g,b,0.2);
+    ctx.font = '8px Courier New';
+    ctx.fillText(`${n.videoCount} tutorials`, n.x, n.y + bR*2.2 + 23);
+  }
+}
+
+// ── STAR (ENTITY) RENDERER ─────────────────────────────────────
+function drawStar(n, isDim) {
+  if (n.birthScale < 1) n.birthScale = min(1, n.birthScale + 0.02);
+  const bR = n.radius * n.birthScale;
+  const pulse = 0.5+0.5*sin(tick*0.015+n.phase);
+  const [r,g,b] = hexRGB(n.color);
+  const isHov = n.id === hoveredId;
+
+  ctx.globalAlpha = isDim ? 0.08 : 1;
+
+  // Aura
+  const ag = ctx.createRadialGradient(n.x,n.y,bR*0.2,n.x,n.y,bR*(3+pulse));
+  ag.addColorStop(0,rgba(r,g,b,0.08)); ag.addColorStop(1,'transparent');
+  ctx.fillStyle = ag; ctx.beginPath(); ctx.arc(n.x,n.y,bR*(3+pulse),0,TAU); ctx.fill();
+
+  // Core
+  ctx.shadowBlur = isHov ? 15 : 8;
+  ctx.shadowColor = n.color;
+  const cg = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,bR);
+  cg.addColorStop(0,lighten(n.color,0.6)); cg.addColorStop(0.5,n.color); cg.addColorStop(1,darken(n.color,0.3));
+  ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(n.x,n.y,bR,0,TAU); ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // Label (only when zoomed in enough or hovered)
+  if (!isDim && (cam.zoom > 0.7 || isHov)) {
+    ctx.fillStyle = rgba(r,g,b,0.5);
+    ctx.font = '7px Courier New'; ctx.textAlign = 'center';
+    ctx.fillText(n.label, n.x, n.y + bR + 9);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ── EDGES ──────────────────────────────────────────────────────
+function drawEdges() {
+  const hi = hoveredId ? getNeighborhood(hoveredId) : null;
+  for (const e of edges) {
+    const s = nodes.get(e.source), t = nodes.get(e.target);
+    if (!s||!t) continue;
+    const isHL = hi && hi.has(s.id) && hi.has(t.id);
+    const isDim = hi && !isHL;
+    const isCross = e.kind === 'cross-domain';
+    if (isCross) ctx.setLineDash([3,6]);
+    const a = isDim ? 0.01 : isHL ? 0.3 : isCross ? 0.06 : 0.02;
+    ctx.strokeStyle = isCross ? rgba(0,200,180,a) : rgba(100,160,220,a);
+    ctx.lineWidth = isHL ? 0.8 : 0.3;
+    ctx.beginPath(); ctx.moveTo(s.x,s.y); ctx.lineTo(t.x,t.y); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Particles on trade routes
+    if (isCross && !isDim) {
+      if (!e.particles) e.particles = [{t:random()},{t:random()*0.5}];
+      for (const p of e.particles) {
+        p.t = (p.t + 0.001) % 1;
+        ctx.globalAlpha = isHL ? 0.4 : 0.1;
+        ctx.fillStyle = '#00c8aa';
+        ctx.beginPath(); ctx.arc(lerp(s.x,t.x,p.t),lerp(s.y,t.y,p.t),1.2,0,TAU); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
+// ── FX ─────────────────────────────────────────────────────────
+function drawBirths() {
+  for (let i=births.length-1; i>=0; i--) {
+    const b=births[i]; b.t+=0.012;
+    if (b.t>=1.4) { births.splice(i,1); continue; }
+    const [r,g,bb]=hexRGB(b.color);
+    for (let ring=0; ring<3; ring++) {
+      const rt=max(0,b.t-ring*0.2), radius=rt*b.maxRadius, alpha=max(0,(1-rt)*0.5);
+      if (alpha<=0) continue;
+      ctx.strokeStyle=rgba(r,g,bb,alpha); ctx.lineWidth=1.8*(1-rt);
+      ctx.beginPath(); ctx.arc(b.x,b.y,radius,0,TAU); ctx.stroke();
+    }
+  }
+}
+
+function drawComets() {
+  for (let i=comets.length-1; i>=0; i--) {
+    const c=comets[i]; const t=nodes.get(c.targetId);
+    if (!t) { comets.splice(i,1); continue; }
+    const dx=t.x-c.x, dy=t.y-c.y, dist=hypot(dx,dy);
+    if (dist<(t.radius||20)+5) {
+      if (!c.hit) { c.hit=true; births.push({x:t.x,y:t.y,color:t.color,t:0,maxRadius:25}); }
+      c.trail.shift(); if(c.trail.length===0) comets.splice(i,1); continue;
+    }
+    c.trail.unshift({x:c.x,y:c.y}); if(c.trail.length>c.trailMaxLen) c.trail.pop();
+    c.x+=dx/dist*c.speed; c.y+=dy/dist*c.speed;
+    const [r,g,b]=hexRGB(c.color);
+    for (let j=0;j<c.trail.length;j++) {
+      const p=j/c.trail.length; ctx.globalAlpha=(0.6-p)*0.6; ctx.fillStyle=rgba(r,g,b,1);
+      ctx.beginPath(); ctx.arc(c.trail[j].x,c.trail[j].y,(1-p)*2,0,TAU); ctx.fill();
+    }
+    ctx.globalAlpha=1; ctx.shadowBlur=8; ctx.shadowColor=c.color;
+    ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(c.x,c.y,2,0,TAU); ctx.fill();
+    ctx.shadowBlur=0;
+  }
+}
+
+function drawSparks() {
+  for (let i=sparks.length-1; i>=0; i--) {
+    const s=sparks[i]; s.t+=0.03;
+    if (s.t>=1) { sparks.splice(i,1); continue; }
+    s.x+=s.vx*(1-s.t); s.y+=s.vy*(1-s.t);
+    const [r,g,b]=hexRGB(s.color);
+    ctx.globalAlpha=(1-s.t)*0.6; ctx.fillStyle=rgba(r,g,b,1);
+    ctx.beginPath(); ctx.arc(s.x,s.y,(1-s.t)*1.8,0,TAU); ctx.fill();
+    ctx.globalAlpha=1;
+  }
+}
+
+// ── INTERACTION ────────────────────────────────────────────────
+function getNeighborhood(id) {
+  if (!id) return null;
+  const s = new Set([id]);
+  edges.forEach(e => { if(e.source===id) s.add(e.target); if(e.target===id) s.add(e.source); });
+  return s;
+}
+
+function screenToWorld(sx,sy) {
+  return { x:(sx-W/2)/cam.zoom-cam.x, y:(sy-H/2)/cam.zoom-cam.y };
+}
+
+function hitTest(wx,wy) {
+  // Check entities first (smaller, in front), then domains
+  const ents = [...nodes.values()].filter(n=>n.kind==='entity');
+  for (const n of ents) {
+    if (hypot(wx-n.x,wy-n.y) < (n.radius||4)+6) return n;
+  }
+  const doms = [...nodes.values()].filter(n=>n.kind==='domain');
+  for (const n of doms) {
+    if (hypot(wx-n.x,wy-n.y) < n.radius*2) return n;
+  }
+  return null;
+}
+
+const canvas = document.getElementById('c');
+let camStartX, camStartY;
+canvas.addEventListener('mousedown', e => {
+  dragging=true; didDrag=false;
+  dragStart={x:e.clientX, y:e.clientY};
+  camStartX=cam.x; camStartY=cam.y;
+});
+canvas.addEventListener('mousemove', e => {
+  if (dragging) {
+    const dx=e.clientX-dragStart.x, dy=e.clientY-dragStart.y;
+    if (abs(dx)>3||abs(dy)>3) didDrag=true;
+    cam.x=camStartX+dx/cam.zoom; cam.y=camStartY+dy/cam.zoom;
+    return;
+  }
+  const w=screenToWorld(e.clientX,e.clientY);
+  const n=hitTest(w.x,w.y);
+  hoveredId=n?n.id:null; canvas.style.cursor=n?'pointer':'grab';
+  const tt=document.getElementById('tooltip');
+  if (n) {
+    tt.style.display='block';
+    tt.style.left=min(e.clientX+14,W-280)+'px';
+    tt.style.top=min(e.clientY-8,H-100)+'px';
+    let h=`<div class="tt-type">${n.kind==='domain'?'NEBULA':n.entityType||'ENTITY'}</div>`;
+    h+=`<div class="tt-name">${n.label}</div><div class="tt-meta">`;
+    if (n.videoCount) h+=`${n.videoCount} ${n.kind==='domain'?'tutorials':'videos'}<br>`;
+    if (n.domainWeights) { const dw=Object.entries(n.domainWeights); h+=dw.map(([d,w])=>`${d}: ${round(w*100)}%`).join(', ')+'<br>'; }
+    h+='</div>'; tt.innerHTML=h;
+  } else { tt.style.display='none'; }
+});
+canvas.addEventListener('mouseup', () => { dragging=false; });
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  cam.zoom=clamp(cam.zoom*(e.deltaY>0?0.9:1.1), 0.12, 5);
+}, { passive: false });
+
+// ── PHYSICS ────────────────────────────────────────────────────
+function simTick() {
+  const entities = [...nodes.values()].filter(n=>n.kind==='entity');
+
+  // Entity attraction toward domain centroid(s)
+  for (const e of entities) {
+    if (!e.domainWeights) continue;
+    for (const [domId, weight] of Object.entries(e.domainWeights)) {
+      const dom = [...nodes.values()].find(n=>n.kind==='domain'&&n.label===domId);
+      if (!dom) continue;
+      const dx=dom.x-e.x, dy=dom.y-e.y, dist=hypot(dx,dy)||1;
+      const targetDist = dom.radius * 2.5;
+      const force = (dist-targetDist)/dist * 0.006 * weight;
+      e.vx += dx*force; e.vy += dy*force;
+    }
+
+    // Slow tangential orbit
+    const primaryDom = [...nodes.values()].find(n=>n.kind==='domain'&&n.label===Object.keys(e.domainWeights)[0]);
+    if (primaryDom) {
+      const dx=primaryDom.x-e.x, dy=primaryDom.y-e.y, dist=hypot(dx,dy)||1;
+      e.vx += (-dy/dist)*0.008; e.vy += (dx/dist)*0.008;
+    }
+
+    // Local entity repulsion
+    for (const other of entities) {
+      if (other===e) continue;
+      const dx=other.x-e.x, dy=other.y-e.y, dist=hypot(dx,dy)||1;
+      if (dist > 50) continue;
+      const minD = (e.radius||3)+(other.radius||3)+8;
+      if (dist < minD) {
+        const push=(minD-dist)*0.02;
+        e.vx-=dx/dist*push; e.vy-=dy/dist*push;
+      }
+    }
+
+    // Stability damping
+    const stability = e.stability || 0;
+    e.vx *= (1-stability*0.5) * 0.92;
+    e.vy *= (1-stability*0.5) * 0.92;
+    const speed=hypot(e.vx,e.vy);
+    if (speed>1.5) { e.vx*=1.5/speed; e.vy*=1.5/speed; }
+    e.x+=e.vx; e.y+=e.vy;
+    if (e.birthScale<1) e.birthScale+=0.015;
+  }
+}
+
+// ── MAIN LOOP ──────────────────────────────────────────────────
+function frame() {
+  tick++;
+  W=window.innerWidth; H=window.innerHeight;
+  canvas.width=W*devicePixelRatio; canvas.height=H*devicePixelRatio;
+  canvas.style.width=W+'px'; canvas.style.height=H+'px';
+  ctx=canvas.getContext('2d');
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+
+  simTick();
+  drawBackground();
+
+  ctx.save();
+  ctx.translate(W/2,H/2); ctx.scale(cam.zoom,cam.zoom); ctx.translate(cam.x,cam.y);
+
+  const showEntities = cam.zoom > 0.3;
+  const showEdges = cam.zoom > 0.25;
+
+  if (showEdges) drawEdges();
+  drawBirths(); drawComets(); drawSparks();
+
+  // Draw domains (nebulae) — always visible
+  const doms = [...nodes.values()].filter(n=>n.kind==='domain');
+  doms.forEach(d => drawNebula(d));
+
+  // Draw entities (stars) — zoom-dependent
+  if (showEntities) {
+    const hi = hoveredId ? getNeighborhood(hoveredId) : null;
+    const ents = [...nodes.values()].filter(n=>n.kind==='entity');
+    ents.forEach(e => drawStar(e, hi && !hi.has(e.id)));
+  }
+
+  ctx.restore();
+
+  document.getElementById('zoom-level').textContent = `${round(cam.zoom*100)}%`;
+  requestAnimationFrame(frame);
+}
+
+// ── DEMO CONTROLS ──────────────────────────────────────────────
+function ingestDoc() {
+  const doms=[...nodes.values()].filter(n=>n.kind==='domain');
+  if (!doms.length) return;
+  const d=doms[floor(random()*doms.length)];
+  const angle=random()*TAU, dist=800;
+  comets.push({ x:cos(angle)*dist, y:sin(angle)*dist, targetId:d.id, color:d.color,
+    speed:3+random()*3, trail:[], trailMaxLen:18, hit:false });
+}
+function docBurst() { for(let i=0;i<8;i++) setTimeout(ingestDoc, i*250); }
+
+let simmerTriggered = false;
+function triggerSimmer() {
+  if (simmerTriggered || !cosmicData) return;
+  simmerTriggered = true;
+
+  const v3 = cosmicData.v3_entities || [];
+  const v2EntityNames = new Map(); // lowercase name -> node id
+  nodes.forEach((n, id) => { if (n.kind === 'entity') v2EntityNames.set(n.label.toLowerCase().trim(), id); });
+
+  // Find V3 tutorial videos and their domain weights
+  const v3Tutorials = cosmicData.videos.filter(v => v.isV3);
+  const v3DomainCounts = {};
+  const v3DomainSet = new Set();
+  v3Tutorials.forEach(t => {
+    (t.domains || []).forEach(d => {
+      v3DomainCounts[d] = (v3DomainCounts[d] || 0) + 1;
+      v3DomainSet.add(d);
+    });
+  });
+
+  // Compute centroid — weight by V3 video count per domain, use top 2 so it's not centered
+  const topV3Domains = Object.entries(v3DomainCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 2);
+
+  let cx = 0, cy = 0, tw = 0;
+  topV3Domains.forEach(([d, count]) => {
+    const dom = nodes.get('dom:' + d);
+    if (dom) { cx += dom.x * count; cy += dom.y * count; tw += count; }
+  });
+  if (tw > 0) { cx /= tw; cy /= tw; }
+
+  // Offset away from the nearest existing domain so it's clearly separate
+  const nearestDom = [...nodes.values()]
+    .filter(n => n.kind === 'domain')
+    .reduce((best, n) => {
+      const dist = hypot(n.x - cx, n.y - cy);
+      return (!best || dist < best.dist) ? { n, dist } : best;
+    }, null);
+  if (nearestDom && nearestDom.dist < 120) {
+    const dx = cx - nearestDom.n.x, dy = cy - nearestDom.n.y;
+    const dist = hypot(dx, dy) || 1;
+    cx += (dx / dist) * 80;
+    cy += (dy / dist) * 80;
+  }
+
+  // The simmer discovers subdomains — spawn them near their parents
+  const NEW_COLOR = '#4ade80';
+  // Pick the most relevant parent domain for V3 tutorials
+  const topDom = topV3Domains[0] ? topV3Domains[0][0] : 'fundamentals/beginner-tips';
+  const NEW_DOMAIN = topDom + '/adaptive-enrichment';
+
+  // Phase 1: Spawn new nebula at the centroid
+  const nebId = 'dom:' + NEW_DOMAIN;
+  nodes.set(nebId, {
+    id: nebId, kind: 'domain', label: NEW_DOMAIN,
+    color: NEW_COLOR, radius: 35,
+    x: cx, y: cy, vx: 0, vy: 0,
+    birthScale: 0.01, phase: random() * TAU,
+    videoCount: v3Tutorials.length, _rot: random() * TAU,
+  });
+  births.push({ x: cx, y: cy, color: NEW_COLOR, t: 0, maxRadius: 100 });
+
+  // Phase 2: Simmering sparks for 6s
+  let sparkInterval = setInterval(() => {
+    const neb = nodes.get(nebId);
+    if (!neb) return;
+    for (let j = 0; j < 3; j++) {
+      const a = random() * TAU;
+      sparks.push({
+        x: neb.x + cos(a) * neb.radius, y: neb.y + sin(a) * neb.radius,
+        vx: cos(a) * (1.5 + random() * 2), vy: sin(a) * (1.5 + random() * 2),
+        color: NEW_COLOR, t: 0,
+      });
+    }
+  }, 200);
+
+  // Phase 3: After 6s — spec complete, spawn entities
+  setTimeout(() => {
+    clearInterval(sparkInterval);
+    const neb = nodes.get(nebId);
+    births.push({ x: neb.x, y: neb.y, color: '#ffffff', t: 0, maxRadius: 140 });
+
+    // Trade routes: connect new domain to existing domains that V3 tutorials belong to
+    v3DomainSet.forEach(d => {
+      const domId = 'dom:' + d;
+      if (nodes.has(domId) && domId !== nebId) {
+        edges.push({
+          source: nebId, target: domId, kind: 'cross-domain',
+          weight: 3, particles: [{ t: random() }, { t: random() * 0.5 }],
+        });
+      }
+    });
+
+    // Spawn entities one by one
+    let strengthened = 0, created = 0;
+    v3.slice(0, 50).forEach((ent, i) => {
+      setTimeout(() => {
+        const nameLower = ent.name.toLowerCase().trim();
+        const existingId = v2EntityNames.get(nameLower);
+
+        if (existingId && nodes.has(existingId)) {
+          // STRENGTHEN existing entity — add new domain weight, grow it
+          const existing = nodes.get(existingId);
+          if (!existing.domainWeights) existing.domainWeights = {};
+          existing.domainWeights[NEW_DOMAIN] = 0.5;
+          existing.radius = min(existing.radius * 1.3, 12);
+          existing.stability = max(0, (existing.stability || 0) - 0.2); // loosen so it drifts toward new domain
+          // Connect to new domain
+          edges.push({ source: existingId, target: nebId, kind: 'entity-domain', weight: 1 });
+          // Visual pulse
+          births.push({ x: existing.x, y: existing.y, color: NEW_COLOR, t: 0, maxRadius: 12 });
+          strengthened++;
+        } else {
+          // CREATE new entity near the new nebula
+          const eid = 'v3:' + nameLower.replace(/\s+/g, '-');
+          if (nodes.has(eid)) return;
+          const c = ENTITY_TYPE_COLORS[ent.type] || NEW_COLOR;
+          nodes.set(eid, {
+            id: eid, kind: 'entity', label: ent.name, entityType: ent.type,
+            color: c, radius: 3 + random() * 2,
+            x: neb.x + rnd(-50, 50), y: neb.y + rnd(-50, 50),
+            vx: 0, vy: 0, birthScale: 0.01, phase: random() * TAU,
+            domainWeights: { [NEW_DOMAIN]: 1 }, stability: 0,
+          });
+          edges.push({ source: eid, target: nebId, kind: 'entity-domain', weight: 1 });
+          births.push({ x: neb.x, y: neb.y, color: c, t: 0, maxRadius: 10 });
+          created++;
+        }
+      }, i * 150);
+    });
+
+    // Log after all spawned
+    setTimeout(() => {
+      console.log(`Simmer complete: ${strengthened} strengthened, ${created} new entities`);
+      updateHUD();
+    }, 50 * 150 + 500);
+
+  }, 6000);
+
+  updateHUD();
+}
+
+// ── DATA LOADING ───────────────────────────────────────────────
+function updateHUD() {
+  const list=document.getElementById('domain-list');
+  const doms=[...nodes.values()].filter(n=>n.kind==='domain').sort((a,b)=>(b.videoCount||0)-(a.videoCount||0));
+  list.innerHTML=doms.map(d=>`<div class="dom-row">
+    <div class="dom-dot" style="background:${d.color};box-shadow:0 0 4px ${d.color}50"></div>
+    <div class="dom-name">${d.label}</div>
+    <div class="dom-count">${d.videoCount||0}</div>
+  </div>`).join('');
+}
+
+W=window.innerWidth; H=window.innerHeight;
+
+fetch((window.API_URL || 'http://localhost:8100') + '/graph').then(r=>r.json()).then(data => {
+  cosmicData = data;
+  const PADDING = 0.1;
+  const canvasW = 1200, canvasH = 900; // world-space extent
+
+  // Create domain nebulae at UMAP positions
+  const subdSet = new Set(data.subdomains || []);
+  for (const [name, pos] of Object.entries(data.domain_positions)) {
+    const x = lerp(-canvasW/2+canvasW*PADDING, canvasW/2-canvasW*PADDING, pos.x);
+    const y = lerp(-canvasH/2+canvasH*PADDING, canvasH/2-canvasH*PADDING, pos.y);
+    const vc = data.domain_video_counts[name] || 0;
+    const region = name.split('/')[0];
+    const regionColors = data.region_colors || {};
+    const color = regionColors[region] || DOMAIN_COLORS[name] || '#81d4fa';
+    const isSub = subdSet.has(name);
+    const radius = isSub ? 15 + sqrt(vc) * 5 : 30 + sqrt(vc) * 8;
+    const label = isSub ? name.split('/').pop() : name;
+
+    nodes.set('dom:'+name, {
+      id:'dom:'+name, kind:'domain', label,
+      fullPath: name, color, radius,
+      x, y, vx:0, vy:0,
+      birthScale: isSub ? 0.01 : 0.01,
+      phase:random()*TAU,
+      videoCount:vc, _rot:random()*TAU,
+      isSubdomain: isSub,
+    });
+  }
+
+  // Create entity stars
+  for (const ent of data.entities) {
+    const dw = ent.domainWeights || {};
+    const domNames = Object.keys(dw);
+    if (!domNames.length) continue;
+
+    // Compute spawn position: weighted midpoint of domains
+    let sx=0, sy=0, tw=0;
+    const domColors = [];
+    const domWeights = [];
+    for (const [dname, w] of Object.entries(dw)) {
+      const dom = nodes.get('dom:'+dname);
+      if (dom) { sx+=dom.x*w; sy+=dom.y*w; tw+=w; domColors.push(dom.color); domWeights.push(w); }
+    }
+    if (tw===0) continue;
+    sx/=tw; sy/=tw;
+
+    const color = domColors.length > 1 ? blendColors(domColors, domWeights) : domColors[0];
+    const vc = ent.videoCount || 1;
+    const radius = 2 + min(sqrt(vc)*0.8, 8);
+    const stability = min(0.9, 0.3*log(vc+1)/log(30));
+
+    nodes.set('ent:'+ent.name, {
+      id:'ent:'+ent.name, kind:'entity', label:ent.name,
+      entityType:ent.type, color,
+      radius, stability,
+      x:sx+rnd(-40,40), y:sy+rnd(-40,40),
+      vx:0, vy:0, birthScale:0.01, phase:random()*TAU,
+      domainWeights:dw, videoCount:vc,
+    });
+  }
+
+  // Trade routes between domains
+  for (const tr of data.trade_routes) {
+    edges.push({
+      source:'dom:'+tr.source, target:'dom:'+tr.target,
+      kind:'cross-domain', weight:tr.weight,
+      particles:[{t:random()},{t:random()*0.5}],
+    });
+  }
+
+  // Entity-to-domain edges (for neighborhood highlighting)
+  for (const ent of data.entities) {
+    for (const dname of Object.keys(ent.domainWeights||{})) {
+      edges.push({ source:'ent:'+ent.name, target:'dom:'+dname, kind:'entity-domain', weight:1 });
+    }
+  }
+
+  console.log(`Loaded: ${[...nodes.values()].filter(n=>n.kind==='domain').length} domains, ${[...nodes.values()].filter(n=>n.kind==='entity').length} entities, ${edges.length} edges`);
+
+  updateHUD();
+  requestAnimationFrame(frame);
+});
+</script>
+</body>
+</html>

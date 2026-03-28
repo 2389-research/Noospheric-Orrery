@@ -16,6 +16,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <Link href="/" className="text-sm hover:underline">Upload</Link>
           <Link href="/pipeline" className="text-sm hover:underline">Pipeline</Link>
           <Link href="/entities" className="text-sm hover:underline">Entities</Link>
+          <Link href="/viz" className="text-sm hover:underline">Galaxy</Link>
         </nav>
         <main className="p-6">{children}</main>
       </body>
