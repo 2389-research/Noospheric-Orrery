@@ -89,15 +89,29 @@ function rgba(r,g,b,a) { return `rgba(${r},${g},${b},${a})`; }
 function lighten(hex,f) { const[r,g,b]=hexRGB(hex); return `rgb(${round(r+(255-r)*f)},${round(g+(255-g)*f)},${round(b+(255-b)*f)})`; }
 function darken(hex,f) { const[r,g,b]=hexRGB(hex); return `rgb(${round(r*(1-f))},${round(g*(1-f))},${round(b*(1-f))})`; }
 function blendColors(colors, weights) {
+  // Bias toward the dominant color — cube the weights so the strongest
+  // domain's color dominates instead of everything averaging to gray
   let r=0,g=0,b=0,tw=0;
+  const maxW = Math.max(...weights.filter(w=>w>0));
   colors.forEach((c,i) => {
     if (!c) return;
     const rgb=hexRGB(c);
     if (isNaN(rgb[0])) return;
-    const w=weights[i]||0; r+=rgb[0]*w; g+=rgb[1]*w; b+=rgb[2]*w; tw+=w;
+    const w = Math.pow((weights[i]||0) / (maxW||1), 2) * (weights[i]||0);
+    r+=rgb[0]*w; g+=rgb[1]*w; b+=rgb[2]*w; tw+=w;
   });
   if(tw===0) return '#888888';
-  return `rgb(${round(r/tw)},${round(g/tw)},${round(b/tw)})`;
+  // Boost saturation to counteract remaining wash-out
+  let rr=round(r/tw), gg=round(g/tw), bb=round(b/tw);
+  const mx=Math.max(rr,gg,bb), mn=Math.min(rr,gg,bb);
+  if (mx > 0 && mx-mn < 60) {
+    // Too gray — boost toward the dominant channel
+    const boost = 1.3;
+    rr=min(255,round(rr===mx ? rr*boost : rr/boost + mn*0.2));
+    gg=min(255,round(gg===mx ? gg*boost : gg/boost + mn*0.2));
+    bb=min(255,round(bb===mx ? bb*boost : bb/boost + mn*0.2));
+  }
+  return `rgb(${rr},${gg},${bb})`;
 }
 
 // Domain palette
