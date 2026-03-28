@@ -341,7 +341,7 @@ function drawNebulaSimmering(n, bR, r, g, b) {
 // State 3: Formed — settled cloud with star, spikes scale with maturity
 function drawNebulaFormed(n, bR, r, g, b, maturity, isHov) {
   const bright = (0.4 + maturity*0.6) * (isHov ? 1.5 : 1.0);
-  const coreR = bR*(0.055 + maturity*0.035);
+  const coreR = bR*(0.08 + maturity*0.06);
   const breathe = 0.94 + 0.06*sin(tick*0.001);
 
   // Settled cloud with inner clearing
@@ -370,7 +370,7 @@ function drawNebulaFormed(n, bR, r, g, b, maturity, isHov) {
 
   // Star point — white center
   const sg = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,coreR);
-  sg.addColorStop(0,`rgba(255,255,255,${0.92*bright*breathe})`);
+  sg.addColorStop(0,`rgba(255,255,255,${min(1.0, 1.1*bright*breathe)})`);
   sg.addColorStop(0.3,rgba(r,g,b,0.7*bright));
   sg.addColorStop(1,'transparent');
   ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(n.x,n.y,coreR,0,TAU); ctx.fill();
@@ -385,7 +385,7 @@ function drawNebulaFormed(n, bR, r, g, b, maturity, isHov) {
       const spg = ctx.createLinearGradient(n.x,n.y,x2,y2);
       spg.addColorStop(0,`rgba(255,255,255,${spikeA})`);
       spg.addColorStop(1,'transparent');
-      ctx.strokeStyle = spg; ctx.lineWidth = 0.8;
+      ctx.strokeStyle = spg; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.moveTo(n.x,n.y); ctx.lineTo(x2,y2); ctx.stroke();
     }
   }
