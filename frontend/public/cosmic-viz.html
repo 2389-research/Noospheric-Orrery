@@ -128,6 +128,7 @@ const comets = [];
 const births = [];
 const sparks = [];
 let hoveredId = null;
+let pinnedId = null;
 let cosmicData = null;
 
 // Camera
@@ -172,7 +173,7 @@ function drawNebula(n, highlighted) {
   const [r,g,b] = hexRGB(n.color);
   const bR = n.radius * clamp(n.birthScale, 0, 1);
   const pulse = 0.5 + 0.5*sin(tick*0.008+n.phase);
-  const isHov = n.id === hoveredId;
+  const isHov = n.id === (pinnedId ?? hoveredId);
   n._rot = (n._rot||0) + 0.0003;
 
   // Gas layers — brighter when hovered
@@ -233,7 +234,7 @@ function drawStar(n, state) {
   const bR = n.radius * n.birthScale;
   const pulse = 0.5+0.5*sin(tick*0.015+n.phase);
   const [r,g,b] = hexRGB(n.color);
-  const isHov = n.id === hoveredId;
+  const isHov = n.id === (pinnedId ?? hoveredId);
   const isDim = state === 'dim';
   const isConnected = state === 'connected';
 
@@ -274,7 +275,8 @@ function drawStar(n, state) {
 
 // ── EDGES ──────────────────────────────────────────────────────
 function drawEdges() {
-  const hi = hoveredId ? getNeighborhood(hoveredId) : null;
+  const activeId = pinnedId ?? hoveredId;
+  const hi = activeId ? getNeighborhood(activeId) : null;
   for (const e of edges) {
     const s = nodes.get(e.source), t = nodes.get(e.target);
     if (!s||!t) continue;
@@ -430,7 +432,19 @@ canvas.addEventListener('mousemove', e => {
     h+='</div>'; tt.innerHTML=h;
   } else { tt.style.display='none'; }
 });
-canvas.addEventListener('mouseup', () => { dragging=false; });
+canvas.addEventListener('mouseup', e => {
+  if (!didDrag) {
+    // Click — toggle pin
+    const w = screenToWorld(e.clientX, e.clientY);
+    const n = hitTest(w.x, w.y);
+    if (n) {
+      pinnedId = (pinnedId === n.id) ? null : n.id;
+    } else {
+      pinnedId = null;
+    }
+  }
+  dragging = false;
+});
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
   cam.zoom=clamp(cam.zoom*(e.deltaY>0?0.9:1.1), 0.12, 5);
@@ -511,7 +525,8 @@ function frame() {
   drawBirths(); drawComets(); drawSparks();
 
   // Compute neighborhood once for both domains and entities
-  const hi = hoveredId ? getNeighborhood(hoveredId) : null;
+  const activeId = pinnedId ?? hoveredId;
+  const hi = activeId ? getNeighborhood(activeId) : null;
 
   // Draw domains (nebulae) — always visible, brighten if in neighborhood
   const doms = [...nodes.values()].filter(n=>n.kind==='domain');
@@ -534,7 +549,7 @@ function frame() {
     if (hi) {
       ents.filter(e => !hi.has(e.id)).forEach(e => drawStar(e, 'dim'));
       ents.filter(e => hi.has(e.id) && e.id !== hoveredId).forEach(e => drawStar(e, 'connected'));
-      ents.filter(e => e.id === hoveredId).forEach(e => drawStar(e, 'normal'));
+      ents.filter(e => e.id === activeId).forEach(e => drawStar(e, 'normal'));
     } else {
       ents.forEach(e => drawStar(e, 'normal'));
     }
