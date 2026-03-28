@@ -63,25 +63,35 @@ export default function VizPage() {
   };
 
   return (
-    <div className="flex" style={{ height: "calc(100vh - 57px)" }}>
-      {selectedNode && (
-        <GalaxyPanel
-          selectedNode={selectedNode}
-          domainColors={domainColors}
-          onClose={handleClose}
-        />
-      )}
+    <div style={{ height: "calc(100vh - 57px)", position: "relative", overflow: "hidden" }}>
       <iframe
         ref={iframeRef}
         src="/cosmic-viz.html"
         style={{
-          flex: selectedNode ? "1" : undefined,
-          width: selectedNode ? undefined : "100%",
+          width: "100%",
           height: "100%",
           border: "none",
+          position: "absolute",
+          top: 0,
+          left: 0,
         }}
         title="Cosmic Knowledge Graph"
       />
+      {selectedNode && (
+        <div style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          height: "100%",
+          zIndex: 10,
+        }}>
+          <GalaxyPanel
+            selectedNode={selectedNode}
+            domainColors={domainColors}
+            onClose={handleClose}
+          />
+        </div>
+      )}
     </div>
   );
 }
