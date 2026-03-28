@@ -203,24 +203,20 @@ def get_graph_data():
             "domainWeights": domain_weights,
         })
 
-    # Trade routes — domains that share entities
-    domain_pairs: dict[tuple, int] = defaultdict(int)
+    # Trade routes — domains that share entities, weighted by count of shared entity mentions
     shared = conn.execute("""
-        SELECT DISTINCT dd1.domain_path, dd2.domain_path
+        SELECT dd1.domain_path, dd2.domain_path, COUNT(*) as weight
         FROM entity_sources es1
         JOIN entity_sources es2 ON es1.entity_id = es2.entity_id AND es1.document_id != es2.document_id
         JOIN document_domains dd1 ON es1.document_id = dd1.document_id
         JOIN document_domains dd2 ON es2.document_id = dd2.document_id
         WHERE dd1.domain_path < dd2.domain_path
+        GROUP BY dd1.domain_path, dd2.domain_path
     """).fetchall()
 
-    for r in shared:
-        domain_pairs[(r[0], r[1])] += 1
-
     trade_routes = [
-        {"source": pair[0], "target": pair[1], "weight": count}
-        for pair, count in domain_pairs.items()
-        if count > 0
+        {"source": r[0], "target": r[1], "weight": r[2]}
+        for r in shared
     ]
 
     # Documents (for comet animations)
