@@ -12,7 +12,7 @@ interface CriterionCardProps {
 }
 
 export function CriterionCard({ detail, colorIndex, nextIteration }: CriterionCardProps) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const color = CRITERION_COLORS[colorIndex % CRITERION_COLORS.length];
   const barWidth = Math.max(0, Math.min(100, (detail.score / 10) * 100));
   const seedDelta = detail.score - detail.seed_score;
