@@ -8,51 +8,64 @@ from ..db import get_connection
 
 router = APIRouter()
 
-# Base hues for top-level regions (0-360)
-REGION_BASE_HUE = {
-    "business": 25,      # orange
-    "technology": 170,   # teal
-    "science": 200,      # blue
-    "creative": 290,     # purple
-    "education": 45,     # yellow
-    "health": 130,       # green
-    "social": 210,       # slate blue
-}
-DEFAULT_HUE = 220
+GOLDEN_RATIO = 0.618033988749895
+BASE_SATURATION = 65
+BASE_LIGHTNESS = 62
+DESAT_PER_LEVEL = 8
 
 
-def _domain_color(path: str) -> str:
-    """Generate a unique color for a domain path.
+def _assign_domain_colors(domains: list[dict]) -> dict[str, str]:
+    """Hierarchy-aware golden ratio color distribution.
 
-    The second-level segment (the actual branching point) gets spread
-    across the full color wheel using golden angle spacing. Deeper
-    segments shift the hue slightly from their parent.
+    Top-level domains each own an equal slice of the hue wheel.
+    Within each slice, subdomains are spaced using the golden ratio
+    for maximum perceptual distance. Deeper domains desaturate slightly.
     """
-    parts = path.split("/")
+    paths = [d["path"] for d in domains]
+    if not paths:
+        return {}
 
-    if len(parts) <= 1:
-        base_hue = REGION_BASE_HUE.get(parts[0], DEFAULT_HUE)
-        return _hsl_to_hex(base_hue, 70, 50)
+    # Find top-level domains (the level where paths actually branch)
+    parts_list = [p.split("/") for p in paths]
+    # Find branching level
+    branch_level = 0
+    for level in range(min(len(p) for p in parts_list)):
+        values = set(p[level] for p in parts_list)
+        if len(values) > 1:
+            break
+        branch_level = level + 1
 
-    # Hash the second-level path for the base hue, spread across full spectrum
-    key = "/".join(parts[:2])
-    h = 0
-    for c in key:
-        h = h * 31 + ord(c)
-    hue = (h * 137.508) % 360
+    # Group by the branching segment
+    top_level_names = sorted(set(
+        "/".join(p.split("/")[:branch_level + 1]) for p in paths
+    ))
 
-    # Deeper levels shift hue ±25 from parent
-    for i, part in enumerate(parts[2:], 2):
-        sh = 0
-        for c in part:
-            sh = sh * 31 + ord(c)
-        hue = (hue + (sh % 50) - 25) % 360
+    # Divide hue wheel evenly among top-level groups
+    top_level_hues = {}
+    for i, name in enumerate(top_level_names):
+        top_level_hues[name] = (i / max(len(top_level_names), 1)) * 360
 
-    # Depth affects saturation and lightness
-    saturation = max(50, 75 - len(parts) * 3)
-    lightness = min(60, 48 + len(parts) * 3)
+    slice_size = 360 / max(len(top_level_names), 1)
 
-    return _hsl_to_hex(hue, saturation, lightness)
+    # Assign colors within each slice using golden ratio
+    color_map = {}
+    for top_name in top_level_names:
+        range_start = top_level_hues[top_name]
+
+        # All domains in this family, sorted for determinism
+        family = sorted([p for p in paths if p.startswith(top_name)])
+
+        for i, path in enumerate(family):
+            offset = ((i * GOLDEN_RATIO) % 1) * slice_size
+            hue = (range_start + offset) % 360
+
+            # Depth-based desaturation
+            depth = path.count("/") - branch_level
+            saturation = max(30, BASE_SATURATION - depth * DESAT_PER_LEVEL)
+
+            color_map[path] = _hsl_to_hex(hue, saturation, BASE_LIGHTNESS)
+
+    return color_map
 
 
 def _hsl_to_hex(h: float, s: float, l: float) -> str:
@@ -156,16 +169,13 @@ def get_graph_data():
     # Domain doc counts
     domain_doc_counts = {d["path"]: d["doc_count"] for d in domains}
 
-    # Region colors — each domain gets a unique color from its path hash
-    # The viz uses region_colors keyed by top-level region, but we also
-    # provide per-domain colors so entities can blend
-    region_colors = {}
+    # Domain colors — golden ratio distribution within hue slices
+    region_colors = _assign_domain_colors(domains)
+    # Also add top-level region key for backward compat
     for d in domains:
         region = d["path"].split("/")[0]
         if region not in region_colors:
-            region_colors[region] = _domain_color(region)
-        # Also add per-domain colors (viz will use these if available)
-        region_colors[d["path"]] = _domain_color(d["path"])
+            region_colors[region] = region_colors.get(d["path"], "#81d4fa")
 
     # Subdomains (3+ levels deep)
     subdomains = [d["path"] for d in domains if d["path"].count("/") >= 2]
