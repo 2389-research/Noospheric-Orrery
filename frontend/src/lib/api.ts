@@ -61,7 +61,7 @@ export const api = {
       id: string;
       canonical_name: string;
       type: string;
-      sources: string[];
+      sources: { document_id: string; chunk_id: string; extraction_pass: string; spec_version: number | null; job_id: string | null }[];
       merge_history: string[];
     }>(`/entities/${entityId}`),
   getEntityCooccurrences: (entityId: string) =>
