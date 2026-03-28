@@ -33,20 +33,37 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
   }, [dirPath, onResult, onError]);
 
   return (
-    <div className="space-y-6">
-      <div className="border-2 border-dashed rounded-lg p-12 text-center cursor-pointer hover:border-primary transition-colors"
+    <div className="space-y-4">
+      <div
+        className="border border-dashed border-border/40 rounded px-8 py-10 text-center cursor-pointer hover:border-cyan-500/30 hover:bg-card/30 transition-all"
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer.files); }}
-        onClick={() => document.getElementById("file-input")?.click()}>
-        <p className="text-muted-foreground">{uploading ? "Uploading..." : "Drop files here or click to browse"}</p>
-        <p className="text-xs text-muted-foreground mt-2">.txt, .md, .json, .csv</p>
+        onClick={() => document.getElementById("file-input")?.click()}
+      >
+        <p className="text-xs text-muted-foreground/60">
+          {uploading ? "processing..." : "drop files here or click to browse"}
+        </p>
+        <p className="text-[10px] text-muted-foreground/30 mt-2">.txt .md .json .csv</p>
         <input id="file-input" type="file" multiple accept=".txt,.md,.json,.csv" className="hidden"
           onChange={(e) => handleFiles(e.target.files)} />
       </div>
       <div className="flex gap-2">
-        <Input placeholder="Or paste a directory path..." value={dirPath}
-          onChange={(e) => setDirPath(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleDirectory()} />
-        <Button onClick={handleDirectory} disabled={uploading || !dirPath.trim()}>Ingest</Button>
+        <Input
+          placeholder="or paste a directory path..."
+          value={dirPath}
+          onChange={(e) => setDirPath(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleDirectory()}
+          className="text-xs bg-card/30"
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          className="text-xs tracking-wider"
+          onClick={handleDirectory}
+          disabled={uploading || !dirPath.trim()}
+        >
+          Ingest
+        </Button>
       </div>
     </div>
   );

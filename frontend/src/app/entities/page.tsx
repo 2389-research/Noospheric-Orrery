@@ -15,10 +15,14 @@ export default function EntitiesPage() {
   const types = [...new Set(entities.map((e) => e.type))].sort();
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Entities</h1>
-      <div className="flex gap-4">
-        <select className="border rounded px-3 py-2 text-sm" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+    <div className="max-w-5xl mx-auto space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-sm tracking-[4px] text-muted-foreground uppercase">Entities</h1>
+        <select
+          className="bg-card border border-border/30 rounded px-3 py-1.5 text-xs text-muted-foreground"
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value)}
+        >
           <option value="">All types</option>
           {types.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
