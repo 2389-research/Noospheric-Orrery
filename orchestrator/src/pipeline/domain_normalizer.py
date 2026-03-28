@@ -36,8 +36,5 @@ def assign_document_domains(conn: sqlite3.Connection, document_id: str, classifi
         conn.execute("UPDATE domains SET document_count = document_count + 1 WHERE path = ?", (path,))
         all_domains.append(path)
 
-    for new_domain in classification.get("new_domains", []):
-        normalize_domain_label(conn, new_domain)
-
     conn.commit()
     return all_domains
