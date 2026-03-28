@@ -8,10 +8,12 @@ CREATE TABLE IF NOT EXISTS documents (
     title TEXT,
     source_path TEXT,
     content TEXT,
+    content_hash TEXT,
     metadata TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     status TEXT DEFAULT 'pending'
 );
+CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash);
 
 CREATE TABLE IF NOT EXISTS chunks (
     id TEXT PRIMARY KEY,
@@ -84,6 +86,50 @@ CREATE TABLE IF NOT EXISTS jobs (
     started_at TIMESTAMP,
     completed_at TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS entity_embeddings (
+    entity_id TEXT PRIMARY KEY REFERENCES entities(id),
+    embedding BLOB
+);
+
+CREATE TABLE IF NOT EXISTS normalization_log (
+    id TEXT PRIMARY KEY,
+    from_entity_id TEXT,
+    from_name TEXT,
+    to_entity_id TEXT,
+    to_name TEXT,
+    method TEXT,
+    similarity REAL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS normalization_review_queue (
+    id TEXT PRIMARY KEY,
+    entity_a_id TEXT,
+    entity_a_name TEXT,
+    entity_b_id TEXT,
+    entity_b_name TEXT,
+    similarity REAL,
+    status TEXT DEFAULT 'pending',
+    resolution TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS simmer_iterations (
+    id TEXT PRIMARY KEY,
+    job_id TEXT REFERENCES jobs(id),
+    phase TEXT,
+    iteration INTEGER,
+    scores TEXT,
+    composite REAL,
+    key_change TEXT,
+    asi TEXT,
+    judge_mode TEXT,
+    regressed BOOLEAN,
+    candidate_preview TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_simmer_iterations_job ON simmer_iterations(job_id);
 
 CREATE TABLE IF NOT EXISTS specs (
     id TEXT PRIMARY KEY,

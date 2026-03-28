@@ -22,6 +22,36 @@ Rules:
 - Do not hallucinate entities not present in the source
 """
 
+
+def _make_iteration_recorder(job_id: str, phase: str, db_path: str):
+    """Create an on_iteration callback that stores iteration data in the DB."""
+    async def on_iteration(record, trajectory, trajectory_table):
+        conn = get_connection(db_path)
+        try:
+            conn.execute(
+                "INSERT INTO simmer_iterations (id, job_id, phase, iteration, scores, composite, key_change, asi, judge_mode, regressed, candidate_preview) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(uuid.uuid4()),
+                    job_id,
+                    phase,
+                    record.iteration,
+                    json.dumps(record.scores),
+                    record.composite,
+                    record.key_change,
+                    record.asi,
+                    record.judge_mode,
+                    record.regressed,
+                    None,  # candidate_preview filled from trajectory if needed
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        print(f"  [{phase}] iteration {record.iteration}: {record.composite}/10 — {record.key_change}", flush=True)
+    return on_iteration
+
+
 async def run_simmer_general(job: dict, db_path: str) -> None:
     settings = get_settings()
     conn = get_connection(db_path)
@@ -46,7 +76,6 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
     seed_path.write_text(SEED_ONTOLOGY)
     conn.close()
 
-    # Bedrock config from settings
     bedrock_kwargs = {
         "api_provider": "bedrock",
         "aws_access_key": settings.aws_access_key,
@@ -54,7 +83,8 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         "aws_region": settings.aws_region,
     }
 
-    print(f"DEBUG: bedrock_kwargs = {bedrock_kwargs}", flush=True)
+    job_id = job["id"]
+    print(f"Simmering general spec (job {job_id})", flush=True)
 
     # Phase 1: Golden set simmering
     golden_result = await refine(
@@ -71,6 +101,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         generator_model="claude-sonnet-4-6",
         judge_model="claude-sonnet-4-6",
         background=f"Sample documents are in {sample_dir}. Read them to understand what entity types exist in this corpus.",
+        on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path),
         **bedrock_kwargs,
     )
 
@@ -90,6 +121,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         judge_model="claude-sonnet-4-6",
         clerk_model="claude-haiku-4-5",
         background=f"This spec will be executed by Haiku. Golden set: {golden_result.best_candidate[:2000]}",
+        on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path),
         **bedrock_kwargs,
     )
 
@@ -102,10 +134,10 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
     )
 
     # Queue batch extraction
-    job_id = str(uuid.uuid4())
+    batch_job_id = str(uuid.uuid4())
     conn.execute(
         "INSERT INTO jobs (id, type, target, status, config) VALUES (?, 'extract_batch', 'general', 'queued', ?)",
-        (job_id, json.dumps({"spec_id": spec_id, "scope": "all_classified"})),
+        (batch_job_id, json.dumps({"spec_id": spec_id, "scope": "all_classified"})),
     )
     conn.commit()
     conn.close()

@@ -4,6 +4,7 @@ from pathlib import Path
 from simmer_sdk import refine
 from ..db import get_connection
 from ..config import get_settings
+from .simmer_general import _make_iteration_recorder
 
 
 async def run_simmer_domain(job: dict, db_path: str) -> None:
@@ -74,7 +75,8 @@ Keep the general types but add domain-specific ones."""
         "aws_region": settings.aws_region,
     }
 
-    print(f"Simmering domain spec for: {domain_path} ({len(docs)} docs)", flush=True)
+    job_id = job["id"]
+    print(f"Simmering domain spec for: {domain_path} ({len(docs)} docs, job {job_id})", flush=True)
 
     # Phase 1: Golden set simmering (domain-specific)
     golden_result = await refine(
@@ -91,6 +93,7 @@ Keep the general types but add domain-specific ones."""
         generator_model="claude-sonnet-4-6",
         judge_model="claude-sonnet-4-6",
         background=f"Sample documents from domain '{domain_path}' are in {sample_dir}. Discover entity types specific to this domain.",
+        on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path),
         **bedrock_kwargs,
     )
 
@@ -110,6 +113,7 @@ Keep the general types but add domain-specific ones."""
         judge_model="claude-sonnet-4-6",
         clerk_model="claude-haiku-4-5",
         background=f"This spec will be executed by Haiku on documents in domain '{domain_path}'. Golden set: {golden_result.best_candidate[:2000]}",
+        on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path),
         **bedrock_kwargs,
     )
 
