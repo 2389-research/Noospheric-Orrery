@@ -9,6 +9,7 @@ interface IterationListProps {
   onSelect: (index: number) => void;
   isRunning: boolean;
   isCompleted: boolean;
+  onVisibleCountChange?: (count: number | null) => void;
 }
 
 export function IterationList({
@@ -17,6 +18,7 @@ export function IterationList({
   onSelect,
   isRunning,
   isCompleted,
+  onVisibleCountChange,
 }: IterationListProps) {
   const [replayState, setReplayState] = useState<"idle" | "playing" | "done">("idle");
   const [replaySpeed, setReplaySpeed] = useState(1);
@@ -28,8 +30,18 @@ export function IterationList({
   useEffect(() => {
     if (replayState === "idle") {
       setVisibleCount(iterations.length);
+      onVisibleCountChange?.(null); // null = show all
     }
   }, [iterations.length, replayState]);
+
+  // Report visible count changes during replay
+  useEffect(() => {
+    if (replayState === "playing") {
+      onVisibleCountChange?.(visibleCount);
+    } else if (replayState === "done" || replayState === "idle") {
+      onVisibleCountChange?.(null);
+    }
+  }, [visibleCount, replayState]);
 
   function startReplay() {
     if (replayRef.current) clearTimeout(replayRef.current);
@@ -56,6 +68,7 @@ export function IterationList({
     setVisibleCount(iterations.length);
     setFadingIn(new Set());
     setReplayState("done");
+    onVisibleCountChange?.(null);
   }
 
   const displayedIterations = iterations.slice(0, visibleCount);
