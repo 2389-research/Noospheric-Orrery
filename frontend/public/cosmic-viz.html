@@ -294,7 +294,7 @@ function drawNebulaSimmering(n, bR, r, g, b) {
     const angle = n._rot*(1-i*0.15) + i*1.4;
     const lr = bR*(1.8 - i*0.10);
     const ox = cos(angle)*bR*0.10, oy = sin(angle)*bR*0.08;
-    const a = (0.05 - i*0.007) * clamp(n.birthScale,0,1);
+    const a = (0.035 - i*0.005) * clamp(n.birthScale,0,1);
     const ng = ctx.createRadialGradient(n.x+ox,n.y+oy,0,n.x+ox,n.y+oy,lr);
     ng.addColorStop(0,rgba(r,g,b,a*2)); ng.addColorStop(0.5,rgba(r,g,b,a)); ng.addColorStop(1,rgba(r,g,b,0));
     ctx.fillStyle = ng; ctx.beginPath(); ctx.arc(n.x+ox,n.y+oy,lr,0,TAU); ctx.fill();
@@ -303,8 +303,8 @@ function drawNebulaSimmering(n, bR, r, g, b) {
   // Amber infrared cocoon
   const pulse = 0.7 + 0.3*sin(tick*0.003);
   const cocoon = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,bR*0.55);
-  cocoon.addColorStop(0,`rgba(255,160,60,${0.14*pulse})`);
-  cocoon.addColorStop(0.5,`rgba(220,100,30,${0.07*pulse})`);
+  cocoon.addColorStop(0,`rgba(255,160,60,${0.10*pulse})`);
+  cocoon.addColorStop(0.5,`rgba(220,100,30,${0.05*pulse})`);
   cocoon.addColorStop(1,'rgba(180,60,10,0)');
   ctx.fillStyle = cocoon; ctx.beginPath(); ctx.arc(n.x,n.y,bR*0.55,0,TAU); ctx.fill();
 
@@ -313,8 +313,8 @@ function drawNebulaSimmering(n, bR, r, g, b) {
   const coreR = bR*0.09*(0.8 + 0.2*flicker);
 
   const halo = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,coreR*4);
-  halo.addColorStop(0,`rgba(255,180,80,${0.20*flicker})`);
-  halo.addColorStop(0.3,`rgba(255,120,40,${0.10*flicker})`);
+  halo.addColorStop(0,`rgba(255,180,80,${0.14*flicker})`);
+  halo.addColorStop(0.3,`rgba(255,120,40,${0.07*flicker})`);
   halo.addColorStop(1,'rgba(200,80,20,0)');
   ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(n.x,n.y,coreR*4,0,TAU); ctx.fill();
 
