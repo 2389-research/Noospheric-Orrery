@@ -33,9 +33,22 @@ export function IterationDetail({
       <div className="space-y-2">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
+            <div className="text-[9px] tracking-[2px] text-muted-foreground/40 uppercase mb-1">
+              iteration {iteration.iteration} · {iteration.phase}
+            </div>
             <h2 className="text-sm text-foreground/90 leading-snug">
-              {iteration.key_change || (iteration.iteration === 0 ? "Seed iteration" : "—")}
+              {(iteration.key_change || (iteration.iteration === 0 ? "Seed iteration" : "—")).replace(/^\*+\s*/, "")}
             </h2>
+            {iteration.criterion_details.length > 0 && (
+              <p className="text-[10px] text-muted-foreground/50 mt-1.5 leading-relaxed line-clamp-2">
+                {iteration.criterion_details[0].evidence}
+              </p>
+            )}
+            {iteration.iteration === 0 && iteration.criterion_details.length === 0 && (
+              <p className="text-[10px] text-muted-foreground/40 mt-1.5">
+                Starting point — judge feedback begins at iteration 1
+              </p>
+            )}
           </div>
           <div className="text-right shrink-0">
             <div className="text-2xl font-semibold" style={{ color: "#7F77DD" }}>
