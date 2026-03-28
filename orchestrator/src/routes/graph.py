@@ -196,9 +196,10 @@ def get_graph_data():
         domain_weights = {r[0]: round(r[1] / total, 3) for r in domain_weights_raw}
 
         entities.append({
+            "entityId": e[0],
             "name": e[1],
             "type": e[2],
-            "videoCount": e[3],  # using videoCount for compat with viz
+            "videoCount": e[3],
             "domainWeights": domain_weights,
         })
 
