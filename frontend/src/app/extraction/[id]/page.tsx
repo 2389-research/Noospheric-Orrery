@@ -20,6 +20,8 @@ type NormSummary = {
   recent_merges: { from: string; to: string; method: string; similarity: number; date: string }[];
 };
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 export default function ExtractionPage() {
   const params = useParams();
   const jobId = params.id as string;
@@ -33,13 +35,14 @@ export default function ExtractionPage() {
   // UI state
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("all");
+  const [docEntityIds, setDocEntityIds] = useState<Set<string> | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
       const [jobData, docsData, entitiesData, normData] = await Promise.all([
         api.getJob(jobId),
         api.getDocuments(),
-        api.getEntities({ job_id: jobId }),
+        api.getEntities({ job_id: jobId, limit: 500 }),
         api.getNormalizationSummary(),
       ]);
 
@@ -65,6 +68,21 @@ export default function ExtractionPage() {
     return () => clearInterval(interval);
   }, [job, fetchData]);
 
+  // When a doc is selected, fetch its entities to filter
+  useEffect(() => {
+    if (!selectedDocId) {
+      setDocEntityIds(null);
+      return;
+    }
+    fetch(`${API_URL}/documents/${selectedDocId}`)
+      .then((r) => r.json())
+      .then((doc) => {
+        const ids = new Set<string>(doc.entities?.map((e: { id: string }) => e.id) || []);
+        setDocEntityIds(ids);
+      })
+      .catch(() => setDocEntityIds(null));
+  }, [selectedDocId]);
+
   if (error) {
     return (
       <div className="max-w-6xl mx-auto py-12 text-center">
@@ -84,37 +102,31 @@ export default function ExtractionPage() {
   const isRunning = job.status === "running";
   const isFailed = job.status === "failed";
 
-  // Derive distinct type names from entities
   const typeSet = new Set(entities.map((e) => e.type));
   const typeNames = Array.from(typeSet).sort();
 
   // Filter entities by selected doc
-  // Since we don't have per-doc filtering in entities yet, we show all entities
-  // (or rely on the job_id param to already scope them)
-  const docFilteredEntities = entities;
+  const panelEntities = docEntityIds
+    ? entities.filter((e) => docEntityIds.has(e.id))
+    : entities;
 
-  // Find selected doc title
   const selectedDoc = docs.find((d) => d.id === selectedDocId);
   const selectedDocTitle = selectedDoc?.title ?? null;
 
-  // Entities shown: filtered by doc (if selected), then by tab in EntityPanel
-  const panelEntities = selectedDocId
-    ? docFilteredEntities // ideally filtered by doc; API may scope by job_id already
-    : entities;
-
   const entitiesNew = job.results?.entities_new ?? entities.filter((e) => e.is_new).length;
 
-  // Handle type click from TypeDistribution — sync to entity panel tab
   const handleTypeClick = (type: string) => {
     setActiveTab((prev) => (prev === type ? "all" : type));
   };
 
+  const handleDocSelect = (docId: string | null) => {
+    setSelectedDocId((prev) => (prev === docId ? null : docId));
+  };
+
   return (
     <div className="max-w-6xl mx-auto space-y-4">
-      {/* Header */}
       <ExtractionHeader job={job} />
 
-      {/* Stat strip */}
       <StatStrip
         job={job}
         typeNames={typeNames}
@@ -122,21 +134,17 @@ export default function ExtractionPage() {
         isRunning={isRunning}
       />
 
-      {/* Main layout: doc list left + right pane */}
       <div className="flex gap-4" style={{ minHeight: "500px" }}>
-        {/* Doc list — fixed width */}
         <div className="w-[220px] shrink-0">
           <DocList
             docs={docs}
             selectedDocId={selectedDocId}
-            onSelectDoc={setSelectedDocId}
+            onSelectDoc={handleDocSelect}
             isRunning={isRunning}
           />
         </div>
 
-        {/* Right pane */}
         <div className="flex-1 min-w-0 space-y-4">
-          {/* Entity panel */}
           <EntityPanel
             entities={panelEntities}
             activeTab={activeTab}
@@ -146,7 +154,6 @@ export default function ExtractionPage() {
             isFailed={isFailed}
           />
 
-          {/* Bottom row */}
           <div className="grid grid-cols-2 gap-4">
             <TypeDistribution
               entities={entities}

@@ -10,11 +10,12 @@ export const api = {
   getStats: () => fetchAPI<import("./types").Stats>("/stats"),
   getDocuments: () => fetchAPI<import("./types").DocumentSummary[]>("/documents"),
   getDomains: () => fetchAPI<import("./types").DomainInfo[]>("/domains"),
-  getEntities: (params?: { type?: string; domain?: string; job_id?: string }) => {
+  getEntities: (params?: { type?: string; domain?: string; job_id?: string; limit?: number }) => {
     const query = new URLSearchParams();
     if (params?.type) query.set("type", params.type);
     if (params?.domain) query.set("domain", params.domain);
     if (params?.job_id) query.set("job_id", params.job_id);
+    if (params?.limit) query.set("limit", String(params.limit));
     return fetchAPI<(import("./types").EntitySummary & { is_new?: boolean })[]>(`/entities?${query}`);
   },
   getJobs: () => fetchAPI<(import("./types").JobInfo & { results?: import("./types").BatchResults })[]>("/jobs"),
