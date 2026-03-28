@@ -24,7 +24,9 @@ def _find_entity_spans(text: str, entities: list[dict]) -> list[dict]:
         for name in names_to_try:
             if not name or len(name) < 2:
                 continue
-            pattern = re.escape(name.lower())
+            escaped = re.escape(name.lower())
+            # Word boundary matching — "ai" matches "ai" but not "gmail"
+            pattern = r'(?<!\w)' + escaped + r'(?!\w)'
             for match in re.finditer(pattern, text_lower):
                 spans.append({
                     "entity_id": entity["id"],
