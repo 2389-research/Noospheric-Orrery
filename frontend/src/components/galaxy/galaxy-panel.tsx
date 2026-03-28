@@ -100,14 +100,17 @@ export function GalaxyPanel({ selectedNode, domainColors, onClose }: GalaxyPanel
 
   // Trail = all items in navStack (last is current)
   const trail: TrailItem[] = navStack.map((node) => {
+    const d = node.data as Record<string, unknown>;
     if (node.nodeType === "entity") {
-      return { name: node.data.name, nodeType: "entity", id: node.data.id };
+      return { name: String(d.name ?? ""), nodeType: "entity", id: String(d.id ?? "") };
     }
     if (node.nodeType === "trade_route") {
-      const d = node.data;
-      return { name: `${d.sourceLabel?.split("/").pop()} ↔ ${d.targetLabel?.split("/").pop()}`, nodeType: "trade_route", id: `${d.source}:${d.target}` };
+      const src = String(d.sourceLabel ?? "").split("/").pop();
+      const tgt = String(d.targetLabel ?? "").split("/").pop();
+      return { name: `${src} ↔ ${tgt}`, nodeType: "trade_route", id: `${d.source}:${d.target}` };
     }
-    return { name: node.data.path.split("/").pop() ?? node.data.name, nodeType: "domain", id: node.data.path };
+    const path = String(d.path ?? "");
+    return { name: path.split("/").pop() ?? String(d.name ?? ""), nodeType: "domain", id: path };
   });
 
   const handleNavigateEntity = useCallback(
