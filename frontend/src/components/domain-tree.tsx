@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { DomainInfo } from "@/lib/types";
@@ -41,7 +42,14 @@ export function DomainTree({ domains }: { domains: DomainInfo[] }) {
               >
                 {d.spec_version ? `v${d.spec_version}` : "—"}
               </Badge>
-              {!d.spec_version && (
+              {d.spec_version ? (
+                <Link
+                  href={`/simmer/${d.id}`}
+                  className="text-[10px] text-purple-400/70 hover:text-purple-400 transition-colors"
+                >
+                  view run
+                </Link>
+              ) : (
                 <Button size="sm" variant="outline" className="h-5 text-[10px] px-2" onClick={() => handleSimmer(d.path)}>
                   simmer
                 </Button>

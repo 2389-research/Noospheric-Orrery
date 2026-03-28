@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { StatsBar } from "@/components/stats-bar";
 import { DomainTree } from "@/components/domain-tree";
@@ -22,14 +23,23 @@ function ActiveJobs({ jobs }: { jobs: JobInfo[] }) {
 
   return (
     <div className="space-y-1.5">
-      {active.map((j) => (
-        <div key={j.id} className="flex items-center gap-3 border border-cyan-500/20 rounded px-3 py-2 bg-cyan-500/5">
-          <Badge variant="outline" className={`text-[9px] ${jobStatusStyle[j.status]}`}>{j.status}</Badge>
-          <span className="text-xs text-foreground/80">{j.type}</span>
-          <span className="text-[10px] text-muted-foreground/50">{j.target}</span>
-          <span className="text-[10px] text-muted-foreground/30 ml-auto">{timeSince(j.started_at || j.created_at)}</span>
-        </div>
-      ))}
+      {active.map((j) => {
+        const isSimmer = j.type.startsWith("simmer");
+        const inner = (
+          <div key={j.id} className={`flex items-center gap-3 border border-cyan-500/20 rounded px-3 py-2 bg-cyan-500/5 ${isSimmer ? "cursor-pointer hover:bg-cyan-500/10 transition-colors" : ""}`}>
+            <Badge variant="outline" className={`text-[9px] ${jobStatusStyle[j.status]}`}>{j.status}</Badge>
+            <span className="text-xs text-foreground/80">{j.type}</span>
+            <span className="text-[10px] text-muted-foreground/50">{j.target}</span>
+            {isSimmer && <span className="text-[9px] text-purple-400/60 ml-1">↗ view</span>}
+            <span className="text-[10px] text-muted-foreground/30 ml-auto">{timeSince(j.started_at || j.created_at)}</span>
+          </div>
+        );
+        return isSimmer ? (
+          <Link key={j.id} href={`/simmer/${j.id}`}>{inner}</Link>
+        ) : (
+          <div key={j.id}>{inner}</div>
+        );
+      })}
       {recent.map((j) => (
         <div key={j.id} className="flex items-center gap-3 px-3 py-1.5 text-xs">
           <Badge variant="outline" className={`text-[9px] ${jobStatusStyle[j.status]}`}>{j.status}</Badge>

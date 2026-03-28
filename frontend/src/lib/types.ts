@@ -47,3 +47,33 @@ export interface IngestResult {
   entity_count: number;
   jobs_queued: string[];
 }
+
+export interface CriterionDetail {
+  criterion: string;
+  score: number;
+  seed_score: number;
+  evidence: string;
+  improve: string;
+}
+
+export interface SimmerIteration {
+  phase: string;
+  iteration: number;
+  scores: Record<string, number>;
+  composite: number;
+  key_change: string;
+  asi: string;
+  judge_mode: string;
+  regressed: boolean;
+  created_at: string;
+  criterion_details: CriterionDetail[];
+}
+
+export interface SimmerJobDetail {
+  job_id: string;
+  job_type: string;
+  target: string;
+  status: string;
+  phases: Record<string, SimmerIteration[]>;
+  total_iterations: number;
+}
