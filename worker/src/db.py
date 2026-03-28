@@ -131,6 +131,16 @@ CREATE TABLE IF NOT EXISTS simmer_iterations (
 );
 CREATE INDEX IF NOT EXISTS idx_simmer_iterations_job ON simmer_iterations(job_id);
 
+CREATE TABLE IF NOT EXISTS simmer_criterion_details (
+    id TEXT PRIMARY KEY,
+    iteration_id TEXT REFERENCES simmer_iterations(id),
+    criterion TEXT,
+    score INTEGER,
+    seed_score INTEGER,
+    evidence TEXT,
+    improve TEXT
+);
+
 CREATE TABLE IF NOT EXISTS specs (
     id TEXT PRIMARY KEY,
     domain_path TEXT,
