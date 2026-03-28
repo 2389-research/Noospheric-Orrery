@@ -81,6 +81,7 @@ async def _ingest_document(title: str, content: str, source_path: str | None) ->
 
         # 3. Extract if general spec exists
         entity_count = 0
+        chunk_entities: dict[str, list[str]] = {}
         spec_row = conn.execute(
             "SELECT spec_content, version FROM specs WHERE domain_path IS NULL ORDER BY version DESC LIMIT 1"
         ).fetchone()
@@ -91,8 +92,6 @@ async def _ingest_document(title: str, content: str, source_path: str | None) ->
             entities = await extract_document(
                 client=client, chunks=chunks, spec=spec, model=settings.extraction_model,
             )
-
-            chunk_entities: dict[str, list[str]] = {}
             for entity in entities:
                 entity_id = normalize_entity(conn, entity["name"], entity["type"])
                 conn.execute(
@@ -114,7 +113,58 @@ async def _ingest_document(title: str, content: str, source_path: str | None) ->
             conn.execute("UPDATE documents SET status = 'extracted' WHERE id = ?", (doc_id,))
             conn.commit()
 
-        # 4. Check thresholds
+        # 4. Cascade through domain specs
+        #    For each domain this doc belongs to, walk up the tree and
+        #    run any domain-specific specs that exist.
+        #    e.g., doc in business/product_development/strategy/ecommerce
+        #    checks: ecommerce spec, strategy spec, product_development spec
+        domain_entity_count = 0
+        seen_specs = set()
+
+        for domain_path in domains:
+            # Walk up the domain tree: a/b/c → [a/b/c, a/b, a]
+            parts = domain_path.split("/")
+            ancestor_paths = ["/".join(parts[:i+1]) for i in range(len(parts))]
+
+            for ancestor in reversed(ancestor_paths):  # deepest first
+                domain_spec = conn.execute(
+                    "SELECT id, spec_content, version FROM specs WHERE domain_path = ? ORDER BY version DESC LIMIT 1",
+                    (ancestor,),
+                ).fetchone()
+
+                if domain_spec and domain_spec[0] not in seen_specs:
+                    seen_specs.add(domain_spec[0])
+                    d_entities = await extract_document(
+                        client=client, chunks=chunks,
+                        spec=domain_spec[1], model=settings.extraction_model,
+                    )
+                    for entity in d_entities:
+                        entity_id = normalize_entity(conn, entity["name"], entity["type"])
+                        conn.execute(
+                            "INSERT INTO entity_sources (entity_id, document_id, chunk_id, extraction_pass, spec_version) VALUES (?, ?, ?, 'domain-specific', ?)",
+                            (entity_id, doc_id, entity.get("chunk_id"), domain_spec[2]),
+                        )
+                        chunk_id = entity.get("chunk_id")
+                        if chunk_id:
+                            chunk_entities.setdefault(chunk_id, []).append(entity_id)
+                    domain_entity_count += len(d_entities)
+
+            # Recompute co-occurrence with domain entities included
+            if domain_entity_count > 0:
+                edges = compute_cooccurrence_edges(chunk_entities)
+                for edge in edges:
+                    # Upsert — might already have edges from general extraction
+                    conn.execute(
+                        "INSERT OR REPLACE INTO relationships (id, from_entity, to_entity, type, weight, source_chunk) VALUES (?, ?, ?, ?, ?, ?)",
+                        (edge["id"], edge["from"], edge["to"], edge["type"], edge["weight"], edge["source_chunk"]),
+                    )
+
+        if domain_entity_count > 0:
+            entity_count += domain_entity_count
+            conn.execute("UPDATE documents SET status = 'enriched' WHERE id = ?", (doc_id,))
+            conn.commit()
+
+        # 5. Check thresholds + queue simmers
         jobs_queued = []
 
         if not spec_row:
