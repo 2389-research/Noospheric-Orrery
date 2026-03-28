@@ -4,10 +4,12 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { NavTrail, TrailItem } from "./nav-trail";
 import { EntityPanelContent, EntityPanelData } from "./entity-panel-content";
 import { DomainPanelContent, DomainPanelData } from "./domain-panel-content";
+import { TradeRoutePanelContent, TradeRoutePanelData } from "./trade-route-panel-content";
 
 type PanelNode =
   | { nodeType: "entity"; data: EntityPanelData }
-  | { nodeType: "domain"; data: DomainPanelData };
+  | { nodeType: "domain"; data: DomainPanelData }
+  | { nodeType: "trade_route"; data: TradeRoutePanelData };
 
 interface SelectedNodeRaw {
   nodeType: string;
@@ -60,6 +62,23 @@ function parseSelectedNode(selectedNode: SelectedNodeRaw | null): PanelNode | nu
       },
     };
   }
+  if (selectedNode.nodeType === "trade_route") {
+    const d = selectedNode.data as {
+      source?: string; target?: string;
+      sourceLabel?: string; targetLabel?: string;
+      weight?: number;
+    };
+    return {
+      nodeType: "trade_route",
+      data: {
+        source: String(d.source ?? ""),
+        target: String(d.target ?? ""),
+        sourceLabel: String(d.sourceLabel ?? ""),
+        targetLabel: String(d.targetLabel ?? ""),
+        weight: Number(d.weight ?? 0),
+      },
+    };
+  }
   return null;
 }
 
@@ -84,9 +103,13 @@ export function GalaxyPanel({ selectedNode, domainColors, onClose }: GalaxyPanel
     name:
       node.nodeType === "entity"
         ? node.data.name
-        : (node.data.path.split("/").pop() ?? node.data.name),
+        : node.nodeType === "trade_route"
+        ? `${(node.data as TradeRoutePanelData).sourceLabel?.split("/").pop()} ↔ ${(node.data as TradeRoutePanelData).targetLabel?.split("/").pop()}`
+        : ((node.data as DomainPanelData).path.split("/").pop() ?? (node.data as DomainPanelData).name),
     nodeType: node.nodeType,
-    id: node.nodeType === "entity" ? node.data.id : node.data.path,
+    id: node.nodeType === "entity" ? (node.data as EntityPanelData).id
+      : node.nodeType === "trade_route" ? `${(node.data as TradeRoutePanelData).source}:${(node.data as TradeRoutePanelData).target}`
+      : (node.data as DomainPanelData).path,
   }));
 
   const handleNavigateEntity = useCallback(
@@ -194,6 +217,13 @@ export function GalaxyPanel({ selectedNode, domainColors, onClose }: GalaxyPanel
           <DomainPanelContent
             data={currentNode.data}
             domainColor={domainColors[currentNode.data.path]}
+            onNavigateEntity={handleNavigateEntity}
+          />
+        )}
+        {currentNode?.nodeType === "trade_route" && (
+          <TradeRoutePanelContent
+            data={currentNode.data}
+            onNavigateDomain={handleNavigateDomain}
             onNavigateEntity={handleNavigateEntity}
           />
         )}
