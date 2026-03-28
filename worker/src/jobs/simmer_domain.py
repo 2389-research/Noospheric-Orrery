@@ -93,7 +93,7 @@ Keep the general types but add domain-specific ones."""
         generator_model="claude-sonnet-4-6",
         judge_model="claude-sonnet-4-6",
         background=f"Sample documents from domain '{domain_path}' are in {sample_dir}. Discover entity types specific to this domain.",
-        on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path),
+        on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(domain_dir / "golden")),
         **bedrock_kwargs,
     )
 
@@ -113,7 +113,7 @@ Keep the general types but add domain-specific ones."""
         judge_model="claude-sonnet-4-6",
         clerk_model="claude-haiku-4-5",
         background=f"This spec will be executed by Haiku on documents in domain '{domain_path}'. Golden set: {golden_result.best_candidate[:2000]}",
-        on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path),
+        on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path, str(domain_dir / "spec")),
         **bedrock_kwargs,
     )
 

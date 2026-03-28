@@ -40,14 +40,23 @@ function ActiveJobs({ jobs }: { jobs: JobInfo[] }) {
           <div key={j.id}>{inner}</div>
         );
       })}
-      {recent.map((j) => (
-        <div key={j.id} className="flex items-center gap-3 px-3 py-1.5 text-xs">
-          <Badge variant="outline" className={`text-[9px] ${jobStatusStyle[j.status]}`}>{j.status}</Badge>
-          <span className="text-muted-foreground/60">{j.type}</span>
-          <span className="text-[10px] text-muted-foreground/30">{j.target}</span>
-          <span className="text-[10px] text-muted-foreground/20 ml-auto">{timeSince(j.completed_at || j.created_at)}</span>
-        </div>
-      ))}
+      {recent.map((j) => {
+        const isSimmer = j.type.startsWith("simmer");
+        const row = (
+          <div className={`flex items-center gap-3 px-3 py-1.5 text-xs ${isSimmer ? "cursor-pointer hover:bg-card/50 transition-colors rounded" : ""}`}>
+            <Badge variant="outline" className={`text-[9px] ${jobStatusStyle[j.status]}`}>{j.status}</Badge>
+            <span className="text-muted-foreground/60">{j.type}</span>
+            <span className="text-[10px] text-muted-foreground/30">{j.target}</span>
+            {isSimmer && <span className="text-[9px] text-purple-400/40">↗</span>}
+            <span className="text-[10px] text-muted-foreground/20 ml-auto">{timeSince(j.completed_at || j.created_at)}</span>
+          </div>
+        );
+        return isSimmer ? (
+          <Link key={j.id} href={`/simmer/${j.id}`}>{row}</Link>
+        ) : (
+          <div key={j.id}>{row}</div>
+        );
+      })}
     </div>
   );
 }
