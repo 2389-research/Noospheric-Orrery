@@ -1,6 +1,5 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { StatsBar } from "@/components/stats-bar";
 import { DomainTree } from "@/components/domain-tree";
@@ -66,17 +65,7 @@ export default function PipelinePage() {
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-sm tracking-[4px] text-muted-foreground uppercase">Pipeline</h1>
-        <Button
-          size="sm"
-          variant="outline"
-          className="text-[10px] tracking-wider"
-          onClick={async () => { try { await api.triggerGeneralSimmer(); refresh(); } catch (e) { console.error(e); } }}
-        >
-          Simmer General Spec
-        </Button>
-      </div>
+      <h1 className="text-sm tracking-[4px] text-muted-foreground uppercase">Pipeline</h1>
 
       {/* Stats row */}
       <StatsBar stats={stats} />
