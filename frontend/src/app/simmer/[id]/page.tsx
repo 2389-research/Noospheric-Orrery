@@ -107,6 +107,10 @@ export default function SimmerPage() {
             isRunning={job.status === "running"}
             isCompleted={job.status === "completed"}
             onVisibleCountChange={setVisibleCount}
+            bestIndex={iterations.length > 0
+              ? iterations.reduce((best, iter, idx) => iter.composite > iterations[best].composite ? idx : best, 0)
+              : undefined
+            }
           />
         </div>
 

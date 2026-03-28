@@ -10,6 +10,7 @@ interface IterationListProps {
   isRunning: boolean;
   isCompleted: boolean;
   onVisibleCountChange?: (count: number | null) => void;
+  bestIndex?: number;
 }
 
 export function IterationList({
@@ -19,6 +20,7 @@ export function IterationList({
   isRunning,
   isCompleted,
   onVisibleCountChange,
+  bestIndex,
 }: IterationListProps) {
   const [replayState, setReplayState] = useState<"idle" | "playing" | "done">("idle");
   const [replaySpeed, setReplaySpeed] = useState(1);
@@ -135,6 +137,9 @@ export function IterationList({
               <div className="flex items-baseline justify-between mb-0.5">
                 <span className="text-[9px] tracking-[2px] text-muted-foreground/90 uppercase">
                   iter {iter.iteration}
+                  {idx === bestIndex && (
+                    <span className="ml-1.5 text-[8px] text-emerald-400 border border-emerald-400/40 px-1 rounded">★ used</span>
+                  )}
                 </span>
                 <div className="flex items-center gap-1">
                   {delta !== null && !iter.regressed && delta > 0 && (
