@@ -69,7 +69,8 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
                     else:
                         entity_id = str(uuid.uuid4())
                         conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES (?, ?, ?)", (entity_id, name, etype))
-                conn.execute("INSERT INTO entity_sources (entity_id, document_id, chunk_id, extraction_pass) VALUES (?, ?, ?, 'general')", (entity_id, doc_id, chunk_id))
+                extraction_pass = "domain-specific" if scope == "domain" else "general"
+                conn.execute("INSERT INTO entity_sources (entity_id, document_id, chunk_id, extraction_pass) VALUES (?, ?, ?, ?)", (entity_id, doc_id, chunk_id, extraction_pass))
                 chunk_entities.setdefault(chunk_id, []).append(entity_id)
 
         pair_counts: dict[tuple, int] = {}
@@ -80,7 +81,8 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
             conn.execute("INSERT INTO relationships (id, from_entity, to_entity, type, weight) VALUES (?, ?, ?, 'co_occurs', ?)",
                 (str(uuid.uuid4()), a, b, weight))
 
-        conn.execute("UPDATE documents SET status = 'extracted' WHERE id = ?", (doc_id,))
+        new_status = "enriched" if scope == "domain" else "extracted"
+        conn.execute("UPDATE documents SET status = ? WHERE id = ?", (new_status, doc_id))
         conn.commit()
         conn.close()
 
