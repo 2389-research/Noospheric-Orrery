@@ -24,8 +24,8 @@ export default function SimmerPage() {
       setJob((prev) => {
         // Set initial active phase if not set
         if (!prev) {
-          const phases = Object.keys(data.phases);
-          const firstNonEmpty = phases.find((p) => (data.phases[p]?.length ?? 0) > 0);
+          const PHASE_ORDER = ["golden_set", "extraction_spec"];
+          const firstNonEmpty = PHASE_ORDER.find((p) => (data.phases[p]?.length ?? 0) > 0);
           if (firstNonEmpty) {
             setActivePhase(firstNonEmpty);
             const iters = data.phases[firstNonEmpty] ?? [];

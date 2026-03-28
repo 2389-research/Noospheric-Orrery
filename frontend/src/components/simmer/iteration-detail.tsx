@@ -51,7 +51,7 @@ export function IterationDetail({
                     : "text-muted-foreground/40"
                 }`}
               >
-                {delta > 0 ? "+" : ""}{delta.toFixed(1)} from prev
+                {delta > 0 ? `+${delta.toFixed(1)}` : delta < 0 ? delta.toFixed(1) : "—"}
               </div>
             )}
             {delta === null && (
@@ -64,8 +64,8 @@ export function IterationDetail({
         <div className="flex gap-2 flex-wrap">
           {criterionNames.map((name, ci) => {
             const score = iteration.scores[name];
-            const prevScore = previousIteration?.scores[name];
-            const scoreDelta = prevScore !== undefined ? score - prevScore : null;
+            const seedScore = allIterations[0]?.scores[name];
+            const scoreDelta = seedScore !== undefined ? score - seedScore : null;
             const color = CRITERION_COLORS[ci % CRITERION_COLORS.length];
 
             return (
@@ -93,11 +93,9 @@ export function IterationDetail({
             );
           })}
           {iteration.judge_mode && (
-            <div className="flex items-center px-2 py-1 border border-border/10 rounded">
-              <span className="text-[9px] text-muted-foreground/30">
-                {iteration.judge_mode}
-              </span>
-            </div>
+            <span className="text-[8px] text-muted-foreground/20 self-center ml-1">
+              judge: {iteration.judge_mode}
+            </span>
           )}
         </div>
       </div>
