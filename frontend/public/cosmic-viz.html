@@ -440,8 +440,16 @@ function screenToWorld(sx,sy) {
   return { x:(sx-W/2)/cam.zoom-cam.x, y:(sy-H/2)/cam.zoom-cam.y };
 }
 
+function pointToLineDistance(px,py,x1,y1,x2,y2) {
+  const dx=x2-x1, dy=y2-y1, len2=dx*dx+dy*dy;
+  if (len2===0) return hypot(px-x1,py-y1);
+  let t=((px-x1)*dx+(py-y1)*dy)/len2;
+  t=max(0,min(1,t));
+  return hypot(px-(x1+t*dx),py-(y1+t*dy));
+}
+
 function hitTest(wx,wy) {
-  // Check entities first (smaller, in front), then domains
+  // Check entities first (smaller, in front), then domains, then trade routes
   const ents = [...nodes.values()].filter(n=>n.kind==='entity');
   for (const n of ents) {
     if (hypot(wx-n.x,wy-n.y) < (n.radius||4)+6) return n;
@@ -449,6 +457,20 @@ function hitTest(wx,wy) {
   const doms = [...nodes.values()].filter(n=>n.kind==='domain');
   for (const n of doms) {
     if (hypot(wx-n.x,wy-n.y) < n.radius*2) return n;
+  }
+  // Check trade routes (cross-domain edges)
+  for (const e of edges) {
+    if (e.kind !== 'cross-domain') continue;
+    const s=nodes.get(e.source), t=nodes.get(e.target);
+    if (!s||!t) continue;
+    const dist = pointToLineDistance(wx,wy,s.x,s.y,t.x,t.y);
+    if (dist < 12) {
+      return { id:'route:'+e.source+':'+e.target, kind:'trade_route',
+        label: (s.label||'').split('/').pop() + ' ↔ ' + (t.label||'').split('/').pop(),
+        sourcePath: s.fullPath, targetPath: t.fullPath,
+        sourceLabel: s.label, targetLabel: t.label,
+        weight: e.weight, x:(s.x+t.x)/2, y:(s.y+t.y)/2 };
+    }
   }
   return null;
 }
@@ -480,6 +502,8 @@ canvas.addEventListener('mousemove', e => {
       h+=`${n.entityType||'Entity'} · ${n.videoCount||0} doc${(n.videoCount||0)!==1?'s':''}`;
     } else if (n.kind==='domain') {
       h+=`${n.videoCount||0} docs`;
+    } else if (n.kind==='trade_route') {
+      h+=`weight: ${n.weight||0}`;
     }
     h+='</div>';
     tt.innerHTML=h;
@@ -509,6 +533,12 @@ canvas.addEventListener('mouseup', e => {
         payload.data = {
           path: pinnedNode.fullPath, name: pinnedNode.label,
           document_count: pinnedNode.videoCount,
+        };
+      } else if (pinnedNode.kind === 'trade_route') {
+        payload.data = {
+          source: pinnedNode.sourcePath, target: pinnedNode.targetPath,
+          sourceLabel: pinnedNode.sourceLabel, targetLabel: pinnedNode.targetLabel,
+          weight: pinnedNode.weight,
         };
       }
       window.parent.postMessage(payload, '*');
