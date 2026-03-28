@@ -85,7 +85,7 @@ export function IterationList({
         <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border/20">
           <button
             onClick={startReplay}
-            className="text-[9px] tracking-[1px] text-muted-foreground/60 hover:text-foreground/80 transition-colors px-1.5 py-0.5 border border-border/30 rounded"
+            className="text-[9px] tracking-[1px] text-muted-foreground/90 hover:text-foreground/90 transition-colors px-1.5 py-0.5 border border-border/30 rounded"
           >
             ▶ Replay
           </button>
@@ -96,7 +96,7 @@ export function IterationList({
               className={`text-[9px] px-1 py-0.5 border rounded transition-colors ${
                 replaySpeed === speed
                   ? "border-purple-500/50 text-purple-400"
-                  : "border-border/20 text-muted-foreground/40 hover:text-muted-foreground/60"
+                  : "border-border/20 text-muted-foreground/90 hover:text-muted-foreground/90"
               }`}
             >
               {speed}x
@@ -104,7 +104,7 @@ export function IterationList({
           ))}
           <button
             onClick={skipReplay}
-            className="text-[9px] tracking-[1px] text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors px-1 py-0.5"
+            className="text-[9px] tracking-[1px] text-muted-foreground/90 hover:text-muted-foreground/85 transition-colors px-1 py-0.5"
           >
             ⏭ Skip
           </button>
@@ -133,7 +133,7 @@ export function IterationList({
               ].join(" ")}
             >
               <div className="flex items-baseline justify-between mb-0.5">
-                <span className="text-[9px] tracking-[2px] text-muted-foreground/40 uppercase">
+                <span className="text-[9px] tracking-[2px] text-muted-foreground/90 uppercase">
                   iter {iter.iteration}
                 </span>
                 <div className="flex items-center gap-1">
@@ -144,7 +144,7 @@ export function IterationList({
                     <span className="text-[9px] text-red-400 border border-red-400/40 px-1 rounded">↓ reg</span>
                   )}
                   {delta !== null && delta === 0 && !iter.regressed && (
-                    <span className="text-[9px] text-muted-foreground/50">—</span>
+                    <span className="text-[9px] text-muted-foreground/85">—</span>
                   )}
                 </div>
               </div>
@@ -152,7 +152,7 @@ export function IterationList({
                 {iter.composite.toFixed(1)}
               </div>
               {iter.key_change && !iter.key_change.match(/^iteration-\d+$/) && (
-                <div className="text-[9px] text-muted-foreground/50 truncate leading-tight">
+                <div className="text-[9px] text-muted-foreground/85 truncate leading-tight">
                   {iter.key_change.replace(/^\*+\s*/, "")}
                 </div>
               )}
@@ -163,7 +163,7 @@ export function IterationList({
         {/* Pulsing placeholder when running */}
         {isRunning && (
           <div className="px-3 py-2.5 border-b border-border/10 border-l-2 border-l-amber-500/40">
-            <div className="text-[9px] tracking-[2px] text-muted-foreground/50 uppercase mb-1">
+            <div className="text-[9px] tracking-[2px] text-muted-foreground/85 uppercase mb-1">
               iter {iterations.length}
             </div>
             <div className="text-[10px] text-amber-400/60 animate-pulse">

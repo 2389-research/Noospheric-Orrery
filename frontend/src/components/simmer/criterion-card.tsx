@@ -41,7 +41,7 @@ export function CriterionCard({ detail, colorIndex, nextIteration }: CriterionCa
             style={{ width: `${barWidth}%`, backgroundColor: color }}
           />
         </div>
-        <span className="text-xs text-foreground/80 w-8 text-right shrink-0">
+        <span className="text-xs text-foreground/90 w-8 text-right shrink-0">
           {detail.score}/10
         </span>
         {seedDelta !== 0 && (
@@ -54,11 +54,11 @@ export function CriterionCard({ detail, colorIndex, nextIteration }: CriterionCa
           </span>
         )}
         {seedDelta === 0 && (
-          <span className="text-[9px] text-muted-foreground/50 w-10 text-right shrink-0">
+          <span className="text-[9px] text-muted-foreground/85 w-10 text-right shrink-0">
             — seed
           </span>
         )}
-        <span className="text-muted-foreground/40 text-xs ml-1">
+        <span className="text-muted-foreground/90 text-xs ml-1">
           {expanded ? "▲" : "▼"}
         </span>
       </button>
@@ -68,20 +68,20 @@ export function CriterionCard({ detail, colorIndex, nextIteration }: CriterionCa
         <div className="px-3 pb-3 pt-1 space-y-3 border-t border-border/10">
           {detail.evidence && (
             <div>
-              <div className="text-[9px] tracking-[2px] text-muted-foreground/60 uppercase mb-1">
+              <div className="text-[9px] tracking-[2px] text-muted-foreground/90 uppercase mb-1">
                 Evidence
               </div>
-              <p className="text-xs text-foreground/70 leading-relaxed">
+              <p className="text-xs text-foreground/85 leading-relaxed">
                 {detail.evidence}
               </p>
             </div>
           )}
           {detail.improve && (
             <div>
-              <div className="text-[9px] tracking-[2px] text-muted-foreground/60 uppercase mb-1">
+              <div className="text-[9px] tracking-[2px] text-muted-foreground/90 uppercase mb-1">
                 What Would Make It Better
               </div>
-              <p className="text-xs text-foreground/70 leading-relaxed">
+              <p className="text-xs text-foreground/85 leading-relaxed">
                 {detail.improve}
               </p>
             </div>

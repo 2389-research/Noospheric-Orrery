@@ -13,19 +13,19 @@ const typeColors: Record<string, string> = {
 };
 
 export function EntityTable({ entities }: { entities: EntitySummary[] }) {
-  if (entities.length === 0) return <p className="text-muted-foreground/50 text-xs">No entities yet</p>;
+  if (entities.length === 0) return <p className="text-muted-foreground/85 text-xs">No entities yet</p>;
   return (
     <div className="rounded border border-border/30">
-      <div className="grid grid-cols-4 gap-4 px-4 py-2 border-b border-border/20 text-[9px] tracking-[2px] text-muted-foreground/50 uppercase">
+      <div className="grid grid-cols-4 gap-4 px-4 py-2 border-b border-border/20 text-[9px] tracking-[2px] text-muted-foreground/85 uppercase">
         <span>Name</span><span>Type</span><span>Sources</span><span></span>
       </div>
       {entities.map((e) => (
         <div key={e.id} className="grid grid-cols-4 gap-4 px-4 py-2 border-b border-border/10 last:border-0 text-xs hover:bg-card/50 transition-colors">
           <span className="text-foreground/90">{e.canonical_name}</span>
-          <Badge variant="outline" className={`w-fit text-[10px] ${typeColors[e.type] || "border-muted-foreground/50 text-muted-foreground"}`}>
+          <Badge variant="outline" className={`w-fit text-[10px] ${typeColors[e.type] || "border-muted-foreground/85 text-muted-foreground"}`}>
             {e.type}
           </Badge>
-          <span className="text-muted-foreground/60">{e.source_count}</span>
+          <span className="text-muted-foreground/90">{e.source_count}</span>
           <a href={`/entities/${e.id}`} className="text-cyan-500/70 hover:text-cyan-400 transition-colors">→</a>
         </div>
       ))}

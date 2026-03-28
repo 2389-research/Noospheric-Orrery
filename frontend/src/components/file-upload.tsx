@@ -40,10 +40,10 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
         onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer.files); }}
         onClick={() => document.getElementById("file-input")?.click()}
       >
-        <p className="text-xs text-muted-foreground/60">
+        <p className="text-xs text-muted-foreground/90">
           {uploading ? "processing..." : "drop files here or click to browse"}
         </p>
-        <p className="text-[10px] text-muted-foreground/50 mt-2">.txt .md .json .csv</p>
+        <p className="text-[10px] text-muted-foreground/85 mt-2">.txt .md .json .csv</p>
         <input id="file-input" type="file" multiple accept=".txt,.md,.json,.csv" className="hidden"
           onChange={(e) => handleFiles(e.target.files)} />
       </div>

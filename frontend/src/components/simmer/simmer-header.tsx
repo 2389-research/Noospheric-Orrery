@@ -36,14 +36,14 @@ export function SimmerHeader({ job }: { job: SimmerJobDetail }) {
   return (
     <div className="flex items-start justify-between">
       <div className="space-y-1">
-        <div className="text-[10px] tracking-[2px] text-muted-foreground/50 uppercase">
+        <div className="text-[10px] tracking-[2px] text-muted-foreground/85 uppercase">
           <Link href="/pipeline" className="hover:text-muted-foreground transition-colors">jobs</Link>
           <span className="mx-1">/</span>
-          <span className="text-muted-foreground/70">{shortId}</span>
-          <span className="mx-2 text-muted-foreground/50">·</span>
-          <span className="text-muted-foreground/60">{job.job_type}</span>
+          <span className="text-muted-foreground/85">{shortId}</span>
+          <span className="mx-2 text-muted-foreground/85">·</span>
+          <span className="text-muted-foreground/90">{job.job_type}</span>
         </div>
-        <div className="text-[10px] text-muted-foreground/40">
+        <div className="text-[10px] text-muted-foreground/90">
           <span>{job.target}</span>
           <span className="mx-2">·</span>
           <span>started {timeSince(startedAt)}</span>
