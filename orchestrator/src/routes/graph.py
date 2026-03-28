@@ -239,11 +239,28 @@ def get_graph_data():
         for r in docs_raw
     ]
 
+    # Domain specs for maturity calculation
+    domain_specs = {}
+    for d in domains:
+        if d["spec_version"]:
+            domain_specs[d["path"]] = {"spec_version": d["spec_version"]}
+        else:
+            domain_specs[d["path"]] = None
+
+    # Active simmer jobs
+    active_simmers = []
+    active_jobs = conn.execute(
+        "SELECT target FROM jobs WHERE type LIKE 'simmer_%' AND status = 'running'"
+    ).fetchall()
+    active_simmers = [r[0] for r in active_jobs]
+
     conn.close()
 
     return {
         "domain_positions": domain_positions,
         "domain_video_counts": domain_doc_counts,
+        "domain_specs": domain_specs,
+        "active_simmers": active_simmers,
         "region_colors": region_colors,
         "subdomains": subdomains,
         "videos": videos,
