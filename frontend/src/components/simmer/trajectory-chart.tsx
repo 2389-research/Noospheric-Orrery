@@ -114,20 +114,21 @@ export function TrajectoryChart({ iterations, selectedIndex }: TrajectoryChartPr
         ticks: { color: "rgba(255,255,255,0.3)", font: { size: 9 } },
       },
       y: {
-        min: 3,
-        max: 10,
+        // Auto-scale with padding — scores are 0-10 but cluster in a range
+        min: Math.max(0, Math.floor(Math.min(...compositeData, ...criterionNames.flatMap(n => iterations.map(i => i.scores[n] ?? 10))) - 1)),
+        max: Math.min(10, Math.ceil(Math.max(...compositeData, ...criterionNames.flatMap(n => iterations.map(i => i.scores[n] ?? 0))) + 1)),
         grid: { color: "rgba(255,255,255,0.05)" },
         ticks: {
           color: "rgba(255,255,255,0.3)",
           font: { size: 9 },
-          stepSize: 2,
+          stepSize: 1,
         },
       },
     },
   };
 
   return (
-    <div style={{ height: "120px" }}>
+    <div style={{ height: "200px" }}>
       <Line data={data} options={options} />
     </div>
   );
