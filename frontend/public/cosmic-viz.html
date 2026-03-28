@@ -168,7 +168,7 @@ function drawBackground() {
 }
 
 // ── NEBULA (DOMAIN) RENDERER ───────────────────────────────────
-function drawNebula(n) {
+function drawNebula(n, highlighted) {
   const [r,g,b] = hexRGB(n.color);
   const bR = n.radius * clamp(n.birthScale, 0, 1);
   const pulse = 0.5 + 0.5*sin(tick*0.008+n.phase);
@@ -204,8 +204,16 @@ function drawNebula(n) {
     ctx.fillStyle = rgba(255,255,255,0.5);
     ctx.font = '9px Courier New';
     ctx.fillText(`${n.videoCount} docs`, n.x, n.y + bR*2.2 + 24);
+  } else if (highlighted) {
+    // Connected to hovered node — brighter than default
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${n.isSubdomain ? 10 : 12}px Courier New`; ctx.textAlign = 'center';
+    ctx.fillText(n.label, n.x, n.y + bR*2.2 + 12);
+    ctx.fillStyle = rgba(255,255,255,0.4);
+    ctx.font = '8px Courier New';
+    ctx.fillText(`${n.videoCount} docs`, n.x, n.y + bR*2.2 + 23);
   } else {
-    const labelAlpha = n.isSubdomain ? 0.55 : 0.75;
+    const labelAlpha = n.isSubdomain ? 0.7 : 0.9;
     const labelSize = n.isSubdomain ? 9 : 11;
     ctx.fillStyle = rgba(r,g,b,labelAlpha);
     ctx.font = `${labelSize}px Courier New`; ctx.textAlign = 'center';
@@ -506,14 +514,13 @@ function frame() {
   // Draw domains (nebulae) — always visible, brighten if in neighborhood
   const doms = [...nodes.values()].filter(n=>n.kind==='domain');
   doms.forEach(d => {
-    if (hi && hi.has(d.id)) {
-      ctx.globalAlpha = 1.0;
-    } else if (hi) {
+    const inNeighborhood = hi && hi.has(d.id);
+    if (hi && !inNeighborhood) {
       ctx.globalAlpha = 0.3;
     } else {
       ctx.globalAlpha = 1.0;
     }
-    drawNebula(d);
+    drawNebula(d, inNeighborhood);
     ctx.globalAlpha = 1.0;
   });
 
