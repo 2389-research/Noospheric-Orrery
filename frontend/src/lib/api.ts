@@ -28,6 +28,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path }),
     }),
+  getJobIterations: (jobId: string) => fetchAPI<import("./types").SimmerJobDetail>(`/jobs/${jobId}/iterations`),
   triggerGeneralSimmer: () => fetchAPI<{ job_id: string }>("/simmer/general", { method: "POST" }),
   triggerDomainSimmer: (domain: string) => fetchAPI<{ job_id: string }>(`/simmer/${domain}`, { method: "POST" }),
   triggerNormalization: () =>
