@@ -68,7 +68,7 @@ export function IterationDetail({
               </div>
             )}
             {delta === null && (
-              <div className="text-[10px] text-muted-foreground/30">seed</div>
+              <div className="text-[10px] text-muted-foreground/50">seed</div>
             )}
           </div>
         </div>
@@ -106,7 +106,7 @@ export function IterationDetail({
             );
           })}
           {iteration.judge_mode && (
-            <span className="text-[8px] text-muted-foreground/20 self-center ml-1">
+            <span className="text-[8px] text-muted-foreground/40 self-center ml-1">
               judge: {iteration.judge_mode}
             </span>
           )}
@@ -143,7 +143,7 @@ export function IterationDetail({
 
       {/* No detail message */}
       {iteration.criterion_details.length === 0 && (
-        <div className="text-[10px] text-muted-foreground/30 py-4 text-center border border-border/10 rounded">
+        <div className="text-[10px] text-muted-foreground/50 py-4 text-center border border-border/10 rounded">
           No criterion details for this iteration
         </div>
       )}

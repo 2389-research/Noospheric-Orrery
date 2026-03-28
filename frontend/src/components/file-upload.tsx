@@ -43,7 +43,7 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
         <p className="text-xs text-muted-foreground/60">
           {uploading ? "processing..." : "drop files here or click to browse"}
         </p>
-        <p className="text-[10px] text-muted-foreground/30 mt-2">.txt .md .json .csv</p>
+        <p className="text-[10px] text-muted-foreground/50 mt-2">.txt .md .json .csv</p>
         <input id="file-input" type="file" multiple accept=".txt,.md,.json,.csv" className="hidden"
           onChange={(e) => handleFiles(e.target.files)} />
       </div>

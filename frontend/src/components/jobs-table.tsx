@@ -18,7 +18,7 @@ export function JobsTable({ jobs }: { jobs: JobInfo[] }) {
           <Badge variant="outline" className={`text-[9px] ${statusStyle[j.status] || ""}`}>{j.status}</Badge>
           <span className="text-foreground/70">{j.type}</span>
           <span className="text-muted-foreground/40">{j.target}</span>
-          <span className="text-muted-foreground/30 ml-auto text-[10px]">{new Date(j.created_at).toLocaleString()}</span>
+          <span className="text-muted-foreground/50 ml-auto text-[10px]">{new Date(j.created_at).toLocaleString()}</span>
         </div>
       ))}
     </div>

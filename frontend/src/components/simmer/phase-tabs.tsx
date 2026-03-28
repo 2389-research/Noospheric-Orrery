@@ -41,13 +41,13 @@ export function PhaseTabs({ job, activePhase, onPhaseChange }: PhaseTabsProps) {
               isActive
                 ? "text-foreground/90 border-t-2 border-purple-500"
                 : isEmpty
-                ? "text-muted-foreground/25 cursor-not-allowed"
+                ? "text-muted-foreground/45 cursor-not-allowed"
                 : "text-muted-foreground/50 hover:text-muted-foreground/80 cursor-pointer border-t-2 border-transparent",
             ].join(" ")}
           >
             <span>{PHASE_LABELS[phase] ?? phase}</span>
             {!isEmpty && (
-              <span className={`ml-2 text-[9px] ${isActive ? "text-muted-foreground/50" : "text-muted-foreground/30"}`}>
+              <span className={`ml-2 text-[9px] ${isActive ? "text-muted-foreground/50" : "text-muted-foreground/50"}`}>
                 {iterations.length} iter
                 {best !== null && (
                   <span className="ml-1 text-purple-400/70">{best.toFixed(1)}</span>
@@ -55,7 +55,7 @@ export function PhaseTabs({ job, activePhase, onPhaseChange }: PhaseTabsProps) {
               </span>
             )}
             {isEmpty && (
-              <span className="ml-2 text-[9px] text-muted-foreground/20">—</span>
+              <span className="ml-2 text-[9px] text-muted-foreground/40">—</span>
             )}
           </button>
         );

@@ -122,7 +122,7 @@ export default function SimmerPage() {
             />
           ) : (
             <div className="flex items-center justify-center h-full">
-              <p className="text-muted-foreground/30 text-xs tracking-[2px]">
+              <p className="text-muted-foreground/50 text-xs tracking-[2px]">
                 No iterations yet
               </p>
             </div>

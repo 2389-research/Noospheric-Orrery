@@ -22,7 +22,7 @@ export function EntityTable({ entities }: { entities: EntitySummary[] }) {
       {entities.map((e) => (
         <div key={e.id} className="grid grid-cols-4 gap-4 px-4 py-2 border-b border-border/10 last:border-0 text-xs hover:bg-card/50 transition-colors">
           <span className="text-foreground/90">{e.canonical_name}</span>
-          <Badge variant="outline" className={`w-fit text-[10px] ${typeColors[e.type] || "border-muted-foreground/30 text-muted-foreground"}`}>
+          <Badge variant="outline" className={`w-fit text-[10px] ${typeColors[e.type] || "border-muted-foreground/50 text-muted-foreground"}`}>
             {e.type}
           </Badge>
           <span className="text-muted-foreground/60">{e.source_count}</span>
