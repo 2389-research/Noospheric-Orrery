@@ -35,12 +35,16 @@ canvas:active { cursor: grabbing; }
 #controls button:hover { border-color: rgba(100,180,255,0.5); color: #b4e1ff; }
 #tooltip {
   position: fixed; z-index: 20; pointer-events: none; display: none;
-  background: rgba(6,13,34,0.92); border: 1px solid rgba(100,180,255,0.2);
-  border-radius: 6px; padding: 8px 12px; max-width: 260px;
+  background: rgba(6,13,34,0.95); border: 1px solid rgba(100,180,255,0.15);
+  border-radius: 6px; padding: 10px 14px; max-width: 320px; min-width: 200px;
 }
-#tooltip .tt-type { color: rgba(100,180,255,0.5); font-size: 8px; letter-spacing: 2px; }
-#tooltip .tt-name { color: #d0d8f0; font-size: 11px; margin: 2px 0; }
-#tooltip .tt-meta { color: rgba(120,140,170,0.5); font-size: 9px; line-height: 1.5; }
+#tooltip .tt-type { color: rgba(100,180,255,0.7); font-size: 8px; letter-spacing: 2px; }
+#tooltip .tt-name { color: #eef0f8; font-size: 12px; margin: 3px 0; font-weight: bold; }
+#tooltip .tt-meta { color: rgba(180,195,220,0.8); font-size: 9px; line-height: 1.6; }
+#tooltip .tt-snippets { margin-top: 6px; border-top: 1px solid rgba(100,180,255,0.1); padding-top: 6px; }
+#tooltip .tt-snippet { color: rgba(200,210,230,0.7); font-size: 9px; line-height: 1.5; padding: 3px 0; border-bottom: 1px solid rgba(100,180,255,0.05); }
+#tooltip .tt-snippet:last-child { border-bottom: none; }
+#tooltip .tt-snippet em { color: #ffffff; font-style: normal; font-weight: bold; }
 #zoom-level {
   position: fixed; bottom: 12px; right: 12px; z-index: 10;
   font-size: 9px; color: rgba(100,180,255,0.3);
@@ -129,6 +133,52 @@ const births = [];
 const sparks = [];
 let hoveredId = null;
 let pinnedId = null;
+const API_BASE = (window.API_URL || 'http://localhost:8100');
+
+async function loadEntitySnippets(node) {
+  if (node._snippetsLoading || node._snippets) return;
+  node._snippetsLoading = true;
+  try {
+    // Find docs this entity appears in from cosmicData
+    const entityData = cosmicData?.entities?.find(e => 'ent:'+e.name === node.id);
+    if (!entityData) { node._snippets = []; return; }
+
+    // Get entity detail to find source documents
+    const entityResp = await fetch(`${API_BASE}/entities?limit=500`);
+    const allEntities = await entityResp.json();
+    const match = allEntities.find(e => e.canonical_name === entityData.name);
+    if (!match) { node._snippets = []; return; }
+
+    const detailResp = await fetch(`${API_BASE}/entities/${match.id}`);
+    const detail = await detailResp.json();
+    const docIds = [...new Set(detail.sources.map(s => s.document_id))].slice(0, 3);
+
+    // Fetch reader data for first few docs and collect snippets
+    const snippets = [];
+    for (const docId of docIds) {
+      try {
+        const readerResp = await fetch(`${API_BASE}/documents/${docId}/reader`);
+        const reader = await readerResp.json();
+        const ent = reader.entities?.find(e => e.canonical_name === entityData.name || e.id === match.id);
+        if (ent?.snippets) {
+          for (const s of ent.snippets) {
+            // Highlight the entity name in the snippet
+            const highlighted = s.replace(
+              new RegExp(`(${entityData.name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})`, 'gi'),
+              '<em>$1</em>'
+            );
+            snippets.push(highlighted);
+          }
+        }
+      } catch(e) {}
+      if (snippets.length >= 3) break;
+    }
+    node._snippets = snippets.slice(0, 3);
+  } catch(e) {
+    node._snippets = [];
+  }
+  node._snippetsLoading = false;
+}
 let cosmicData = null;
 
 // Camera
@@ -423,13 +473,28 @@ canvas.addEventListener('mousemove', e => {
   const tt=document.getElementById('tooltip');
   if (n) {
     tt.style.display='block';
-    tt.style.left=min(e.clientX+14,W-280)+'px';
-    tt.style.top=min(e.clientY-8,H-100)+'px';
-    let h=`<div class="tt-type">${n.kind==='domain'?'NEBULA':n.entityType||'ENTITY'}</div>`;
+    tt.style.left=min(e.clientX+14,W-320)+'px';
+    tt.style.top=min(e.clientY-8,H-200)+'px';
+    let h=`<div class="tt-type">${n.kind==='domain'?'DOMAIN':n.entityType||'ENTITY'}</div>`;
     h+=`<div class="tt-name">${n.label}</div><div class="tt-meta">`;
-    if (n.videoCount) h+=`${n.videoCount} ${n.kind==='domain'?'tutorials':'videos'}<br>`;
-    if (n.domainWeights) { const dw=Object.entries(n.domainWeights); h+=dw.map(([d,w])=>`${d}: ${round(w*100)}%`).join(', ')+'<br>'; }
-    h+='</div>'; tt.innerHTML=h;
+    if (n.videoCount) h+=`${n.videoCount} doc${n.videoCount!==1?'s':''}<br>`;
+    if (n.domainWeights) {
+      const dw=Object.entries(n.domainWeights);
+      h+=dw.map(([d,w])=>`${d.split('/').pop()}: ${round(w*100)}%`).join(', ')+'<br>';
+    }
+    h+='</div>';
+    // Add snippets placeholder
+    if (n.kind==='entity' && n._snippets) {
+      h+='<div class="tt-snippets">';
+      for (const s of n._snippets.slice(0,3)) {
+        h+=`<div class="tt-snippet">${s}</div>`;
+      }
+      h+='</div>';
+    } else if (n.kind==='entity' && !n._snippetsLoading && !n._snippets) {
+      h+='<div class="tt-snippets"><div class="tt-snippet" style="opacity:0.4">loading context...</div></div>';
+      loadEntitySnippets(n);
+    }
+    tt.innerHTML=h;
   } else { tt.style.display='none'; }
 });
 canvas.addEventListener('mouseup', e => {
