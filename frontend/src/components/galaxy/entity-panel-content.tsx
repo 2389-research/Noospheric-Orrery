@@ -159,15 +159,15 @@ export function EntityPanelContent({
     if (!data.id) return;
     (async () => {
       try {
-        const entity = await api.getEntity(data.id);
+        const entity = await api.getEntity(data.id) as { merge_history?: string[]; sources: { document_id: string }[] };
         setMergeHistory(entity.merge_history ?? []);
         // Build source doc list with mention counts
         const docCounts: Record<string, number> = {};
         for (const s of entity.sources) {
           docCounts[s.document_id] = (docCounts[s.document_id] || 0) + 1;
         }
-        const docs = await api.getDocuments();
-        const docMap = Object.fromEntries(docs.map((d: { id: string; title: string }) => [d.id, d.title]));
+        const docs = await api.getDocuments() as { id: string; title: string }[];
+        const docMap = Object.fromEntries(docs.map((d) => [d.id, d.title]));
         setSourceDocs(
           Object.entries(docCounts)
             .map(([id, count]) => ({ id, title: docMap[id] || id.slice(0, 8), mentions: count }))
