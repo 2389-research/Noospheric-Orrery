@@ -24,25 +24,30 @@ DEFAULT_HUE = 220
 def _domain_color(path: str) -> str:
     """Generate a unique color for a domain path.
 
-    Same top-level region shares a hue family, but each path segment
-    shifts the hue, saturation, and lightness so siblings are visually
-    distinct while still feeling related.
+    The second-level segment (the actual branching point) gets spread
+    across the full color wheel using golden angle spacing. Deeper
+    segments shift the hue slightly from their parent.
     """
     parts = path.split("/")
-    base_hue = REGION_BASE_HUE.get(parts[0], DEFAULT_HUE)
 
-    # Each deeper segment shifts the hue slightly
-    hue = base_hue
-    for i, part in enumerate(parts[1:], 1):
-        # Hash the segment name for a deterministic offset
-        h = sum(ord(c) * (i + 1) for c in part)
-        hue = (hue + (h % 40) - 20) % 360  # drift ±20 degrees per level
+    if len(parts) <= 1:
+        base_hue = REGION_BASE_HUE.get(parts[0], DEFAULT_HUE)
+        return _hsl_to_hex(base_hue, 70, 50)
 
-    # Vary saturation and lightness by depth
-    saturation = max(55, 80 - len(parts) * 5)  # deeper = slightly less saturated
-    lightness = min(65, 45 + len(parts) * 4)   # deeper = slightly lighter
+    # Use golden angle (137.5°) to spread second-level domains across the spectrum
+    # This gives maximum visual separation regardless of how many there are
+    h = sum(ord(c) for c in parts[1])
+    hue = (h * 137.508) % 360
 
-    # Convert HSL to hex
+    # Deeper levels shift hue slightly from parent
+    for i, part in enumerate(parts[2:], 2):
+        segment_hash = sum(ord(c) * (i + 1) for c in part)
+        hue = (hue + (segment_hash % 30) - 15) % 360
+
+    # Depth affects saturation and lightness
+    saturation = max(50, 75 - len(parts) * 3)
+    lightness = min(60, 48 + len(parts) * 3)
+
     return _hsl_to_hex(hue, saturation, lightness)
 
 
