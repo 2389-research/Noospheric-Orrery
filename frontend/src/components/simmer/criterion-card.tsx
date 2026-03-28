@@ -68,20 +68,20 @@ export function CriterionCard({ detail, colorIndex, nextIteration }: CriterionCa
         <div className="px-3 pb-3 pt-1 space-y-3 border-t border-border/10">
           {detail.evidence && (
             <div>
-              <div className="text-[9px] tracking-[2px] text-muted-foreground/40 uppercase mb-1">
+              <div className="text-[9px] tracking-[2px] text-muted-foreground/60 uppercase mb-1">
                 Evidence
               </div>
-              <p className="text-[11px] text-muted-foreground/70 leading-relaxed">
+              <p className="text-xs text-foreground/70 leading-relaxed">
                 {detail.evidence}
               </p>
             </div>
           )}
           {detail.improve && (
             <div>
-              <div className="text-[9px] tracking-[2px] text-muted-foreground/40 uppercase mb-1">
+              <div className="text-[9px] tracking-[2px] text-muted-foreground/60 uppercase mb-1">
                 What Would Make It Better
               </div>
-              <p className="text-[11px] text-muted-foreground/70 leading-relaxed">
+              <p className="text-xs text-foreground/70 leading-relaxed">
                 {detail.improve}
               </p>
             </div>
