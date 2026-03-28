@@ -40,7 +40,7 @@ def list_entities(
             conditions.append("e.type = ?")
             params.append(type)
         if domain:
-            query += " JOIN document_domains dd ON es.document_id = dd.document_id AND dd.domain_path = ?"
+            query += " JOIN document_domains dd ON es.document_id = dd.document_id AND dd.domain_path LIKE ? || '%'"
             params.append(domain)
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
@@ -60,7 +60,7 @@ def list_entities(
         params = []
         conditions = []
         if domain:
-            query += " JOIN entity_sources es2 ON e.id = es2.entity_id JOIN document_domains dd ON es2.document_id = dd.document_id AND dd.domain_path = ?"
+            query += " JOIN entity_sources es2 ON e.id = es2.entity_id JOIN document_domains dd ON es2.document_id = dd.document_id AND dd.domain_path LIKE ? || '%'"
             params.append(domain)
         if type:
             conditions.append("e.type = ?")
@@ -72,6 +72,28 @@ def list_entities(
         rows = conn.execute(query, params).fetchall()
         conn.close()
         return [{"id": r[0], "canonical_name": r[1], "type": r[2], "source_count": r[3]} for r in rows]
+
+
+@router.get("/entities/{entity_id}/cooccurrences")
+def get_cooccurrences(entity_id: str, limit: int = 10):
+    """Get entities that co-occur with this entity (share document chunks)."""
+    settings = get_settings()
+    conn = get_connection(settings.db_path)
+    rows = conn.execute("""
+        SELECT e.id, e.canonical_name, e.type, r.weight
+        FROM relationships r
+        JOIN entities e ON (
+            CASE WHEN r.from_entity = ? THEN r.to_entity ELSE r.from_entity END
+        ) = e.id
+        WHERE (r.from_entity = ? OR r.to_entity = ?) AND r.type = 'co_occurs'
+        ORDER BY r.weight DESC
+        LIMIT ?
+    """, (entity_id, entity_id, entity_id, limit)).fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "canonical_name": r[1], "type": r[2], "weight": r[3]}
+        for r in rows
+    ]
 
 
 @router.get("/entities/{entity_id}")

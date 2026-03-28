@@ -475,37 +475,45 @@ canvas.addEventListener('mousemove', e => {
     tt.style.display='block';
     tt.style.left=min(e.clientX+14,W-320)+'px';
     tt.style.top=min(e.clientY-8,H-200)+'px';
-    let h=`<div class="tt-type">${n.kind==='domain'?'DOMAIN':n.entityType||'ENTITY'}</div>`;
-    h+=`<div class="tt-name">${n.label}</div><div class="tt-meta">`;
-    if (n.videoCount) h+=`${n.videoCount} doc${n.videoCount!==1?'s':''}<br>`;
-    if (n.domainWeights) {
-      const dw=Object.entries(n.domainWeights);
-      h+=dw.map(([d,w])=>`${d.split('/').pop()}: ${round(w*100)}%`).join(', ')+'<br>';
+    let h=`<div class="tt-name">${n.label}</div><div class="tt-meta">`;
+    if (n.kind==='entity') {
+      h+=`${n.entityType||'Entity'} · ${n.videoCount||0} doc${(n.videoCount||0)!==1?'s':''}`;
+    } else if (n.kind==='domain') {
+      h+=`${n.videoCount||0} docs`;
     }
     h+='</div>';
-    // Add snippets placeholder
-    if (n.kind==='entity' && n._snippets) {
-      h+='<div class="tt-snippets">';
-      for (const s of n._snippets.slice(0,3)) {
-        h+=`<div class="tt-snippet">${s}</div>`;
-      }
-      h+='</div>';
-    } else if (n.kind==='entity' && !n._snippetsLoading && !n._snippets) {
-      h+='<div class="tt-snippets"><div class="tt-snippet" style="opacity:0.4">loading context...</div></div>';
-      loadEntitySnippets(n);
-    }
     tt.innerHTML=h;
   } else { tt.style.display='none'; }
 });
 canvas.addEventListener('mouseup', e => {
   if (!didDrag) {
-    // Click — toggle pin
     const w = screenToWorld(e.clientX, e.clientY);
     const n = hitTest(w.x, w.y);
     if (n) {
       pinnedId = (pinnedId === n.id) ? null : n.id;
     } else {
       pinnedId = null;
+    }
+    // Notify parent page
+    const pinnedNode = pinnedId ? nodes.get(pinnedId) : null;
+    if (pinnedNode) {
+      const payload = { type: 'node_selected', nodeType: pinnedNode.kind };
+      if (pinnedNode.kind === 'entity') {
+        payload.data = {
+          id: pinnedNode.entityId, name: pinnedNode.label,
+          entityType: pinnedNode.entityType, source_count: pinnedNode.videoCount,
+          domain_weights: pinnedNode.domainWeights,
+          snippets: pinnedNode._snippets || null,
+        };
+      } else if (pinnedNode.kind === 'domain') {
+        payload.data = {
+          path: pinnedNode.fullPath, name: pinnedNode.label,
+          document_count: pinnedNode.videoCount,
+        };
+      }
+      window.parent.postMessage(payload, '*');
+    } else {
+      window.parent.postMessage({ type: 'node_cleared' }, '*');
     }
   }
   dragging = false;
@@ -846,7 +854,7 @@ fetch((window.API_URL || 'http://localhost:8100') + '/graph').then(r=>r.json()).
 
     nodes.set('ent:'+ent.name, {
       id:'ent:'+ent.name, kind:'entity', label:ent.name,
-      entityType:ent.type, color,
+      entityType:ent.type, entityId:ent.entityId, color,
       radius, stability,
       x:sx+rnd(-40,40), y:sy+rnd(-40,40),
       vx:0, vy:0, birthScale:0.01, phase:random()*TAU,
