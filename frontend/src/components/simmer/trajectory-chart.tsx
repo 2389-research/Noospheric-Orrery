@@ -62,7 +62,7 @@ export function TrajectoryChart({ iterations, selectedIndex }: TrajectoryChartPr
     data: compositeData,
     borderColor: COMPOSITE_COLOR,
     backgroundColor: "transparent",
-    borderWidth: 2,
+    borderWidth: 3,
     borderDash: [] as number[],
     pointRadius: iterations.map((_, idx) => (idx === selectedIndex ? 6 : 3)),
     pointBackgroundColor: iterations.map((_, idx) =>
@@ -114,7 +114,7 @@ export function TrajectoryChart({ iterations, selectedIndex }: TrajectoryChartPr
         ticks: { color: "rgba(255,255,255,0.3)", font: { size: 9 } },
       },
       y: {
-        min: 0,
+        min: 3,
         max: 10,
         grid: { color: "rgba(255,255,255,0.05)" },
         ticks: {

@@ -138,7 +138,7 @@ export function IterationList({
               <div className="text-base font-semibold text-foreground/90 leading-none mb-1">
                 {iter.composite.toFixed(1)}
               </div>
-              {iter.key_change && (
+              {iter.key_change && !iter.key_change.match(/^iteration-\d+$/) && (
                 <div className="text-[9px] text-muted-foreground/50 truncate leading-tight">
                   {iter.key_change}
                 </div>

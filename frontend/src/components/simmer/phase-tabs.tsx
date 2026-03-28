@@ -19,7 +19,9 @@ interface PhaseTabsProps {
 }
 
 export function PhaseTabs({ job, activePhase, onPhaseChange }: PhaseTabsProps) {
-  const phases = Object.keys(job.phases);
+  // Golden set runs first, extraction spec second
+  const PHASE_ORDER = ["golden_set", "extraction_spec"];
+  const phases = PHASE_ORDER.filter((p) => p in job.phases || PHASE_ORDER.includes(p));
 
   return (
     <div className="flex gap-0 border-b border-border/30">
