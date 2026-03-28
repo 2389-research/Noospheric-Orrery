@@ -204,14 +204,17 @@ function drawNebula(n) {
 }
 
 // ── STAR (ENTITY) RENDERER ─────────────────────────────────────
-function drawStar(n, isDim) {
+function drawStar(n, state) {
+  // state: 'normal' | 'connected' | 'dim'
   if (n.birthScale < 1) n.birthScale = min(1, n.birthScale + 0.02);
   const bR = n.radius * n.birthScale;
   const pulse = 0.5+0.5*sin(tick*0.015+n.phase);
   const [r,g,b] = hexRGB(n.color);
   const isHov = n.id === hoveredId;
+  const isDim = state === 'dim';
+  const isConnected = state === 'connected';
 
-  ctx.globalAlpha = isDim ? 0.08 : 1;
+  ctx.globalAlpha = isDim ? 0.15 : isConnected ? 0.85 : 1;
 
   // Aura
   const ag = ctx.createRadialGradient(n.x,n.y,bR*0.2,n.x,n.y,bR*(3+pulse));
@@ -226,21 +229,25 @@ function drawStar(n, isDim) {
   ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(n.x,n.y,bR,0,TAU); ctx.fill();
   ctx.shadowBlur = 0;
 
-  // Label (only when zoomed in enough or hovered)
-  if (!isDim && (isHov || cam.zoom > 0.7)) {
-    if (isHov) {
-      // Hovered: bright, larger, with subtle glow
-      ctx.shadowBlur = 6;
-      ctx.shadowColor = n.color;
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 10px Courier New'; ctx.textAlign = 'center';
-      ctx.fillText(n.label, n.x, n.y + bR + 12);
-      ctx.shadowBlur = 0;
-    } else {
-      ctx.fillStyle = rgba(r,g,b,0.5);
-      ctx.font = '7px Courier New'; ctx.textAlign = 'center';
-      ctx.fillText(n.label, n.x, n.y + bR + 9);
-    }
+  // Label
+  if (isHov) {
+    // Hovered: bright white, larger, with glow
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = n.color;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 10px Courier New'; ctx.textAlign = 'center';
+    ctx.fillText(n.label, n.x, n.y + bR + 12);
+    ctx.shadowBlur = 0;
+  } else if (isConnected) {
+    // Connected: visible label, entity color, slightly smaller
+    ctx.fillStyle = rgba(r,g,b,0.8);
+    ctx.font = '8px Courier New'; ctx.textAlign = 'center';
+    ctx.fillText(n.label, n.x, n.y + bR + 10);
+  } else if (!isDim && cam.zoom > 0.7) {
+    // Default at zoom: faint label
+    ctx.fillStyle = rgba(r,g,b,0.5);
+    ctx.font = '7px Courier New'; ctx.textAlign = 'center';
+    ctx.fillText(n.label, n.x, n.y + bR + 9);
   }
   ctx.globalAlpha = 1;
 }
@@ -463,10 +470,18 @@ function frame() {
   doms.forEach(d => drawNebula(d));
 
   // Draw entities (stars) — zoom-dependent
+  // Three states: 'normal' (no hover), 'connected' (in neighborhood), 'dim' (not connected)
   if (showEntities) {
     const hi = hoveredId ? getNeighborhood(hoveredId) : null;
     const ents = [...nodes.values()].filter(n=>n.kind==='entity');
-    ents.forEach(e => drawStar(e, hi && !hi.has(e.id)));
+    // Draw dim entities first (behind), then connected, then hovered (on top)
+    if (hi) {
+      ents.filter(e => !hi.has(e.id)).forEach(e => drawStar(e, 'dim'));
+      ents.filter(e => hi.has(e.id) && e.id !== hoveredId).forEach(e => drawStar(e, 'connected'));
+      ents.filter(e => e.id === hoveredId).forEach(e => drawStar(e, 'normal'));
+    } else {
+      ents.forEach(e => drawStar(e, 'normal'));
+    }
   }
 
   ctx.restore();
