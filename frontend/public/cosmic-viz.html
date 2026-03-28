@@ -245,7 +245,7 @@ function drawStar(n, state) {
   ctx.fillStyle = ag; ctx.beginPath(); ctx.arc(n.x,n.y,bR*(3+pulse),0,TAU); ctx.fill();
 
   // Core
-  ctx.shadowBlur = isHov ? 10 : isConnected ? 6 : 4;
+  ctx.shadowBlur = isHov ? 6 : isConnected ? 4 : 3;
   ctx.shadowColor = n.color;
   const cg = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,bR);
   cg.addColorStop(0,lighten(n.color,0.6)); cg.addColorStop(0.5,n.color); cg.addColorStop(1,darken(n.color,0.3));
@@ -254,13 +254,10 @@ function drawStar(n, state) {
 
   // Label
   if (isHov) {
-    // Hovered: bright white, larger, with glow
-    ctx.shadowBlur = 6;
-    ctx.shadowColor = n.color;
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 10px Courier New'; ctx.textAlign = 'center';
-    ctx.fillText(n.label, n.x, n.y + bR + 12);
-    ctx.shadowBlur = 0;
+    // Hovered: visible but not overpowering
+    ctx.fillStyle = rgba(r,g,b,0.9);
+    ctx.font = 'bold 9px Courier New'; ctx.textAlign = 'center';
+    ctx.fillText(n.label, n.x, n.y + bR + 11);
   } else if (isConnected) {
     // Connected: visible label, entity color, slightly smaller
     ctx.fillStyle = rgba(r,g,b,0.8);
