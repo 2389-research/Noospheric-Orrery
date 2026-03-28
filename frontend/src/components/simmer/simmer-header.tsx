@@ -4,7 +4,10 @@ import Link from "next/link";
 import { SimmerJobDetail } from "@/lib/types";
 
 function timeSince(dateStr: string): string {
-  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+  // Ensure UTC parsing — timestamps from SQLite lack timezone suffix
+  const utcStr = dateStr.includes("Z") || dateStr.includes("+") ? dateStr : dateStr + "Z";
+  const seconds = Math.floor((Date.now() - new Date(utcStr).getTime()) / 1000);
+  if (seconds < 0) return "just now";
   if (seconds < 60) return `${seconds}s ago`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
