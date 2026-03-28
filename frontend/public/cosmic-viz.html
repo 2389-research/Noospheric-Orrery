@@ -273,28 +273,28 @@ function drawNebula(n, highlighted) {
   }
 }
 
-// State 1: Unformed — very faint wispy cloud, no core, reads as "undiscovered"
+// State 1: Unformed — visible cloud but no core, reads as "undiscovered"
 function drawNebulaUnformed(n, bR, r, g, b, isHov) {
-  const brightness = isHov ? 1.5 : 1.0;
-  for (let i = 0; i < 3; i++) {
+  const brightness = isHov ? 1.8 : 1.0;
+  for (let i = 0; i < 4; i++) {
     const angle = n._rot*(1-i*0.15) + i*1.4;
-    const lr = bR*(1.6 - i*0.12);
+    const lr = bR*(2.0 - i*0.15);
     const ox = cos(angle)*bR*0.12, oy = sin(angle)*bR*0.08;
-    const a = (0.015 - i*0.003) * clamp(n.birthScale,0,1) * brightness;
+    const a = (0.08 - i*0.012) * clamp(n.birthScale,0,1) * brightness;
     const ng = ctx.createRadialGradient(n.x+ox,n.y+oy,0,n.x+ox,n.y+oy,lr);
-    ng.addColorStop(0,rgba(r,g,b,a*1.5)); ng.addColorStop(0.5,rgba(r,g,b,a*0.5)); ng.addColorStop(1,'transparent');
+    ng.addColorStop(0,rgba(r,g,b,a*2)); ng.addColorStop(0.4,rgba(r,g,b,a)); ng.addColorStop(1,'transparent');
     ctx.fillStyle = ng; ctx.fillRect(n.x+ox-lr,n.y+oy-lr,lr*2,lr*2);
   }
 }
 
 // State 2: Simmering — amber protostar with jets
 function drawNebulaSimmering(n, bR, r, g, b) {
-  // Cloud layers — domain color
+  // Cloud layers — domain color, visible
   for (let i = 0; i < 4; i++) {
     const angle = n._rot*(1-i*0.15) + i*1.4;
-    const lr = bR*(1.6 - i*0.10);
+    const lr = bR*(1.8 - i*0.10);
     const ox = cos(angle)*bR*0.10, oy = sin(angle)*bR*0.08;
-    const a = (0.035 - i*0.003) * clamp(n.birthScale,0,1);
+    const a = (0.09 - i*0.01) * clamp(n.birthScale,0,1);
     const ng = ctx.createRadialGradient(n.x+ox,n.y+oy,0,n.x+ox,n.y+oy,lr);
     ng.addColorStop(0,rgba(r,g,b,a*2)); ng.addColorStop(0.5,rgba(r,g,b,a)); ng.addColorStop(1,'transparent');
     ctx.fillStyle = ng; ctx.fillRect(n.x+ox-lr,n.y+oy-lr,lr*2,lr*2);
@@ -344,12 +344,12 @@ function drawNebulaFormed(n, bR, r, g, b, maturity, isHov) {
   const coreR = bR*(0.12 + maturity*0.08);
   const breathe = 0.94 + 0.06*sin(tick*0.001);
 
-  // Settled cloud with inner clearing — brighter than unformed
+  // Settled cloud with inner clearing — clearly brighter than unformed
   for (let i = 0; i < 4; i++) {
     const angle = n._rot*(1-i*0.15) + i*1.4;
-    const lr = bR*(1.5 - i*0.08);
+    const lr = bR*(2.0 - i*0.12);
     const ox = cos(angle)*bR*0.07, oy = sin(angle)*bR*0.06;
-    const baseA = (0.05 + maturity*0.03 - i*0.005) * clamp(n.birthScale,0,1);
+    const baseA = (0.12 + maturity*0.05 - i*0.01) * clamp(n.birthScale,0,1);
     const ng = ctx.createRadialGradient(n.x+ox,n.y+oy,bR*0.2, n.x+ox,n.y+oy,lr);
     ng.addColorStop(0,'transparent');
     ng.addColorStop(0.12,rgba(r,g,b,baseA*1.8));
@@ -359,16 +359,16 @@ function drawNebulaFormed(n, bR, r, g, b, maturity, isHov) {
   }
 
   // Wide halo — strong glow around star
-  const wh = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,bR*0.7);
-  wh.addColorStop(0,rgba(r,g,b,0.18*bright));
-  wh.addColorStop(0.3,rgba(r,g,b,0.08*bright));
+  const wh = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,bR*0.8);
+  wh.addColorStop(0,rgba(r,g,b,0.30*bright));
+  wh.addColorStop(0.3,rgba(r,g,b,0.15*bright));
   wh.addColorStop(1,'transparent');
   ctx.fillStyle = wh; ctx.beginPath(); ctx.arc(n.x,n.y,bR*0.7,0,TAU); ctx.fill();
 
   // Inner halo — bright
   const ih = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,coreR*6);
-  ih.addColorStop(0,rgba(r,g,b,0.35*bright*breathe));
-  ih.addColorStop(0.3,rgba(r,g,b,0.18*bright));
+  ih.addColorStop(0,rgba(r,g,b,0.50*bright*breathe));
+  ih.addColorStop(0.3,rgba(r,g,b,0.25*bright));
   ih.addColorStop(1,'transparent');
   ctx.fillStyle = ih; ctx.beginPath(); ctx.arc(n.x,n.y,coreR*6,0,TAU); ctx.fill();
 
