@@ -491,6 +491,7 @@ canvas.addEventListener('mousemove', e => {
   }
   const w=screenToWorld(e.clientX,e.clientY);
   const n=hitTest(w.x,w.y);
+  if (n && n.kind === 'trade_route' && !nodes.has(n.id)) nodes.set(n.id, n);
   hoveredId=n?n.id:null; canvas.style.cursor=n?'pointer':'grab';
   const tt=document.getElementById('tooltip');
   if (n) {
@@ -514,6 +515,10 @@ canvas.addEventListener('mouseup', e => {
     const w = screenToWorld(e.clientX, e.clientY);
     const n = hitTest(w.x, w.y);
     if (n) {
+      // Store synthetic nodes (trade routes) so they're retrievable
+      if (n.kind === 'trade_route' && !nodes.has(n.id)) {
+        nodes.set(n.id, n);
+      }
       pinnedId = (pinnedId === n.id) ? null : n.id;
     } else {
       pinnedId = null;

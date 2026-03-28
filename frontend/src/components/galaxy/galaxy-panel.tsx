@@ -216,6 +216,7 @@ export function GalaxyPanel({ selectedNode, domainColors, onClose }: GalaxyPanel
             data={currentNode.data}
             domainColor={domainColors[currentNode.data.path]}
             onNavigateEntity={handleNavigateEntity}
+            onNavigateDomain={handleNavigateDomain}
           />
         )}
         {currentNode?.nodeType === "trade_route" && (
