@@ -227,10 +227,20 @@ function drawStar(n, isDim) {
   ctx.shadowBlur = 0;
 
   // Label (only when zoomed in enough or hovered)
-  if (!isDim && (cam.zoom > 0.7 || isHov)) {
-    ctx.fillStyle = rgba(r,g,b,0.5);
-    ctx.font = '7px Courier New'; ctx.textAlign = 'center';
-    ctx.fillText(n.label, n.x, n.y + bR + 9);
+  if (!isDim && (isHov || cam.zoom > 0.7)) {
+    if (isHov) {
+      // Hovered: bright, larger, with subtle glow
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = n.color;
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 10px Courier New'; ctx.textAlign = 'center';
+      ctx.fillText(n.label, n.x, n.y + bR + 12);
+      ctx.shadowBlur = 0;
+    } else {
+      ctx.fillStyle = rgba(r,g,b,0.5);
+      ctx.font = '7px Courier New'; ctx.textAlign = 'center';
+      ctx.fillText(n.label, n.x, n.y + bR + 9);
+    }
   }
   ctx.globalAlpha = 1;
 }
