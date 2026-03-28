@@ -27,15 +27,6 @@ function getHighlightStyles(
 ): React.CSSProperties {
   const colors = ENTITY_COLORS[entityType] ?? ENTITY_COLORS["Concept"];
 
-  if (state === "dim") {
-    return {
-      background: "transparent",
-      color: "inherit",
-      borderBottom: "1.5px solid transparent",
-      cursor: "pointer",
-    };
-  }
-
   const base: React.CSSProperties = {
     background: colors.bg,
     color: colors.color,
@@ -46,7 +37,22 @@ function getHighlightStyles(
   };
 
   if (state === "lit") {
-    return { ...base, filter: "brightness(1.15)" };
+    // Active entity: white text, brighter bg, stronger underline
+    return {
+      ...base,
+      color: "#ffffff",
+      background: colors.bg.replace("0.13)", "0.25)"),
+      borderBottom: `2px solid ${colors.color}`,
+      filter: "brightness(1.2)",
+    };
+  }
+
+  if (state === "dim") {
+    // Other entities while something is selected: keep tint, just soften
+    return {
+      ...base,
+      opacity: 0.5,
+    };
   }
 
   return base;
@@ -82,10 +88,11 @@ export function DocumentBody({
           background: styles.background ?? "",
           color: styles.color ?? "",
           borderBottom: styles.borderBottom ?? "",
-          filter: styles.filter ?? "",
+          filter: (styles as Record<string, string>).filter ?? "",
           cursor: styles.cursor ?? "",
           borderRadius: styles.borderRadius ?? "",
           padding: styles.padding ?? "",
+          opacity: (styles as Record<string, string>).opacity ?? "",
         });
       });
     },
@@ -143,10 +150,11 @@ export function DocumentBody({
                 background: styles.background,
                 color: styles.color,
                 borderBottom: styles.borderBottom,
-                filter: (styles as { filter?: string }).filter ?? undefined,
+                filter: (styles as Record<string, string>).filter ?? undefined,
                 cursor: styles.cursor,
                 borderRadius: styles.borderRadius,
                 padding: styles.padding,
+                opacity: (styles as Record<string, string>).opacity ?? undefined,
               }}
               onMouseEnter={(e) => {
                 onHoverEntity(seg.entity_id!);
