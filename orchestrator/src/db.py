@@ -115,6 +115,22 @@ CREATE TABLE IF NOT EXISTS normalization_review_queue (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS simmer_iterations (
+    id TEXT PRIMARY KEY,
+    job_id TEXT REFERENCES jobs(id),
+    phase TEXT,
+    iteration INTEGER,
+    scores TEXT,
+    composite REAL,
+    key_change TEXT,
+    asi TEXT,
+    judge_mode TEXT,
+    regressed BOOLEAN,
+    candidate_preview TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_simmer_iterations_job ON simmer_iterations(job_id);
+
 CREATE TABLE IF NOT EXISTS specs (
     id TEXT PRIMARY KEY,
     domain_path TEXT,
