@@ -34,15 +34,19 @@ def _domain_color(path: str) -> str:
         base_hue = REGION_BASE_HUE.get(parts[0], DEFAULT_HUE)
         return _hsl_to_hex(base_hue, 70, 50)
 
-    # Use golden angle (137.5°) to spread second-level domains across the spectrum
-    # This gives maximum visual separation regardless of how many there are
-    h = sum(ord(c) for c in parts[1])
+    # Hash the second-level path for the base hue, spread across full spectrum
+    key = "/".join(parts[:2])
+    h = 0
+    for c in key:
+        h = h * 31 + ord(c)
     hue = (h * 137.508) % 360
 
-    # Deeper levels shift hue slightly from parent
+    # Deeper levels shift hue ±25 from parent
     for i, part in enumerate(parts[2:], 2):
-        segment_hash = sum(ord(c) * (i + 1) for c in part)
-        hue = (hue + (segment_hash % 30) - 15) % 360
+        sh = 0
+        for c in part:
+            sh = sh * 31 + ord(c)
+        hue = (hue + (sh % 50) - 25) % 360
 
     # Depth affects saturation and lightness
     saturation = max(50, 75 - len(parts) * 3)
