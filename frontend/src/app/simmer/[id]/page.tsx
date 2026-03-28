@@ -17,6 +17,7 @@ export default function SimmerPage() {
   const [error, setError] = useState<string | null>(null);
   const [activePhase, setActivePhase] = useState<string>("");
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
+  const [visibleCount, setVisibleCount] = useState<number | null>(null);
 
   const fetchJob = useCallback(async () => {
     try {
@@ -105,6 +106,7 @@ export default function SimmerPage() {
             onSelect={setSelectedIndex}
             isRunning={job.status === "running"}
             isCompleted={job.status === "completed"}
+            onVisibleCountChange={setVisibleCount}
           />
         </div>
 
@@ -113,7 +115,7 @@ export default function SimmerPage() {
           {selectedIteration ? (
             <IterationDetail
               iteration={selectedIteration}
-              allIterations={iterations}
+              allIterations={visibleCount !== null ? iterations.slice(0, visibleCount) : iterations}
               selectedIndex={selectedIndex}
               previousIteration={previousIteration}
               nextIteration={nextIteration}
