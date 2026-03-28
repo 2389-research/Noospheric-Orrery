@@ -8,17 +8,67 @@ from ..db import get_connection
 
 router = APIRouter()
 
-# Color palette for top-level domain regions
-REGION_COLORS = {
-    "business": "#f97316",
-    "technology": "#14b8a6",
-    "science": "#81d4fa",
-    "creative": "#e040fb",
-    "education": "#ffd54f",
-    "health": "#4caf50",
-    "social": "#78909c",
+# Base hues for top-level regions (0-360)
+REGION_BASE_HUE = {
+    "business": 25,      # orange
+    "technology": 170,   # teal
+    "science": 200,      # blue
+    "creative": 290,     # purple
+    "education": 45,     # yellow
+    "health": 130,       # green
+    "social": 210,       # slate blue
 }
-DEFAULT_COLOR = "#94a3b8"
+DEFAULT_HUE = 220
+
+
+def _domain_color(path: str) -> str:
+    """Generate a unique color for a domain path.
+
+    Same top-level region shares a hue family, but each path segment
+    shifts the hue, saturation, and lightness so siblings are visually
+    distinct while still feeling related.
+    """
+    parts = path.split("/")
+    base_hue = REGION_BASE_HUE.get(parts[0], DEFAULT_HUE)
+
+    # Each deeper segment shifts the hue slightly
+    hue = base_hue
+    for i, part in enumerate(parts[1:], 1):
+        # Hash the segment name for a deterministic offset
+        h = sum(ord(c) * (i + 1) for c in part)
+        hue = (hue + (h % 40) - 20) % 360  # drift ±20 degrees per level
+
+    # Vary saturation and lightness by depth
+    saturation = max(55, 80 - len(parts) * 5)  # deeper = slightly less saturated
+    lightness = min(65, 45 + len(parts) * 4)   # deeper = slightly lighter
+
+    # Convert HSL to hex
+    return _hsl_to_hex(hue, saturation, lightness)
+
+
+def _hsl_to_hex(h: float, s: float, l: float) -> str:
+    """Convert HSL (h: 0-360, s: 0-100, l: 0-100) to hex color."""
+    s /= 100
+    l /= 100
+    c = (1 - abs(2 * l - 1)) * s
+    x = c * (1 - abs((h / 60) % 2 - 1))
+    m = l - c / 2
+
+    if h < 60:
+        r, g, b = c, x, 0
+    elif h < 120:
+        r, g, b = x, c, 0
+    elif h < 180:
+        r, g, b = 0, c, x
+    elif h < 240:
+        r, g, b = 0, x, c
+    elif h < 300:
+        r, g, b = x, 0, c
+    else:
+        r, g, b = c, 0, x
+
+    r, g, b = int((r + m) * 255), int((g + m) * 255), int((b + m) * 255)
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def _layout_domains(domains: list[dict]) -> dict[str, dict]:
@@ -97,12 +147,16 @@ def get_graph_data():
     # Domain doc counts
     domain_doc_counts = {d["path"]: d["doc_count"] for d in domains}
 
-    # Region colors — extract top-level region from each domain path
-    regions_seen = set()
+    # Region colors — each domain gets a unique color from its path hash
+    # The viz uses region_colors keyed by top-level region, but we also
+    # provide per-domain colors so entities can blend
+    region_colors = {}
     for d in domains:
         region = d["path"].split("/")[0]
-        regions_seen.add(region)
-    region_colors = {r: REGION_COLORS.get(r, DEFAULT_COLOR) for r in regions_seen}
+        if region not in region_colors:
+            region_colors[region] = _domain_color(region)
+        # Also add per-domain colors (viz will use these if available)
+        region_colors[d["path"]] = _domain_color(d["path"])
 
     # Subdomains (3+ levels deep)
     subdomains = [d["path"] for d in domains if d["path"].count("/") >= 2]
