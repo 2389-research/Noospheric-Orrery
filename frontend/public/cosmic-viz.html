@@ -357,18 +357,23 @@ function getNeighborhood(id) {
   const s = new Set([id]);
   const node = nodes.get(id);
 
-  // Edge-based neighbors
-  edges.forEach(e => { if(e.source===id) s.add(e.target); if(e.target===id) s.add(e.source); });
-
-  // Domain-entity relationships via domainWeights
-  if (node && node.kind === 'entity' && node.domainWeights) {
-    // Entity hovered → include its domains
-    for (const domName of Object.keys(node.domainWeights)) {
-      const domNode = [...nodes.values()].find(n => n.kind === 'domain' && n.fullPath === domName);
-      if (domNode) s.add(domNode.id);
+  if (node && node.kind === 'entity') {
+    // Entity hovered → its domains only (one hop)
+    if (node.domainWeights) {
+      for (const domName of Object.keys(node.domainWeights)) {
+        const domNode = [...nodes.values()].find(n => n.kind === 'domain' && n.fullPath === domName);
+        if (domNode) s.add(domNode.id);
+      }
     }
+    // Also co-occurrence edges to other entities
+    edges.forEach(e => {
+      if (e.kind !== 'entity-domain') {
+        if (e.source === id) s.add(e.target);
+        if (e.target === id) s.add(e.source);
+      }
+    });
   } else if (node && node.kind === 'domain') {
-    // Domain hovered → include entities that belong to it
+    // Domain hovered → its entities only (one hop, no cascading to other domains)
     for (const [nid, n] of nodes) {
       if (n.kind === 'entity' && n.domainWeights && n.domainWeights[node.fullPath]) {
         s.add(nid);
