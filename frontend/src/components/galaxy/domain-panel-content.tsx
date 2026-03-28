@@ -53,16 +53,24 @@ export interface DomainPanelData {
   document_count: number;
 }
 
+interface ConnectedDomain {
+  path: string;
+  name: string;
+  weight: number;
+}
+
 interface DomainPanelContentProps {
   data: DomainPanelData;
   domainColor?: string;
   onNavigateEntity: (entity: { id: string; name: string; type: string; source_count: number }) => void;
+  onNavigateDomain?: (path: string, name: string) => void;
 }
 
-export function DomainPanelContent({ data, domainColor, onNavigateEntity }: DomainPanelContentProps) {
+export function DomainPanelContent({ data, domainColor, onNavigateEntity, onNavigateDomain }: DomainPanelContentProps) {
   const [topEntities, setTopEntities] = useState<TopEntity[]>([]);
   const [specStatus, setSpecStatus] = useState<SpecStatus>({ exists: false, version: null, simmeredAt: null, isRunning: false });
   const [entityCount, setEntityCount] = useState<number | null>(null);
+  const [connectedDomains, setConnectedDomains] = useState<ConnectedDomain[]>([]);
   const [loadingEntities, setLoadingEntities] = useState(true);
   const [loadingSpec, setLoadingSpec] = useState(true);
   const [entitiesError, setEntitiesError] = useState(false);
@@ -121,6 +129,31 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity }: Doma
         // spec status is informational — silent fail
       } finally {
         setLoadingSpec(false);
+      }
+    })();
+  }, [data.path]);
+
+  // Fetch connected domains from trade routes
+  useEffect(() => {
+    (async () => {
+      try {
+        const graphResp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8100"}/graph`);
+        const graph = await graphResp.json();
+        const routes = (graph.trade_routes || []).filter(
+          (r: { source: string; target: string }) => r.source === data.path || r.target === data.path
+        );
+        setConnectedDomains(
+          routes
+            .map((r: { source: string; target: string; weight: number }) => ({
+              path: r.source === data.path ? r.target : r.source,
+              name: (r.source === data.path ? r.target : r.source).split("/").pop() || "",
+              weight: r.weight,
+            }))
+            .sort((a: ConnectedDomain, b: ConnectedDomain) => b.weight - a.weight)
+            .slice(0, 6)
+        );
+      } catch {
+        // trade routes are optional
       }
     })();
   }, [data.path]);
@@ -297,6 +330,33 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity }: Doma
           </div>
         )}
       </div>
+
+      {/* Connected Domains */}
+      {connectedDomains.length > 0 && (
+        <div style={sectionStyle}>
+          <span style={sectionLabel}>Connected Domains · {connectedDomains.length}</span>
+          {connectedDomains.map((cd) => (
+            <button
+              key={cd.path}
+              onClick={() => onNavigateDomain?.(cd.path, cd.name)}
+              style={{
+                display: "flex", alignItems: "center", gap: 8, width: "100%",
+                background: "none", border: "none", padding: "5px 0", cursor: "pointer",
+                textAlign: "left", borderBottom: "1px solid rgba(100,180,255,0.05)",
+                fontFamily: "'Courier New', monospace",
+              }}
+            >
+              <span style={{ fontSize: 11, color: "rgba(200,215,235,0.85)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {cd.name}
+              </span>
+              <span style={{ fontSize: 9, color: "rgba(140,200,255,0.6)", flexShrink: 0 }}>
+                weight {cd.weight}
+              </span>
+              <span style={{ fontSize: 10, color: "rgba(140,200,255,0.6)" }}>→</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Footer */}
       <div style={{ padding: "12px 16px", display: "flex", gap: 14, alignItems: "center" }}>
