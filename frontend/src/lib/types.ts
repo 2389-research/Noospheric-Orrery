@@ -77,3 +77,15 @@ export interface SimmerJobDetail {
   phases: Record<string, SimmerIteration[]>;
   total_iterations: number;
 }
+
+export interface BatchResults {
+  entities_found: number;
+  entities_new: number;
+  entities_matched: number;
+  docs_processed: number;
+  spec_version: string;
+}
+
+export interface EntityWithNew extends EntitySummary {
+  is_new?: boolean;
+}

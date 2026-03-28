@@ -15,6 +15,12 @@ const jobStatusStyle: Record<string, string> = {
   failed: "border-red-500/40 text-red-400",
 };
 
+function getJobLink(j: JobInfo): string | null {
+  if (j.type.startsWith("simmer")) return `/simmer/${j.id}`;
+  if (j.type === "extract_batch") return `/extraction/${j.id}`;
+  return null;
+}
+
 function ActiveJobs({ jobs }: { jobs: JobInfo[] }) {
   const active = jobs.filter((j) => j.status === "running" || j.status === "queued");
   const recent = jobs.filter((j) => j.status === "completed" || j.status === "failed").slice(0, 3);
@@ -24,35 +30,39 @@ function ActiveJobs({ jobs }: { jobs: JobInfo[] }) {
   return (
     <div className="space-y-1.5">
       {active.map((j) => {
-        const isSimmer = j.type.startsWith("simmer");
+        const link = getJobLink(j);
+        const isExtract = j.type === "extract_batch";
         const inner = (
-          <div key={j.id} className={`flex items-center gap-3 border border-cyan-500/20 rounded px-3 py-2 bg-cyan-500/5 ${isSimmer ? "cursor-pointer hover:bg-cyan-500/10 transition-colors" : ""}`}>
+          <div key={j.id} className={`flex items-center gap-3 border border-cyan-500/20 rounded px-3 py-2 bg-cyan-500/5 ${link ? "cursor-pointer hover:bg-cyan-500/10 transition-colors" : ""}`}>
             <Badge variant="outline" className={`text-[9px] ${jobStatusStyle[j.status]}`}>{j.status}</Badge>
             <span className="text-xs text-foreground/90">{j.type}</span>
             <span className="text-[10px] text-muted-foreground/85">{j.target}</span>
-            {isSimmer && <span className="text-[9px] text-purple-400/60 ml-1">↗ view</span>}
+            {j.type.startsWith("simmer") && <span className="text-[9px] text-purple-400/60 ml-1">↗ view</span>}
+            {isExtract && <span className="text-[9px] text-emerald-400/60 ml-1">↗ view extraction</span>}
             <span className="text-[10px] text-muted-foreground/85 ml-auto">{timeSince(j.started_at || j.created_at)}</span>
           </div>
         );
-        return isSimmer ? (
-          <Link key={j.id} href={`/simmer/${j.id}`}>{inner}</Link>
+        return link ? (
+          <Link key={j.id} href={link}>{inner}</Link>
         ) : (
           <div key={j.id}>{inner}</div>
         );
       })}
       {recent.map((j) => {
-        const isSimmer = j.type.startsWith("simmer");
+        const link = getJobLink(j);
+        const isExtract = j.type === "extract_batch";
         const row = (
-          <div className={`flex items-center gap-3 px-3 py-1.5 text-xs ${isSimmer ? "cursor-pointer hover:bg-card/50 transition-colors rounded" : ""}`}>
+          <div className={`flex items-center gap-3 px-3 py-1.5 text-xs ${link ? "cursor-pointer hover:bg-card/50 transition-colors rounded" : ""}`}>
             <Badge variant="outline" className={`text-[9px] ${jobStatusStyle[j.status]}`}>{j.status}</Badge>
             <span className="text-muted-foreground/90">{j.type}</span>
             <span className="text-[10px] text-muted-foreground/85">{j.target}</span>
-            {isSimmer && <span className="text-[9px] text-purple-400/40">↗</span>}
+            {j.type.startsWith("simmer") && <span className="text-[9px] text-purple-400/40">↗</span>}
+            {isExtract && <span className="text-[9px] text-emerald-400/40">↗</span>}
             <span className="text-[10px] text-muted-foreground/90 ml-auto">{timeSince(j.completed_at || j.created_at)}</span>
           </div>
         );
-        return isSimmer ? (
-          <Link key={j.id} href={`/simmer/${j.id}`}>{row}</Link>
+        return link ? (
+          <Link key={j.id} href={link}>{row}</Link>
         ) : (
           <div key={j.id}>{row}</div>
         );
