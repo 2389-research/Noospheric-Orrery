@@ -2,7 +2,7 @@
 
 export interface TrailItem {
   name: string;
-  nodeType: "entity" | "domain";
+  nodeType: "entity" | "domain" | "trade_route";
   id: string;
 }
 
