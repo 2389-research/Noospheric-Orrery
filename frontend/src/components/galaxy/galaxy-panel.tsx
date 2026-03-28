@@ -99,18 +99,16 @@ export function GalaxyPanel({ selectedNode, domainColors, onClose }: GalaxyPanel
   const currentNode = navStack[navStack.length - 1] ?? null;
 
   // Trail = all items in navStack (last is current)
-  const trail: TrailItem[] = navStack.map((node) => ({
-    name:
-      node.nodeType === "entity"
-        ? node.data.name
-        : node.nodeType === "trade_route"
-        ? `${(node.data as TradeRoutePanelData).sourceLabel?.split("/").pop()} ↔ ${(node.data as TradeRoutePanelData).targetLabel?.split("/").pop()}`
-        : ((node.data as DomainPanelData).path.split("/").pop() ?? (node.data as DomainPanelData).name),
-    nodeType: node.nodeType,
-    id: node.nodeType === "entity" ? (node.data as EntityPanelData).id
-      : node.nodeType === "trade_route" ? `${(node.data as TradeRoutePanelData).source}:${(node.data as TradeRoutePanelData).target}`
-      : (node.data as DomainPanelData).path,
-  }));
+  const trail: TrailItem[] = navStack.map((node) => {
+    if (node.nodeType === "entity") {
+      return { name: node.data.name, nodeType: "entity", id: node.data.id };
+    }
+    if (node.nodeType === "trade_route") {
+      const d = node.data;
+      return { name: `${d.sourceLabel?.split("/").pop()} ↔ ${d.targetLabel?.split("/").pop()}`, nodeType: "trade_route", id: `${d.source}:${d.target}` };
+    }
+    return { name: node.data.path.split("/").pop() ?? node.data.name, nodeType: "domain", id: node.data.path };
+  });
 
   const handleNavigateEntity = useCallback(
     (entity: { id: string; name: string; type: string; source_count: number }) => {
