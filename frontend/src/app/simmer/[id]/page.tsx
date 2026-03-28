@@ -79,7 +79,7 @@ export default function SimmerPage() {
   if (!job) {
     return (
       <div className="max-w-5xl mx-auto py-12 text-center">
-        <p className="text-muted-foreground/40 text-xs tracking-[2px] animate-pulse">
+        <p className="text-muted-foreground/90 text-xs tracking-[2px] animate-pulse">
           loading...
         </p>
       </div>
@@ -122,7 +122,7 @@ export default function SimmerPage() {
             />
           ) : (
             <div className="flex items-center justify-center h-full">
-              <p className="text-muted-foreground/50 text-xs tracking-[2px]">
+              <p className="text-muted-foreground/85 text-xs tracking-[2px]">
                 No iterations yet
               </p>
             </div>

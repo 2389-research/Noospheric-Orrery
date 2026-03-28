@@ -33,19 +33,19 @@ export function IterationDetail({
       <div className="space-y-2">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
-            <div className="text-[9px] tracking-[2px] text-muted-foreground/40 uppercase mb-1">
+            <div className="text-[9px] tracking-[2px] text-muted-foreground/90 uppercase mb-1">
               iteration {iteration.iteration} · {iteration.phase}
             </div>
             <h2 className="text-sm text-foreground/90 leading-snug">
               {(iteration.key_change || (iteration.iteration === 0 ? "Seed iteration" : "—")).replace(/^\*+\s*/, "")}
             </h2>
             {iteration.criterion_details.length > 0 && (
-              <p className="text-[10px] text-muted-foreground/50 mt-1.5 leading-relaxed line-clamp-2">
+              <p className="text-[10px] text-muted-foreground/85 mt-1.5 leading-relaxed line-clamp-2">
                 {iteration.criterion_details[0].evidence}
               </p>
             )}
             {iteration.iteration === 0 && iteration.criterion_details.length === 0 && (
-              <p className="text-[10px] text-muted-foreground/40 mt-1.5">
+              <p className="text-[10px] text-muted-foreground/90 mt-1.5">
                 Starting point — judge feedback begins at iteration 1
               </p>
             )}
@@ -61,14 +61,14 @@ export function IterationDetail({
                     ? "text-emerald-400"
                     : delta < 0
                     ? "text-red-400"
-                    : "text-muted-foreground/40"
+                    : "text-muted-foreground/90"
                 }`}
               >
                 {delta > 0 ? `+${delta.toFixed(1)}` : delta < 0 ? delta.toFixed(1) : "—"}
               </div>
             )}
             {delta === null && (
-              <div className="text-[10px] text-muted-foreground/50">seed</div>
+              <div className="text-[10px] text-muted-foreground/85">seed</div>
             )}
           </div>
         </div>
@@ -92,7 +92,7 @@ export function IterationDetail({
                 >
                   {name}
                 </span>
-                <span className="text-xs text-foreground/80">{score}/10</span>
+                <span className="text-xs text-foreground/90">{score}/10</span>
                 {scoreDelta !== null && scoreDelta !== 0 && (
                   <span
                     className={`text-[9px] ${
@@ -106,7 +106,7 @@ export function IterationDetail({
             );
           })}
           {iteration.judge_mode && (
-            <span className="text-[8px] text-muted-foreground/40 self-center ml-1">
+            <span className="text-[8px] text-muted-foreground/90 self-center ml-1">
               judge: {iteration.judge_mode}
             </span>
           )}
@@ -115,7 +115,7 @@ export function IterationDetail({
 
       {/* Trajectory Chart */}
       <div className="border border-border/20 rounded p-3">
-        <div className="text-[9px] tracking-[2px] text-muted-foreground/40 uppercase mb-3">
+        <div className="text-[9px] tracking-[2px] text-muted-foreground/90 uppercase mb-3">
           Score Trajectory
         </div>
         <TrajectoryChart iterations={allIterations} selectedIndex={selectedIndex} />
@@ -124,7 +124,7 @@ export function IterationDetail({
       {/* Criterion Cards */}
       {iteration.criterion_details.length > 0 && (
         <div className="space-y-2">
-          <div className="text-[9px] tracking-[2px] text-muted-foreground/40 uppercase">
+          <div className="text-[9px] tracking-[2px] text-muted-foreground/90 uppercase">
             Criterion Details
           </div>
           {iteration.criterion_details.map((detail, idx) => {
@@ -143,7 +143,7 @@ export function IterationDetail({
 
       {/* No detail message */}
       {iteration.criterion_details.length === 0 && (
-        <div className="text-[10px] text-muted-foreground/50 py-4 text-center border border-border/10 rounded">
+        <div className="text-[10px] text-muted-foreground/85 py-4 text-center border border-border/10 rounded">
           No criterion details for this iteration
         </div>
       )}
