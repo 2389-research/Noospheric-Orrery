@@ -56,4 +56,28 @@ export const api = {
     fetchAPI<{ id: string; entity_a: string; entity_b: string; similarity: number }[]>("/normalize/review"),
   resolveReview: (reviewId: string, action: "merge" | "keep_separate") =>
     fetchAPI<{ status: string }>(`/normalize/review/${reviewId}?action=${action}`, { method: "POST" }),
+  getDocumentReader: (docId: string) =>
+    fetchAPI<{
+      document: { id: string; title: string; status: string; domains: string[] };
+      entities: {
+        id: string;
+        canonical_name: string;
+        type: string;
+        source_count: number;
+        mention_count: number;
+        positions: number[];
+        snippets: string[];
+        merge_history: string[];
+        is_new: boolean;
+      }[];
+      segments: {
+        type: string;
+        text: string;
+        entity_id?: string;
+        entity_name?: string;
+        entity_type?: string;
+        is_new?: boolean;
+      }[];
+      total_mentions: number;
+    }>(`/documents/${docId}/reader`),
 };

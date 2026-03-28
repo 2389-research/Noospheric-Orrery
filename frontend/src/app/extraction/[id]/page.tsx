@@ -10,6 +10,7 @@ import { DocList } from "@/components/extraction/doc-list";
 import { EntityPanel } from "@/components/extraction/entity-panel";
 import { TypeDistribution } from "@/components/extraction/type-distribution";
 import { NormalizationSummary } from "@/components/extraction/normalization-summary";
+import { ReaderPane } from "@/components/reader/reader-pane";
 
 type JobWithResults = JobInfo & { results?: BatchResults };
 
@@ -144,24 +145,33 @@ export default function ExtractionPage() {
           />
         </div>
 
-        <div className="flex-1 min-w-0 space-y-4">
-          <EntityPanel
-            entities={panelEntities}
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            entitiesNew={entitiesNew}
-            selectedDocTitle={selectedDocTitle}
-            isFailed={isFailed}
-          />
-
-          <div className="grid grid-cols-2 gap-4">
-            <TypeDistribution
-              entities={entities}
-              activeType={activeTab === "all" || activeTab === "new" ? null : activeTab}
-              onTypeClick={handleTypeClick}
+        <div className="flex-1 min-w-0">
+          {selectedDocId ? (
+            <ReaderPane
+              documentId={selectedDocId}
+              onClose={() => setSelectedDocId(null)}
             />
-            <NormalizationSummary data={normSummary} />
-          </div>
+          ) : (
+            <div className="space-y-4">
+              <EntityPanel
+                entities={panelEntities}
+                activeTab={activeTab}
+                onTabChange={setActiveTab}
+                entitiesNew={entitiesNew}
+                selectedDocTitle={selectedDocTitle}
+                isFailed={isFailed}
+              />
+
+              <div className="grid grid-cols-2 gap-4">
+                <TypeDistribution
+                  entities={entities}
+                  activeType={activeTab === "all" || activeTab === "new" ? null : activeTab}
+                  onTypeClick={handleTypeClick}
+                />
+                <NormalizationSummary data={normSummary} />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
