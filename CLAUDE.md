@@ -1,0 +1,214 @@
+# CLAUDE.md — Noospheric Orrery
+
+Instructions for AI agents (Claude Code, etc.) working on this codebase.
+
+## What This Project Is
+
+An adaptive knowledge graph pipeline. Documents go in → the system classifies them into domains, simmers extraction specs via iterative LLM refinement, extracts entities, normalizes them, and visualizes the result as an interactive galaxy map.
+
+Three services: orchestrator (FastAPI REST API), worker (background job processor), frontend (Next.js).
+
+## Project Structure
+
+```
+orchestrator/
+  src/
+    main.py          — FastAPI app, CORS, router registration
+    config.py        — Settings from env vars (AWS keys, model IDs, thresholds)
+    db.py            — SQLite schema (init_db) + get_connection (WAL mode)
+    models.py        — Pydantic request/response models
+    routes/          — One file per route group
+      ingest.py      — POST /ingest, POST /ingest/directory (the main pipeline entry point)
+      documents.py   — GET /documents, GET /documents/{id}
+      reader.py      — GET /documents/{id}/reader (entity spans for highlighted view)
+      domains.py     — GET /domains
+      entities.py    — GET /entities, GET /entities/{id}, GET /entities/{id}/cooccurrences
+      jobs.py        — GET /jobs, GET /jobs/{id}/iterations
+      simmer.py      — POST /simmer/general, POST /simmer/{domain_path}
+      stats.py       — GET /stats
+      normalize.py   — POST /normalize, GET /normalize/summary, GET /normalize/review
+      subdomains.py  — POST /discover-subdomains
+      graph.py       — GET /graph (cosmic_data_v4 format for the viz iframe)
+    pipeline/        — Pure functions, no FastAPI coupling
+      chunker.py     — Split document into fixed-size chunks
+      excerpt.py     — Build adaptive excerpt for classification
+      classifier.py  — Call Sonnet to classify document into domains
+      domain_normalizer.py — Assign/normalize domains after classification
+      extractor.py   — Call Haiku with a spec to extract entities from chunks
+      normalizer.py  — Per-entity normalization (merge_map check → insert)
+      embedding_normalizer.py — Batch normalization (embed → cluster → LLM review)
+      cooccurrence.py — Compute co-occurrence edges from chunk→entity map
+      subdomain_discovery.py — Find subdomains from extracted content
+
+worker/
+  src/
+    main.py          — Poll loop: picks jobs every 5s, dispatches to handlers
+    config.py        — Same env vars as orchestrator
+    db.py            — Shared schema (identical to orchestrator/src/db.py)
+    normalizer.py    — Entity normalization used during batch extraction
+    jobs/
+      runner.py      — pick_next_job, mark_job_running/completed/failed
+      simmer_general.py — Run golden set + extraction spec simmering for general spec
+      simmer_domain.py  — Same but for a specific domain
+      extract_batch.py  — Run a spec against all docs in scope
+
+frontend/
+  src/
+    app/             — Next.js App Router pages
+      page.tsx       — /  (upload page)
+      pipeline/      — /pipeline
+      entities/      — /entities
+      viz/           — /viz (iframe + postMessage cosmic viz)
+      simmer/[id]/   — /simmer/{id} (simmer job detail)
+      extraction/[id]/ — /extraction/{id} (batch extraction detail)
+    components/      — Shared UI components
+    lib/
+      api.ts         — All fetch calls to the orchestrator
+      types.ts       — TypeScript types
+  public/
+    cosmic-viz.html  — Self-contained Canvas2D galaxy visualization (DO NOT split into modules)
+```
+
+## Data Lives Outside the Repo
+
+All persistent data is at `~/orrery-data/`:
+- `~/orrery-data/orrery.db` — SQLite database
+- `~/orrery-data/documents/` — uploaded file copies
+- `~/orrery-data/specs/` — simmered spec files
+
+In Docker, this maps to the `orrery-data` volume mounted at `/data`.
+
+## Starting the Services
+
+### With Docker
+
+```bash
+docker compose up          # all three services
+docker compose up orchestrator worker   # without frontend
+```
+
+Ports: orchestrator → 8100, frontend → 3100.
+
+### Without Docker (dev)
+
+There is an env script at `/tmp/run-orchestrator.sh` that sets all required environment variables. Source it before running either Python service.
+
+```bash
+# Orchestrator
+source /tmp/run-orchestrator.sh
+cd orchestrator && uvicorn src.main:app --reload --port 8000
+
+# Worker (separate terminal)
+source /tmp/run-orchestrator.sh
+cd worker && python -m src.main
+
+# Frontend (separate terminal)
+cd frontend && NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
+```
+
+The frontend reads `NEXT_PUBLIC_API_URL` at build/runtime. In Docker, it's set to `http://localhost:8100`.
+
+## Key Patterns
+
+### All Claude API Calls Go Through Bedrock
+
+Never use direct Anthropic API. Always use `AsyncAnthropicBedrock`:
+
+```python
+from anthropic import AsyncAnthropicBedrock
+client = AsyncAnthropicBedrock(
+    aws_access_key=settings.aws_access_key,
+    aws_secret_key=settings.aws_secret_key,
+    aws_region=settings.aws_region,
+)
+```
+
+### Model ID Format for Bedrock
+
+Cross-region inference profile IDs include the region prefix:
+```
+us.anthropic.claude-sonnet-4-20250514-v1:0
+us.anthropic.claude-haiku-4-20250514-v1:0
+us.anthropic.claude-haiku-4-5-20251001-v1:0
+```
+
+Without the `us.` prefix, Bedrock returns a 400. Check `config.py` for the current values.
+
+### simmer-sdk for Iterative Refinement
+
+The worker uses simmer-sdk to refine both the golden set (entity reference set) and the extraction spec (Haiku prompt):
+
+```python
+from simmer_sdk import refine
+
+result = await refine(
+    artifact=path_to_artifact,
+    evaluator="python evaluator.py --arg {candidate_path}",
+    criteria={"coverage": "...", "precision": "..."},
+    primary="coverage",
+    iterations=5,
+    judge_mode="board",
+)
+```
+
+simmer-sdk is installed in the worker container from a local checkout (not PyPI). See `worker/Dockerfile`.
+
+### SQLite WAL Mode
+
+Both orchestrator and worker write concurrently. Every connection opens with:
+```python
+conn.execute("PRAGMA journal_mode=WAL")
+conn.execute("PRAGMA busy_timeout=5000")
+```
+
+This is handled by `get_connection()` in `db.py` — always use that, never open SQLite directly.
+
+### Domain Spec Cascade
+
+When a document is ingested, the pipeline walks up the domain tree and applies every spec that exists at any ancestor level. A doc in `business/product_development/strategy` gets the `strategy` spec, then the `product_development` spec, then the `business` spec (deepest first). This is in `ingest.py` under the "cascade through domain specs" comment.
+
+### Entity Normalization
+
+Normalization happens at two levels:
+1. **Per-entity** (inline during ingest): `normalize_entity()` checks merge_map, inserts if new, returns canonical entity_id
+2. **Batch** (via `POST /normalize`): embedding similarity clustering + LLM review for ambiguous pairs
+
+The `normalization_review_queue` table holds pairs the system is uncertain about. Use `GET /normalize/review` + `POST /normalize/review/{id}` to resolve them.
+
+### Cosmic Viz is a Self-Contained HTML File
+
+`frontend/public/cosmic-viz.html` is a single-file Canvas2D app. It communicates with the Next.js shell via `postMessage`:
+- Viz → Shell: `{ type: "node_selected", nodeType, data }` when user clicks a node
+- Viz → Shell: `{ type: "node_cleared" }` when user deselects
+- Shell → Viz: `{ type: "panel_closed" }` when user closes the side panel
+
+Do not try to decompose it into React components. The iframe boundary is intentional.
+
+The viz fetches `GET /graph` from the orchestrator for data (via `NEXT_PUBLIC_API_URL` stored in a meta tag or window variable).
+
+## CORS
+
+The orchestrator has `allow_origins=["*"]` in development. If you tighten this, the frontend iframe and direct API calls from the viz HTML will break.
+
+## Testing
+
+**Orchestrator:** 11 test files, 45+ tests
+```bash
+cd orchestrator && pytest tests/ -v
+```
+
+**Worker:** 2 test files, 7+ tests
+```bash
+cd worker && pytest tests/ -v
+```
+
+Tests use `tmp_path` fixtures for SQLite isolation. The orchestrator `conftest.py` sets up a test client and a fresh in-memory DB for each test.
+
+## Common Gotchas
+
+- **`birthScale` in the viz**: entities get a `birthScale` CSS property for their entrance animation. If you add new entity fields, make sure the viz ignores unknown properties gracefully.
+- **CORS in viz iframe**: the `cosmic-viz.html` fetches the graph endpoint directly. If the orchestrator URL changes, update the meta tag / env var that the viz reads.
+- **Bedrock model IDs**: always include the `us.` prefix and the `-v1:0` suffix. The exact string matters — Bedrock rejects anything that doesn't match a registered inference profile.
+- **WAL mode required**: if you add a new SQLite connection anywhere, add the PRAGMA statements. Forgetting causes `database is locked` errors under load.
+- **Domain path format**: paths use `/` as separator (e.g., `techniques/wet-blending`). Treat as a hierarchical key, not a filesystem path. The `LIKE ? || '%'` pattern in queries does prefix matching.
+- **`job_id` on entity_sources**: the `entity_sources` table has a `job_id` column added after initial design. The `/entities?job_id=` filter scopes the entity list to entities extracted by a specific job — useful for the extraction detail page.

@@ -4,6 +4,55 @@
 **Status:** Approved
 **Purpose:** FastAPI orchestrator + simmer worker + Next.js dashboard to wire together the validated extraction pipeline
 
+## Current State (as of 2026-03-27)
+
+This section documents what has been built relative to what was originally planned. Updated at implementation time.
+
+### Built and Shipped
+
+- [x] **Three-container architecture** — orchestrator (FastAPI :8100), worker (asyncio poll loop), frontend (Next.js :3100) via `docker compose up`
+- [x] **Full ingest pipeline** — upload file or directory, classify (Sonnet/Bedrock), extract with general spec, cascade domain specs, compute co-occurrence edges
+- [x] **Domain normalization** — inline during classification; embed + cosine similarity + LLM review for ambiguous pairs; `domain_merge_map` persistence
+- [x] **Entity normalization** — per-entity `merge_map` check at ingest time; batch cascade via `POST /normalize`; `normalization_review_queue` for manual resolution
+- [x] **simmer_general job** — Phase 1 golden set + Phase 2 extraction spec, tracked per-iteration in `simmer_iterations` and `simmer_criterion_details`
+- [x] **simmer_domain job** — Same two-phase loop for domain-specific specs
+- [x] **extract_batch job** — Worker runs simmered spec against all target documents
+- [x] **Domain spec cascade** — Deepest-first ancestor walk; additive extraction on top of general pass
+- [x] **Content hash dedup** — Skip re-ingesting identical documents
+- [x] **`GET /graph`** — cosmic_data_v4 format; golden-ratio color distribution; branching-level domain layout; trade routes; entity domain weights
+- [x] **Cosmic visualization integration** — `/viz` page embeds `cosmic-viz.html` iframe; postMessage bridge to GalaxyPanel overlay
+- [x] **GalaxyPanel** — entity, domain, and trade route panels; domain color donut for entities
+- [x] **Simmer detail page** — `/simmer/{id}` with phase tabs, iteration list, per-criterion scores and evidence
+- [x] **Extraction detail page** — `/extraction/{id}` with docs, entities (is_new flag), type distribution, normalization summary, reader pane
+- [x] **Document reader** — `/documents/{id}/reader` with entity span highlighting, mention count, context snippets
+- [x] **Subdomain discovery** — `POST /discover-subdomains` using Sonnet to propose taxonomy splits
+- [x] **Upload page** (`/`) — drag-and-drop file upload + directory path ingest
+- [x] **Pipeline page** (`/pipeline`) — stats bar, domain taxonomy, job list, simmer trigger buttons
+- [x] **Entities page** (`/entities`) — paginated table with type/domain filters
+
+### Originally Planned, Now Deferred or Changed
+
+- **Phase B: Cosmic viz integration** — Shipped as part of Phase A (not deferred). Viz connects to live pipeline data via `/graph`.
+- **Phase C: Search page** — Still deferred. The underlying retrieval capability exists (separate spark service); UI not built in this codebase yet.
+- **User feedback / entity editing** — Not built. Would require new UI + entity edit endpoints.
+- **Cloud deployment / Postgres migration** — Not done. Running on SQLite WAL locally.
+- **Re-simmering triggers** — Auto-queue on threshold only. Quality-degradation-based re-simmering not implemented.
+- **Sentence-transformers embedding** — Commented out in `pyproject.toml`. Batch normalization scaffolding exists but embedding is deferred.
+
+### Schema Additions Beyond Original Design
+
+The original design doc listed a simpler schema. The following tables were added during implementation:
+
+- `entity_embeddings` — cached embeddings (deferred feature)
+- `normalization_log` — audit trail for all merge decisions
+- `normalization_review_queue` — ambiguous pairs for manual review
+- `simmer_iterations` — per-iteration history from simmer-sdk
+- `simmer_criterion_details` — per-criterion scores/evidence per iteration
+- `documents.content_hash` — for deduplication
+- `entity_sources.job_id` — to scope entities to a specific extraction job
+
+---
+
 ## Context
 
 All pipeline components are proven from experiments:
