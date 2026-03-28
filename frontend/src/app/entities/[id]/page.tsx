@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -38,6 +38,7 @@ interface DocSnippets {
 
 export default function EntityDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const id = params.id as string;
   const [entity, setEntity] = useState<EntityDetail | null>(null);
   const [docs, setDocs] = useState<Record<string, DocumentInfo>>({});
@@ -119,7 +120,12 @@ export default function EntityDetailPage() {
   return (
     <div className="max-w-3xl mx-auto space-y-6">
       <div>
-        <div className="text-[9px] tracking-[2px] text-muted-foreground/80 uppercase mb-2">Entity</div>
+        <button
+          onClick={() => router.back()}
+          className="text-[10px] text-muted-foreground/80 hover:text-foreground/90 transition-colors mb-2"
+        >
+          ← back
+        </button>
         <h1 className="text-xl font-semibold text-foreground/90">{entity.canonical_name}</h1>
         <div className="flex items-center gap-3 mt-2">
           <Badge
