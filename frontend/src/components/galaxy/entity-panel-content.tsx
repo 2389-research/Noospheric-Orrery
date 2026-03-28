@@ -150,18 +150,31 @@ export function EntityPanelContent({
   const [loadingCooc, setLoadingCooc] = useState(true);
   const [coocError, setCoocError] = useState(false);
   const [snippetError, setSnippetError] = useState(false);
+  const [sourceDocs, setSourceDocs] = useState<{id: string; title: string; mentions: number}[]>([]);
 
   const entityColor = getEntityColor(data.type);
 
-  // Fetch entity detail for merge history
+  // Fetch entity detail for merge history + source docs
   useEffect(() => {
     if (!data.id) return;
     (async () => {
       try {
         const entity = await api.getEntity(data.id);
         setMergeHistory(entity.merge_history ?? []);
+        // Build source doc list with mention counts
+        const docCounts: Record<string, number> = {};
+        for (const s of entity.sources) {
+          docCounts[s.document_id] = (docCounts[s.document_id] || 0) + 1;
+        }
+        const docs = await api.getDocuments();
+        const docMap = Object.fromEntries(docs.map((d: { id: string; title: string }) => [d.id, d.title]));
+        setSourceDocs(
+          Object.entries(docCounts)
+            .map(([id, count]) => ({ id, title: docMap[id] || id.slice(0, 8), mentions: count }))
+            .sort((a, b) => b.mentions - a.mentions)
+        );
       } catch {
-        // merge history is optional — silent fail
+        // merge history + source docs are optional
       }
     })();
   }, [data.id]);
@@ -198,18 +211,20 @@ export function EntityPanelContent({
     setSnippetError(false);
     (async () => {
       try {
-        // Fetch documents and look for snippets for this entity in the reader endpoint
-        const docs = await api.getDocuments();
+        // Get entity's source documents, then fetch snippets from reader
+        const entity = await api.getEntity(data.id);
+        const docIds = [...new Set(entity.sources.map((s: { document_id: string }) => s.document_id))];
         const fetchedSnippets: string[] = [];
-        for (const doc of docs.slice(0, 10)) {
-          if (fetchedSnippets.length >= 2) break;
+        for (const docId of docIds.slice(0, 5)) {
+          if (fetchedSnippets.length >= 3) break;
           try {
-            const reader = await api.getDocumentReader(doc.id);
+            const reader = await api.getDocumentReader(docId);
+            // Match by id, canonical name, or any merge history alias
             const entityEntry = reader.entities.find(
               (e) => e.id === data.id || e.canonical_name.toLowerCase() === data.name.toLowerCase()
             );
             if (entityEntry?.snippets?.length) {
-              fetchedSnippets.push(...entityEntry.snippets.slice(0, 2 - fetchedSnippets.length));
+              fetchedSnippets.push(...entityEntry.snippets.slice(0, 3 - fetchedSnippets.length));
             }
           } catch {
             // skip doc
@@ -406,23 +421,31 @@ export function EntityPanelContent({
         </div>
       )}
 
-      {/* Footer */}
-      <div style={{ padding: "12px 16px" }}>
-        <a
-          href={`/entities/${data.id}`}
-          style={{
-            fontSize: 11,
-            color: "rgba(100,180,255,0.7)",
-            textDecoration: "none",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-            fontFamily: "'Courier New', monospace",
-          }}
-        >
-          ↗ open entity
-        </a>
-      </div>
+      {/* Source Documents */}
+      {sourceDocs.length > 0 && (
+        <div style={sectionStyle}>
+          <span style={sectionLabel}>Source Documents · {sourceDocs.length}</span>
+          <div style={{ maxHeight: 160, overflowY: "auto" }}>
+            {sourceDocs.slice(0, 8).map((doc) => (
+              <div
+                key={doc.id}
+                style={{
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                  padding: "4px 0", borderBottom: "1px solid rgba(100,180,255,0.05)",
+                  fontSize: 10, fontFamily: "'Courier New', monospace",
+                }}
+              >
+                <span style={{ color: "rgba(180,195,220,0.65)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8 }}>
+                  {doc.title}
+                </span>
+                <span style={{ color: "rgba(100,180,255,0.4)", flexShrink: 0 }}>
+                  {doc.mentions}×
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
