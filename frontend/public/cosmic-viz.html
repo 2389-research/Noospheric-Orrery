@@ -222,7 +222,7 @@ function drawStar(n, state) {
   ctx.fillStyle = ag; ctx.beginPath(); ctx.arc(n.x,n.y,bR*(3+pulse),0,TAU); ctx.fill();
 
   // Core
-  ctx.shadowBlur = isHov ? 15 : 8;
+  ctx.shadowBlur = isHov ? 10 : isConnected ? 6 : 4;
   ctx.shadowColor = n.color;
   const cg = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,bR);
   cg.addColorStop(0,lighten(n.color,0.6)); cg.addColorStop(0.5,n.color); cg.addColorStop(1,darken(n.color,0.3));
@@ -335,7 +335,27 @@ function drawSparks() {
 function getNeighborhood(id) {
   if (!id) return null;
   const s = new Set([id]);
+  const node = nodes.get(id);
+
+  // Edge-based neighbors
   edges.forEach(e => { if(e.source===id) s.add(e.target); if(e.target===id) s.add(e.source); });
+
+  // Domain-entity relationships via domainWeights
+  if (node && node.kind === 'entity' && node.domainWeights) {
+    // Entity hovered → include its domains
+    for (const domName of Object.keys(node.domainWeights)) {
+      const domNode = [...nodes.values()].find(n => n.kind === 'domain' && n.fullPath === domName);
+      if (domNode) s.add(domNode.id);
+    }
+  } else if (node && node.kind === 'domain') {
+    // Domain hovered → include entities that belong to it
+    for (const [nid, n] of nodes) {
+      if (n.kind === 'entity' && n.domainWeights && n.domainWeights[node.fullPath]) {
+        s.add(nid);
+      }
+    }
+  }
+
   return s;
 }
 
@@ -465,14 +485,26 @@ function frame() {
   if (showEdges) drawEdges();
   drawBirths(); drawComets(); drawSparks();
 
-  // Draw domains (nebulae) — always visible
+  // Compute neighborhood once for both domains and entities
+  const hi = hoveredId ? getNeighborhood(hoveredId) : null;
+
+  // Draw domains (nebulae) — always visible, brighten if in neighborhood
   const doms = [...nodes.values()].filter(n=>n.kind==='domain');
-  doms.forEach(d => drawNebula(d));
+  doms.forEach(d => {
+    if (hi && hi.has(d.id)) {
+      ctx.globalAlpha = 1.0;
+    } else if (hi) {
+      ctx.globalAlpha = 0.3;
+    } else {
+      ctx.globalAlpha = 1.0;
+    }
+    drawNebula(d);
+    ctx.globalAlpha = 1.0;
+  });
 
   // Draw entities (stars) — zoom-dependent
   // Three states: 'normal' (no hover), 'connected' (in neighborhood), 'dim' (not connected)
   if (showEntities) {
-    const hi = hoveredId ? getNeighborhood(hoveredId) : null;
     const ents = [...nodes.values()].filter(n=>n.kind==='entity');
     // Draw dim entities first (behind), then connected, then hovered (on top)
     if (hi) {
