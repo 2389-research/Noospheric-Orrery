@@ -379,22 +379,29 @@ function simTick() {
   const entities = [...nodes.values()].filter(n=>n.kind==='entity');
 
   // Entity attraction toward domain centroid(s)
+  // Entities with equal weights across domains would sit at center —
+  // so we amplify the strongest weight to break symmetry
   for (const e of entities) {
     if (!e.domainWeights) continue;
-    for (const [domId, weight] of Object.entries(e.domainWeights)) {
+    const weights = Object.entries(e.domainWeights);
+    const maxWeight = Math.max(...weights.map(([,w])=>w));
+
+    for (const [domId, rawWeight] of weights) {
       const dom = [...nodes.values()].find(n=>n.kind==='domain'&&n.label===domId);
       if (!dom) continue;
       const dx=dom.x-e.x, dy=dom.y-e.y, dist=hypot(dx,dy)||1;
-      const targetDist = dom.radius * 2.5;
-      const force = (dist-targetDist)/dist * 0.006 * weight;
+      const targetDist = dom.radius * 1.5;
+      // Amplify: square the weight so dominant domain pulls much harder
+      const weight = rawWeight * rawWeight / maxWeight;
+      const force = (dist-targetDist)/dist * 0.02 * weight;
       e.vx += dx*force; e.vy += dy*force;
     }
 
-    // Slow tangential orbit
-    const primaryDom = [...nodes.values()].find(n=>n.kind==='domain'&&n.label===Object.keys(e.domainWeights)[0]);
+    // Tangential orbit around primary domain
+    const primaryDom = [...nodes.values()].find(n=>n.kind==='domain'&&n.label===weights.reduce((a,b)=>a[1]>b[1]?a:b)[0]);
     if (primaryDom) {
       const dx=primaryDom.x-e.x, dy=primaryDom.y-e.y, dist=hypot(dx,dy)||1;
-      e.vx += (-dy/dist)*0.008; e.vy += (dx/dist)*0.008;
+      e.vx += (-dy/dist)*0.015; e.vy += (dx/dist)*0.015;
     }
 
     // Local entity repulsion
