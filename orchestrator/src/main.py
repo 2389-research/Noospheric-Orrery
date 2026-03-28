@@ -27,6 +27,7 @@ from .routes.simmer import router as simmer_router
 from .routes.stats import router as stats_router
 from .routes.normalize import router as normalize_router
 from .routes.subdomains import router as subdomains_router
+from .routes.graph import router as graph_router
 
 app.include_router(ingest_router)
 app.include_router(documents_router)
@@ -37,6 +38,7 @@ app.include_router(simmer_router)
 app.include_router(stats_router)
 app.include_router(normalize_router)
 app.include_router(subdomains_router)
+app.include_router(graph_router)
 
 @app.get("/health")
 def health():
