@@ -14,15 +14,19 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
         aws_region=settings.aws_region,
     )
 
+    job_id = job["id"]
     config = json.loads(job["config"]) if job["config"] else {}
     spec_id = config.get("spec_id")
     scope = config.get("scope", "all_classified")
 
-    spec_row = conn.execute("SELECT spec_content FROM specs WHERE id = ?", (spec_id,)).fetchone()
+    spec_row = conn.execute("SELECT spec_content, version, domain_path FROM specs WHERE id = ?", (spec_id,)).fetchone()
     if not spec_row:
         conn.close()
         raise ValueError(f"Spec not found: {spec_id}")
     spec = spec_row[0]
+    spec_version = spec_row[1]
+    spec_domain = spec_row[2]
+    spec_label = f"domain/{spec_domain}_v{spec_version}" if spec_domain else f"general_v{spec_version}"
 
     if scope == "all_classified":
         docs = conn.execute("SELECT id FROM documents WHERE status = 'classified'").fetchall()
@@ -32,6 +36,12 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
             JOIN document_domains dd ON d.id = dd.document_id WHERE dd.domain_path = ?""", (domain,)).fetchall()
 
     conn.close()
+
+    # Track stats
+    total_entities = 0
+    new_entities = 0
+    matched_entities = 0
+    docs_processed = 0
 
     for doc_row in docs:
         doc_id = doc_row[0]
@@ -59,6 +69,8 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
                 etype = entity.get("type", "Thing")
                 if not name:
                     continue
+
+                is_new = False
                 row = conn.execute("SELECT to_entity_id FROM merge_map WHERE from_name = ?", (name,)).fetchone()
                 if row:
                     entity_id = row[0]
@@ -69,9 +81,20 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
                     else:
                         entity_id = str(uuid.uuid4())
                         conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES (?, ?, ?)", (entity_id, name, etype))
+                        is_new = True
+
                 extraction_pass = "domain-specific" if scope == "domain" else "general"
-                conn.execute("INSERT INTO entity_sources (entity_id, document_id, chunk_id, extraction_pass) VALUES (?, ?, ?, ?)", (entity_id, doc_id, chunk_id, extraction_pass))
+                conn.execute(
+                    "INSERT INTO entity_sources (entity_id, document_id, chunk_id, extraction_pass, spec_version, job_id) VALUES (?, ?, ?, ?, ?, ?)",
+                    (entity_id, doc_id, chunk_id, extraction_pass, spec_version, job_id),
+                )
                 chunk_entities.setdefault(chunk_id, []).append(entity_id)
+
+                total_entities += 1
+                if is_new:
+                    new_entities += 1
+                else:
+                    matched_entities += 1
 
         pair_counts: dict[tuple, int] = {}
         for cid, eids in chunk_entities.items():
@@ -85,13 +108,30 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
         conn.execute("UPDATE documents SET status = ? WHERE id = ?", (new_status, doc_id))
         conn.commit()
         conn.close()
+        docs_processed += 1
+        print(f"  Extracted doc {docs_processed}/{len(docs)}: {total_entities} entities ({new_entities} new)", flush=True)
+
+    # Store batch results summary on the job
+    results_conn = get_connection(db_path)
+    results_conn.execute(
+        "UPDATE jobs SET result = ? WHERE id = ?",
+        (json.dumps({
+            "entities_found": total_entities,
+            "entities_new": new_entities,
+            "entities_matched": matched_entities,
+            "docs_processed": docs_processed,
+            "spec_version": spec_label,
+        }), job_id),
+    )
+    results_conn.commit()
+    results_conn.close()
 
     # Run normalization after all docs are extracted
     from ..normalizer import run_batch_normalization
     norm_conn = get_connection(db_path)
     try:
-        results = run_batch_normalization(norm_conn)
-        print(f"Normalization: {results}", flush=True)
+        norm_results = run_batch_normalization(norm_conn)
+        print(f"Normalization: {norm_results}", flush=True)
     except Exception as e:
         print(f"Normalization failed: {e}", flush=True)
     finally:
