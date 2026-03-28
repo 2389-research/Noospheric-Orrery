@@ -54,7 +54,7 @@ export function CriterionCard({ detail, colorIndex, nextIteration }: CriterionCa
           </span>
         )}
         {seedDelta === 0 && (
-          <span className="text-[9px] text-muted-foreground/30 w-10 text-right shrink-0">
+          <span className="text-[9px] text-muted-foreground/50 w-10 text-right shrink-0">
             — seed
           </span>
         )}

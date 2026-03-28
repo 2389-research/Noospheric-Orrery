@@ -133,7 +133,7 @@ export function NormalizationPanel() {
             {visibleReviews.map((r) => (
               <div key={r.id} className="flex items-center gap-3 border border-border/20 rounded px-3 py-2">
                 <span className="text-xs text-foreground/70 flex-1">
-                  &quot;{r.entity_a}&quot; <span className="text-muted-foreground/30">↔</span> &quot;{r.entity_b}&quot;
+                  &quot;{r.entity_a}&quot; <span className="text-muted-foreground/50">↔</span> &quot;{r.entity_b}&quot;
                 </span>
                 <span className="text-[10px] text-muted-foreground/40">{r.similarity}</span>
                 <Button size="sm" variant="outline" className="h-5 text-[10px] px-2 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10" onClick={() => handleResolve(r.id, "merge")}>

@@ -32,13 +32,13 @@ export function DomainTree({ domains }: { domains: DomainInfo[] }) {
           return (
             <div key={d.id} className="grid grid-cols-[1fr_60px_80px_70px] gap-2 px-3 py-1.5 border-b border-border/10 last:border-0 text-xs hover:bg-card/50 transition-colors">
               <span className="text-foreground/80" style={{ paddingLeft: `${depth * 12}px` }}>
-                {depth > 0 && <span className="text-muted-foreground/30 mr-1">└</span>}
+                {depth > 0 && <span className="text-muted-foreground/50 mr-1">└</span>}
                 {d.path.split("/").pop()}
               </span>
               <span className="text-muted-foreground/60">{d.document_count}</span>
               <Badge
                 variant="outline"
-                className={`w-fit text-[10px] ${d.spec_version ? "border-emerald-500/40 text-emerald-400" : "border-muted-foreground/20 text-muted-foreground/40"}`}
+                className={`w-fit text-[10px] ${d.spec_version ? "border-emerald-500/40 text-emerald-400" : "border-muted-foreground/40 text-muted-foreground/40"}`}
               >
                 {d.spec_version ? `v${d.spec_version}` : "—"}
               </Badge>

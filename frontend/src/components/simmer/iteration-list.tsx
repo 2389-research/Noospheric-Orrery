@@ -144,7 +144,7 @@ export function IterationList({
                     <span className="text-[9px] text-red-400 border border-red-400/40 px-1 rounded">↓ reg</span>
                   )}
                   {delta !== null && delta === 0 && !iter.regressed && (
-                    <span className="text-[9px] text-muted-foreground/30">—</span>
+                    <span className="text-[9px] text-muted-foreground/50">—</span>
                   )}
                 </div>
               </div>
@@ -163,7 +163,7 @@ export function IterationList({
         {/* Pulsing placeholder when running */}
         {isRunning && (
           <div className="px-3 py-2.5 border-b border-border/10 border-l-2 border-l-amber-500/40">
-            <div className="text-[9px] tracking-[2px] text-muted-foreground/30 uppercase mb-1">
+            <div className="text-[9px] tracking-[2px] text-muted-foreground/50 uppercase mb-1">
               iter {iterations.length}
             </div>
             <div className="text-[10px] text-amber-400/60 animate-pulse">

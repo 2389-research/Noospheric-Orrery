@@ -76,7 +76,7 @@ export function PipelineStages({ stats, jobs }: PipelineStagesProps) {
   ];
 
   const statusColor: Record<StageStatus, string> = {
-    idle: "border-muted-foreground/20 text-muted-foreground/40",
+    idle: "border-muted-foreground/40 text-muted-foreground/40",
     waiting: "border-yellow-500/40 text-yellow-500/70",
     active: "border-cyan-400 text-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.15)]",
     complete: "border-emerald-500/60 text-emerald-400",
@@ -90,7 +90,7 @@ export function PipelineStages({ stats, jobs }: PipelineStagesProps) {
   };
 
   const dotColor: Record<StageStatus, string> = {
-    idle: "bg-muted-foreground/20",
+    idle: "bg-muted-foreground/40",
     waiting: "bg-yellow-500/50 animate-pulse",
     active: "bg-cyan-400 animate-pulse shadow-[0_0_6px_rgba(34,211,238,0.4)]",
     complete: "bg-emerald-500/70",
@@ -115,7 +115,7 @@ export function PipelineStages({ stats, jobs }: PipelineStagesProps) {
           {i < stages.length - 1 && (
             <div className="flex items-center mx-1">
               <div className={`h-[1px] w-8 ${connectorColor[stages[i + 1].status]}`} />
-              <div className={`text-[8px] ${stages[i + 1].status === "idle" ? "text-muted-foreground/20" : "text-muted-foreground/50"}`}>
+              <div className={`text-[8px] ${stages[i + 1].status === "idle" ? "text-muted-foreground/40" : "text-muted-foreground/50"}`}>
                 ▸
               </div>
             </div>

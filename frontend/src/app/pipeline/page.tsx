@@ -31,7 +31,7 @@ function ActiveJobs({ jobs }: { jobs: JobInfo[] }) {
             <span className="text-xs text-foreground/80">{j.type}</span>
             <span className="text-[10px] text-muted-foreground/50">{j.target}</span>
             {isSimmer && <span className="text-[9px] text-purple-400/60 ml-1">↗ view</span>}
-            <span className="text-[10px] text-muted-foreground/30 ml-auto">{timeSince(j.started_at || j.created_at)}</span>
+            <span className="text-[10px] text-muted-foreground/50 ml-auto">{timeSince(j.started_at || j.created_at)}</span>
           </div>
         );
         return isSimmer ? (
@@ -46,9 +46,9 @@ function ActiveJobs({ jobs }: { jobs: JobInfo[] }) {
           <div className={`flex items-center gap-3 px-3 py-1.5 text-xs ${isSimmer ? "cursor-pointer hover:bg-card/50 transition-colors rounded" : ""}`}>
             <Badge variant="outline" className={`text-[9px] ${jobStatusStyle[j.status]}`}>{j.status}</Badge>
             <span className="text-muted-foreground/60">{j.type}</span>
-            <span className="text-[10px] text-muted-foreground/30">{j.target}</span>
+            <span className="text-[10px] text-muted-foreground/50">{j.target}</span>
             {isSimmer && <span className="text-[9px] text-purple-400/40">↗</span>}
-            <span className="text-[10px] text-muted-foreground/20 ml-auto">{timeSince(j.completed_at || j.created_at)}</span>
+            <span className="text-[10px] text-muted-foreground/40 ml-auto">{timeSince(j.completed_at || j.created_at)}</span>
           </div>
         );
         return isSimmer ? (

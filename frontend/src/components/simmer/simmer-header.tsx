@@ -40,7 +40,7 @@ export function SimmerHeader({ job }: { job: SimmerJobDetail }) {
           <Link href="/pipeline" className="hover:text-muted-foreground transition-colors">jobs</Link>
           <span className="mx-1">/</span>
           <span className="text-muted-foreground/70">{shortId}</span>
-          <span className="mx-2 text-muted-foreground/30">·</span>
+          <span className="mx-2 text-muted-foreground/50">·</span>
           <span className="text-muted-foreground/60">{job.job_type}</span>
         </div>
         <div className="text-[10px] text-muted-foreground/40">
