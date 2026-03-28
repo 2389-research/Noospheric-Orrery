@@ -219,60 +219,174 @@ function drawBackground() {
 }
 
 // ── NEBULA (DOMAIN) RENDERER ───────────────────────────────────
+// ── NEBULA HELPER ──────────────────────────────────────────
+function colorAlpha(hex, a) {
+  const [r,g,b] = hexRGB(hex);
+  return rgba(r,g,b,a);
+}
+
 function drawNebula(n, highlighted) {
   const [r,g,b] = hexRGB(n.color);
   const bR = n.radius * clamp(n.birthScale, 0, 1);
-  const pulse = 0.5 + 0.5*sin(tick*0.008+n.phase);
   const isHov = n.id === (pinnedId ?? hoveredId);
   n._rot = (n._rot||0) + 0.0003;
 
-  // Gas layers — brighter when hovered
-  const gasBrightness = isHov ? 2.0 : 1.0;
+  const maturity = n._maturity || 0;
+  const isSimmering = n._simmering || false;
+
+  if (isSimmering) {
+    drawNebulaSimmering(n, bR, r, g, b);
+  } else if (maturity > 0) {
+    drawNebulaFormed(n, bR, r, g, b, maturity, isHov);
+  } else {
+    drawNebulaUnformed(n, bR, r, g, b, isHov);
+  }
+
+  // Label — always readable
+  const labelY = n.y + bR*2.2 + 12;
+  if (isHov) {
+    ctx.shadowBlur = 4; ctx.shadowColor = n.color;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${n.isSubdomain ? 10 : 12}px Courier New`; ctx.textAlign = 'center';
+    ctx.fillText(n.label, n.x, labelY);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = rgba(255,255,255,0.5);
+    ctx.font = '9px Courier New';
+    ctx.fillText(`${n.videoCount} docs`, n.x, labelY + 12);
+  } else if (highlighted) {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${n.isSubdomain ? 10 : 12}px Courier New`; ctx.textAlign = 'center';
+    ctx.fillText(n.label, n.x, labelY);
+    ctx.fillStyle = rgba(255,255,255,0.4);
+    ctx.font = '8px Courier New';
+    ctx.fillText(`${n.videoCount} docs`, n.x, labelY + 11);
+  } else {
+    const la = n.isSubdomain ? 0.7 : 0.9;
+    ctx.fillStyle = rgba(r,g,b,la);
+    ctx.font = `${n.isSubdomain ? 9 : 11}px Courier New`; ctx.textAlign = 'center';
+    ctx.fillText(n.label, n.x, labelY);
+    if (!n.isSubdomain) {
+      ctx.fillStyle = rgba(r,g,b,0.35);
+      ctx.font = '8px Courier New';
+      ctx.fillText(`${n.videoCount} docs`, n.x, labelY + 11);
+    }
+  }
+}
+
+// State 1: Unformed — wispy cloud, no core
+function drawNebulaUnformed(n, bR, r, g, b, isHov) {
+  const brightness = isHov ? 1.8 : 1.0;
   for (let i = 0; i < 4; i++) {
     const angle = n._rot*(1-i*0.15) + i*1.4;
-    const lr = bR*(2.2+i*0.5+pulse*0.3);
-    const ox = cos(angle)*bR*0.3, oy = sin(angle)*bR*0.25;
-    const a = (0.05-i*0.01)*clamp(n.birthScale,0,1)*gasBrightness;
+    const lr = bR*(1.8 - i*0.12);
+    const ox = cos(angle)*bR*0.12, oy = sin(angle)*bR*0.08;
+    const a = (0.025 - i*0.003) * clamp(n.birthScale,0,1) * brightness;
     const ng = ctx.createRadialGradient(n.x+ox,n.y+oy,0,n.x+ox,n.y+oy,lr);
     ng.addColorStop(0,rgba(r,g,b,a*2)); ng.addColorStop(0.4,rgba(r,g,b,a)); ng.addColorStop(1,'transparent');
     ctx.fillStyle = ng; ctx.fillRect(n.x+ox-lr,n.y+oy-lr,lr*2,lr*2);
   }
+}
 
-  // Core glow — stronger when hovered
-  const coreAlpha = isHov ? 0.45 : 0.25;
-  const cg = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,bR*0.8);
-  cg.addColorStop(0,rgba(r,g,b,coreAlpha)); cg.addColorStop(0.5,rgba(r,g,b,coreAlpha*0.3)); cg.addColorStop(1,'transparent');
-  ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(n.x,n.y,bR*0.8,0,TAU); ctx.fill();
+// State 2: Simmering — amber protostar with jets
+function drawNebulaSimmering(n, bR, r, g, b) {
+  // Cloud layers — domain color
+  for (let i = 0; i < 4; i++) {
+    const angle = n._rot*(1-i*0.15) + i*1.4;
+    const lr = bR*(1.6 - i*0.10);
+    const ox = cos(angle)*bR*0.10, oy = sin(angle)*bR*0.08;
+    const a = (0.035 - i*0.003) * clamp(n.birthScale,0,1);
+    const ng = ctx.createRadialGradient(n.x+ox,n.y+oy,0,n.x+ox,n.y+oy,lr);
+    ng.addColorStop(0,rgba(r,g,b,a*2)); ng.addColorStop(0.5,rgba(r,g,b,a)); ng.addColorStop(1,'transparent');
+    ctx.fillStyle = ng; ctx.fillRect(n.x+ox-lr,n.y+oy-lr,lr*2,lr*2);
+  }
 
-  // Label — always readable, brighter on hover
-  if (isHov) {
-    ctx.shadowBlur = 4;
-    ctx.shadowColor = n.color;
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `bold ${n.isSubdomain ? 10 : 12}px Courier New`; ctx.textAlign = 'center';
-    ctx.fillText(n.label, n.x, n.y + bR*2.2 + 12);
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = rgba(255,255,255,0.5);
-    ctx.font = '9px Courier New';
-    ctx.fillText(`${n.videoCount} docs`, n.x, n.y + bR*2.2 + 24);
-  } else if (highlighted) {
-    // Connected to hovered node — brighter than default
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `bold ${n.isSubdomain ? 10 : 12}px Courier New`; ctx.textAlign = 'center';
-    ctx.fillText(n.label, n.x, n.y + bR*2.2 + 12);
-    ctx.fillStyle = rgba(255,255,255,0.4);
-    ctx.font = '8px Courier New';
-    ctx.fillText(`${n.videoCount} docs`, n.x, n.y + bR*2.2 + 23);
-  } else {
-    const labelAlpha = n.isSubdomain ? 0.7 : 0.9;
-    const labelSize = n.isSubdomain ? 9 : 11;
-    ctx.fillStyle = rgba(r,g,b,labelAlpha);
-    ctx.font = `${labelSize}px Courier New`; ctx.textAlign = 'center';
-    ctx.fillText(n.label, n.x, n.y + bR*2.2 + 12);
-    if (!n.isSubdomain) {
-      ctx.fillStyle = rgba(r,g,b,0.35);
-      ctx.font = '8px Courier New';
-      ctx.fillText(`${n.videoCount} docs`, n.x, n.y + bR*2.2 + 23);
+  // Amber infrared cocoon
+  const pulse = 0.7 + 0.3*sin(tick*0.003);
+  const cocoon = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,bR*0.55);
+  cocoon.addColorStop(0,`rgba(255,160,60,${0.14*pulse})`);
+  cocoon.addColorStop(0.5,`rgba(220,100,30,${0.07*pulse})`);
+  cocoon.addColorStop(1,'rgba(180,60,10,0)');
+  ctx.fillStyle = cocoon; ctx.beginPath(); ctx.arc(n.x,n.y,bR*0.55,0,TAU); ctx.fill();
+
+  // Flickering protostar core
+  const flicker = 0.5 + 0.5*sin(tick*0.007 + sin(tick*0.013));
+  const coreR = bR*0.09*(0.8 + 0.2*flicker);
+
+  const halo = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,coreR*4);
+  halo.addColorStop(0,`rgba(255,180,80,${0.20*flicker})`);
+  halo.addColorStop(0.3,`rgba(255,120,40,${0.10*flicker})`);
+  halo.addColorStop(1,'rgba(200,80,20,0)');
+  ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(n.x,n.y,coreR*4,0,TAU); ctx.fill();
+
+  const core = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,coreR);
+  core.addColorStop(0,`rgba(255,240,200,${0.65*flicker})`);
+  core.addColorStop(0.5,`rgba(255,180,80,${0.40*flicker})`);
+  core.addColorStop(1,'rgba(255,120,40,0)');
+  ctx.fillStyle = core; ctx.beginPath(); ctx.arc(n.x,n.y,coreR,0,TAU); ctx.fill();
+
+  // Bipolar jets
+  const jetAngle = tick*0.0008;
+  const jetLen = bR*0.40;
+  const jetAlpha = 0.07*flicker;
+  for (let d = 0; d < 2; d++) {
+    const a = jetAngle + d*PI;
+    const jg = ctx.createLinearGradient(n.x,n.y, n.x+cos(a)*jetLen, n.y+sin(a)*jetLen);
+    jg.addColorStop(0,`rgba(255,200,100,${jetAlpha})`);
+    jg.addColorStop(1,'rgba(255,150,50,0)');
+    ctx.strokeStyle = jg; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(n.x,n.y); ctx.lineTo(n.x+cos(a)*jetLen, n.y+sin(a)*jetLen); ctx.stroke();
+  }
+}
+
+// State 3: Formed — settled cloud with star, spikes scale with maturity
+function drawNebulaFormed(n, bR, r, g, b, maturity, isHov) {
+  const bright = (0.4 + maturity*0.6) * (isHov ? 1.5 : 1.0);
+  const coreR = bR*(0.055 + maturity*0.035);
+  const breathe = 0.94 + 0.06*sin(tick*0.001);
+
+  // Settled cloud with inner clearing
+  for (let i = 0; i < 4; i++) {
+    const angle = n._rot*(1-i*0.15) + i*1.4;
+    const lr = bR*(1.5 - i*0.08);
+    const ox = cos(angle)*bR*0.07, oy = sin(angle)*bR*0.06;
+    const baseA = (0.045 + maturity*0.025 - i*0.005) * clamp(n.birthScale,0,1);
+    const ng = ctx.createRadialGradient(n.x+ox,n.y+oy,bR*0.25, n.x+ox,n.y+oy,lr);
+    ng.addColorStop(0,'transparent');
+    ng.addColorStop(0.15,rgba(r,g,b,baseA*1.5));
+    ng.addColorStop(0.5,rgba(r,g,b,baseA));
+    ng.addColorStop(1,'transparent');
+    ctx.fillStyle = ng; ctx.fillRect(n.x+ox-lr,n.y+oy-lr,lr*2,lr*2);
+  }
+
+  // Wide halo
+  const wh = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,bR*0.55);
+  wh.addColorStop(0,rgba(r,g,b,0.09*bright)); wh.addColorStop(0.4,rgba(r,g,b,0.04*bright)); wh.addColorStop(1,'transparent');
+  ctx.fillStyle = wh; ctx.beginPath(); ctx.arc(n.x,n.y,bR*0.55,0,TAU); ctx.fill();
+
+  // Inner halo
+  const ih = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,coreR*5);
+  ih.addColorStop(0,rgba(r,g,b,0.28*bright*breathe)); ih.addColorStop(0.4,rgba(r,g,b,0.13*bright)); ih.addColorStop(1,'transparent');
+  ctx.fillStyle = ih; ctx.beginPath(); ctx.arc(n.x,n.y,coreR*5,0,TAU); ctx.fill();
+
+  // Star point — white center
+  const sg = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,coreR);
+  sg.addColorStop(0,`rgba(255,255,255,${0.92*bright*breathe})`);
+  sg.addColorStop(0.3,rgba(r,g,b,0.7*bright));
+  sg.addColorStop(1,'transparent');
+  ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(n.x,n.y,coreR,0,TAU); ctx.fill();
+
+  // Diffraction spikes at maturity >= 0.5
+  if (maturity >= 0.5) {
+    const spikeLen = coreR*(4 + maturity*10);
+    const spikeA = bright*0.28*breathe;
+    for (let s = 0; s < 4; s++) {
+      const a = s*PI/2;
+      const x2 = n.x+cos(a)*spikeLen, y2 = n.y+sin(a)*spikeLen;
+      const spg = ctx.createLinearGradient(n.x,n.y,x2,y2);
+      spg.addColorStop(0,`rgba(255,255,255,${spikeA})`);
+      spg.addColorStop(1,'transparent');
+      ctx.strokeStyle = spg; ctx.lineWidth = 0.8;
+      ctx.beginPath(); ctx.moveTo(n.x,n.y); ctx.lineTo(x2,y2); ctx.stroke();
     }
   }
 }
@@ -854,6 +968,21 @@ fetch((window.API_URL || 'http://localhost:8100') + '/graph').then(r=>r.json()).
     const radius = isSub ? 15 + sqrt(vc) * 5 : 30 + sqrt(vc) * 8;
     const label = isSub ? name.split('/').pop() : name;
 
+    // Compute maturity from spec data
+    const specs = data.domain_specs || {};
+    const hasSpec = specs[name] && specs[name].spec_version > 0;
+    const allPaths = Object.keys(data.domain_positions);
+    const subdoms = allPaths.filter(p => p.startsWith(name+'/') && p !== name);
+    let maturity = 0;
+    if (subdoms.length === 0) {
+      maturity = hasSpec ? 1.0 : 0.0;
+    } else {
+      const subWithSpec = subdoms.filter(p => specs[p] && specs[p].spec_version > 0).length;
+      const subCoverage = subWithSpec / subdoms.length;
+      maturity = hasSpec ? 0.5 + subCoverage*0.5 : subCoverage*0.4;
+    }
+    const isSimmering = (data.active_simmers || []).includes(name);
+
     nodes.set('dom:'+name, {
       id:'dom:'+name, kind:'domain', label,
       fullPath: name, color, radius,
@@ -862,6 +991,8 @@ fetch((window.API_URL || 'http://localhost:8100') + '/graph').then(r=>r.json()).
       phase:random()*TAU,
       videoCount:vc, _rot:random()*TAU,
       isSubdomain: isSub,
+      _maturity: maturity,
+      _simmering: isSimmering,
     });
   }
 
