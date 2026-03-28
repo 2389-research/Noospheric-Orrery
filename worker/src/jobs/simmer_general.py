@@ -23,31 +23,102 @@ Rules:
 """
 
 
-def _make_iteration_recorder(job_id: str, phase: str, db_path: str):
-    """Create an on_iteration callback that stores iteration data in the DB."""
+async def _parse_judgment_file(judgment_text: str, seed_scores: dict[str, int], settings) -> list[dict]:
+    """Use Haiku to extract per-criterion details from a judgment file."""
+    from anthropic import AsyncAnthropicBedrock
+
+    client = AsyncAnthropicBedrock(
+        aws_access_key=settings.aws_access_key,
+        aws_secret_key=settings.aws_secret_key,
+        aws_region=settings.aws_region,
+    )
+
+    prompt = f"""Extract per-criterion details from this judge output as JSON.
+
+Seed scores for reference: {json.dumps(seed_scores)}
+
+Judge output:
+{judgment_text[:3000]}
+
+Return a JSON array only:
+[
+  {{
+    "criterion": "criterion_name",
+    "score": 8,
+    "seed_score": 6,
+    "evidence": "what the judge observed (1-2 sentences)",
+    "improve": "what would make it better (1-2 sentences)"
+  }}
+]
+
+If you can't parse a criterion, skip it. Return [] if unparseable."""
+
+    try:
+        response = await client.messages.create(
+            model=settings.extraction_model,
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.content[0].text
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+        return json.loads(text)
+    except Exception as e:
+        print(f"  Judgment parse failed: {e}", flush=True)
+        return []
+
+
+def _make_iteration_recorder(job_id: str, phase: str, db_path: str, output_dir: str):
+    """Create an on_iteration callback that stores iteration data + criterion details."""
+    seed_scores: dict[str, int] = {}
+
     async def on_iteration(record, trajectory, trajectory_table):
+        nonlocal seed_scores
+
+        # Track seed scores from iteration 0
+        if record.iteration == 0 or not seed_scores:
+            seed_scores = dict(record.scores)
+
+        iteration_id = str(uuid.uuid4())
         conn = get_connection(db_path)
         try:
             conn.execute(
                 "INSERT INTO simmer_iterations (id, job_id, phase, iteration, scores, composite, key_change, asi, judge_mode, regressed, candidate_preview) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    str(uuid.uuid4()),
-                    job_id,
-                    phase,
-                    record.iteration,
-                    json.dumps(record.scores),
-                    record.composite,
-                    record.key_change,
-                    record.asi,
-                    record.judge_mode,
-                    record.regressed,
-                    None,  # candidate_preview filled from trajectory if needed
+                    iteration_id, job_id, phase, record.iteration,
+                    json.dumps(record.scores), record.composite,
+                    record.key_change, record.asi, record.judge_mode,
+                    record.regressed, None,
                 ),
             )
             conn.commit()
         finally:
             conn.close()
+
+        # Try to read and parse judgment file
+        judgment_path = Path(output_dir) / f"iteration-{record.iteration}-judgment.md"
+        if judgment_path.exists() and record.iteration > 0:
+            judgment_text = judgment_path.read_text()
+            settings = get_settings()
+            details = await _parse_judgment_file(judgment_text, seed_scores, settings)
+
+            if details:
+                conn = get_connection(db_path)
+                try:
+                    for d in details:
+                        conn.execute(
+                            "INSERT INTO simmer_criterion_details (id, iteration_id, criterion, score, seed_score, evidence, improve) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (str(uuid.uuid4()), iteration_id, d.get("criterion", ""),
+                             d.get("score", 0), d.get("seed_score", 0),
+                             d.get("evidence", ""), d.get("improve", "")),
+                        )
+                    conn.commit()
+                    print(f"  [{phase}] iter {record.iteration}: parsed {len(details)} criterion details", flush=True)
+                finally:
+                    conn.close()
+
         print(f"  [{phase}] iteration {record.iteration}: {record.composite}/10 — {record.key_change}", flush=True)
     return on_iteration
 
@@ -101,7 +172,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         generator_model="claude-sonnet-4-6",
         judge_model="claude-sonnet-4-6",
         background=f"Sample documents are in {sample_dir}. Read them to understand what entity types exist in this corpus.",
-        on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path),
+        on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(specs_dir / "general_golden")),
         **bedrock_kwargs,
     )
 
@@ -121,7 +192,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         judge_model="claude-sonnet-4-6",
         clerk_model="claude-haiku-4-5",
         background=f"This spec will be executed by Haiku. Golden set: {golden_result.best_candidate[:2000]}",
-        on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path),
+        on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path, str(specs_dir / "general_spec")),
         **bedrock_kwargs,
     )
 
