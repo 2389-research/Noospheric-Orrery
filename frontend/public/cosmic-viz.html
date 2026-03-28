@@ -412,11 +412,11 @@ function drawStar(n, state) {
 
   // Aura
   const ag = ctx.createRadialGradient(n.x,n.y,bR*0.2,n.x,n.y,bR*(3+pulse));
-  ag.addColorStop(0,rgba(r,g,b,0.08)); ag.addColorStop(1,'transparent');
+  ag.addColorStop(0,rgba(r,g,b,0.12)); ag.addColorStop(1,rgba(r,g,b,0));
   ctx.fillStyle = ag; ctx.beginPath(); ctx.arc(n.x,n.y,bR*(3+pulse),0,TAU); ctx.fill();
 
   // Core
-  ctx.shadowBlur = isHov ? 6 : isConnected ? 4 : 3;
+  ctx.shadowBlur = isHov ? 8 : isConnected ? 5 : 4;
   ctx.shadowColor = n.color;
   const cg = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,bR);
   cg.addColorStop(0,lighten(n.color,0.6)); cg.addColorStop(0.5,n.color); cg.addColorStop(1,darken(n.color,0.3));
