@@ -17,6 +17,7 @@ interface EntitySidebarProps {
   onHover: (id: string | null) => void;
   onPin: (id: string) => void;
   pinnedId: string | null;
+  onNavigate?: (id: string) => void;
 }
 
 function OccurrenceMinimap({
@@ -55,9 +56,10 @@ interface SidebarRowProps {
   onHover: (id: string | null) => void;
   onPin: (id: string) => void;
   pinnedId: string | null;
+  onNavigate?: (id: string) => void;
 }
 
-function SidebarRow({ entity, isActive, onHover, onPin, pinnedId }: SidebarRowProps) {
+function SidebarRow({ entity, isActive, onHover, onPin, pinnedId, onNavigate }: SidebarRowProps) {
   const colors = ENTITY_COLORS[entity.type] ?? ENTITY_COLORS["Concept"];
 
   return (
@@ -70,7 +72,8 @@ function SidebarRow({ entity, isActive, onHover, onPin, pinnedId }: SidebarRowPr
       onMouseEnter={() => onHover(entity.id)}
       onMouseLeave={() => onHover(null)}
       onClick={() => onPin(entity.id)}
-      title={entity.canonical_name}
+      onDoubleClick={() => onNavigate?.(entity.id)}
+      title={`${entity.canonical_name} — double-click to view star graph`}
     >
       {/* Name + badge */}
       <div className="flex-1 min-w-0 flex items-center gap-1.5">
@@ -100,6 +103,7 @@ export function EntitySidebar({
   onHover,
   onPin,
   pinnedId,
+  onNavigate,
 }: EntitySidebarProps) {
   // Group entities by type in fixed order
   const grouped: { type: string; entities: SidebarEntity[] }[] = TYPE_ORDER.map((type) => ({
@@ -151,6 +155,7 @@ export function EntitySidebar({
                   onHover={onHover}
                   onPin={onPin}
                   pinnedId={pinnedId}
+                  onNavigate={onNavigate}
                 />
               ))}
             </div>

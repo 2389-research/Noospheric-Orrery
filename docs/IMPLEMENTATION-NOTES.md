@@ -93,6 +93,51 @@ pip install -e /path/to/simmer-sdk/
 ### Frontend Next.js 16
 This is NOT the Next.js you know. Read `frontend/AGENTS.md`. Breaking changes from older versions. Use `useParams()` from `next/navigation`, not `useRouter()`.
 
+## Four Visualization Views
+
+Currently implemented as separate tabs (not unified zoom transitions yet):
+
+### Galaxy View (`/viz`, accent: blue/cyan)
+- All domains as nebulae (3 states: unformed, simmering, formed)
+- Cluster clouds from UMAP proximity
+- Trade routes with search-triggered pulse animation
+- Pulses only fire on search — no ambient random pulses
+- Search glow cascade: entities flash → domains brighten → route pulses travel → arrival ripple
+
+### Sector View (`/viz/sector?domain=path`, accent: amber)
+- Focused cluster of domains with richer labels (spec version, doc count, entity count)
+- Trade route weight labels on routes ≥ 20
+- Top 40 entities as small stars, bridge entities with halo rings
+- Edge domains from connected clusters at periphery
+- Hover: tooltips on domains, routes, entities
+
+### System View (`/viz/system?domain=path`, accent: purple)
+- Single domain core as large nebula filling viewport
+- All domain entities orbiting, sized by sqrt(source_count)
+- Ghost domains as dim attractors evenly distributed around circle (gravitational pull)
+- Entity positions: rank-based radius (important near core) + pull toward other domains for bridge entities
+- Top 30% always labeled, rest on hover
+- Known issue: entity band distribution still needs tuning
+
+### Star View (`/viz/star?entity=ID`, accent: teal)
+- Central entity as bright star
+- Inner ring: documents mentioning this entity
+- Outer ring: co-occurring entities positioned near their shared docs
+- 2-hop graph: entity ↔ doc ↔ co-entity (no direct entity↔entity lines)
+- API: `GET /entities/{id}/star-graph` returns full 2-hop graph in one call
+- Click doc → opens ReaderPane in left panel with entity highlights
+- Double-click entity (sidebar or inline text) → navigates star view to that entity
+- Click co-entity → reloads star view centered on that entity
+- Search cascade: docs flash (shuffled, top 10) → pulses → center → pulses → co-entities
+- Domain-type entities filtered from co-entity ring
+
+### Color Accents by View
+Each view has a distinct color accent to help orientation:
+- Galaxy: blue/cyan (`rgba(100,180,255,...)`)
+- Sector: amber (`rgba(200,120,80,...)`)
+- System: purple (`rgba(160,130,200,...)`)
+- Star: teal (`rgba(100,200,180,...)`)
+
 ## What NOT to Change
 
 ### The postMessage contract
@@ -195,20 +240,30 @@ frontend/
     pipeline/page.tsx  — Pipeline dashboard
     entities/page.tsx  — Entity list
     entities/[id]/page.tsx — Entity detail with snippets
-    viz/page.tsx       — Galaxy viz (iframe + panel + search bar + WebSocket)
-    simmer/[id]/page.tsx — Simmer progress with trajectory chart
+    viz/page.tsx           — Galaxy viz (iframe + panel + search bar + WebSocket)
+    viz/sector/page.tsx    — Sector viz (domain cluster detail, amber accent)
+    viz/system/page.tsx    — System viz (single domain + orbiting entities, purple accent)
+    viz/star/page.tsx      — Star viz (entity 2-hop graph + ReaderPane panel, teal accent)
+    simmer/[id]/page.tsx   — Simmer progress with trajectory chart
     extraction/[id]/page.tsx — Batch extraction results + document reader
   src/components/
     galaxy/            — GalaxyPanel, entity/domain/trade route panels, nav trail
-    reader/            — Document reader with entity highlights
+    reader/            — Document reader with entity highlights (onNavigateEntity for star view)
     simmer/            — Simmer header, phase tabs, iteration list, criterion cards
     extraction/        — Extraction header, stat strip, doc list, entity panel
   public/
     cosmic-viz.html    — Old v1 galaxy viz (self-contained, still works)
     viz/               — New v2 galaxy viz (modular ES modules)
-      index.html       — Entry point
-      core/            — camera.js, state.js, utils.js
-      renderers/       — galaxy.js (sector.js, system.js, star.js TBD)
+      index.html       — Galaxy view entry point (zoom < 0.35)
+      sector.html      — Sector view entry point (?domain=path or ?cluster=N)
+      system.html      — System view entry point (?domain=path, auto-picks if empty)
+      star.html         — Star view entry point (?entity=ID)
+      core/            — camera.js, state.js, utils.js (shared across all views)
+      renderers/
+        galaxy.js      — Cluster clouds, domain nebulae, trade routes, entity stars
+        sector.js      — Sector domain nebulae, weighted routes, key entities, edge domains
+        system.js      — Domain core nebula, orbiting entity stars with type colors
+        star.js        — Central star, document nodes, co-entity nodes, 2-hop connections
 
 docs/
   ARCHITECTURE.md      — Full system architecture reference

@@ -19,6 +19,7 @@ interface DocumentBodyProps {
   onPinEntity: (id: string) => void;
   onTooltipMove: (id: string, x: number, y: number) => void;
   onTooltipHide: () => void;
+  onNavigateEntity?: (id: string) => void;
 }
 
 function getHighlightStyles(
@@ -65,6 +66,7 @@ export function DocumentBody({
   onPinEntity,
   onTooltipMove,
   onTooltipHide,
+  onNavigateEntity,
 }: DocumentBodyProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -169,6 +171,9 @@ export function DocumentBody({
               }}
               onClick={() => {
                 onPinEntity(seg.entity_id!);
+              }}
+              onDoubleClick={() => {
+                onNavigateEntity?.(seg.entity_id!);
               }}
             >
               {seg.text}

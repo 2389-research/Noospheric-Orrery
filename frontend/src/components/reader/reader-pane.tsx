@@ -10,6 +10,7 @@ import type { TooltipEntity } from "./reader-tooltip";
 interface ReaderPaneProps {
   documentId: string;
   onClose: () => void;
+  onNavigateEntity?: (entityId: string) => void;
 }
 
 interface ReaderData {
@@ -42,7 +43,7 @@ interface TooltipState {
   y: number;
 }
 
-export function ReaderPane({ documentId, onClose }: ReaderPaneProps) {
+export function ReaderPane({ documentId, onClose, onNavigateEntity }: ReaderPaneProps) {
   const [data, setData] = useState<ReaderData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -190,6 +191,7 @@ export function ReaderPane({ documentId, onClose }: ReaderPaneProps) {
             onHover={handleSidebarHover}
             onPin={handleSidebarPin}
             pinnedId={pinned}
+            onNavigate={onNavigateEntity}
           />
         </div>
 
@@ -219,6 +221,7 @@ export function ReaderPane({ documentId, onClose }: ReaderPaneProps) {
               onPinEntity={handlePinEntity}
               onTooltipMove={handleTooltipMove}
               onTooltipHide={handleTooltipHide}
+              onNavigateEntity={onNavigateEntity}
             />
           </div>
         </div>
