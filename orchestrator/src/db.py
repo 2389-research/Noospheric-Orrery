@@ -142,6 +142,7 @@ CREATE TABLE IF NOT EXISTS simmer_criterion_details (
     improve TEXT
 );
 
+
 CREATE TABLE IF NOT EXISTS specs (
     id TEXT PRIMARY KEY,
     domain_path TEXT,

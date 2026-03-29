@@ -29,6 +29,7 @@ from .routes.normalize import router as normalize_router
 from .routes.subdomains import router as subdomains_router
 from .routes.graph import router as graph_router
 from .routes.reader import router as reader_router
+from .routes.search import router as search_router
 
 app.include_router(ingest_router)
 app.include_router(documents_router)
@@ -41,6 +42,7 @@ app.include_router(normalize_router)
 app.include_router(subdomains_router)
 app.include_router(graph_router)
 app.include_router(reader_router)
+app.include_router(search_router)
 
 @app.get("/health")
 def health():
