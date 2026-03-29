@@ -92,15 +92,24 @@ async def handle_tool_call(name: str, arguments: dict) -> str:
         if name == "search_knowledge_graph":
             query = arguments["query"]
             top_k = arguments.get("top_k", 15)
-            result = await call_api(f"/search?q={query}&top_k={top_k}")
+            expand = arguments.get("expand_query", True)
+            result = await call_api(f"/search?q={query}&top_k={top_k}&expand={'true' if expand else 'false'}")
             # Format for the agent
-            lines = [f"Search: \"{result['query']}\" — {result['total_entities']} entities, {result['total_chunks']} chunks\n"]
-            lines.append("Top entities:")
+            lines = [f"Search: \"{result['query']}\" — {result['total_entities']} entities, {result['total_chunks']} chunks"]
+            if result.get("sub_queries_used"):
+                lines.append(f"Sub-queries: {', '.join(result['sub_queries_used'])}")
+            lines.append("\nTop entities:")
             for e in result["entities"][:10]:
-                lines.append(f"  • {e['name']} ({e['type']}) — {e['source_count']} docs, score {e['score']:.4f}")
+                paths = ",".join(e.get("paths", []))
+                hits = e.get("appearances", 0)
+                lines.append(f"  • {e['name']} ({e['type']}) — {e.get('source_count', 0)} docs, score {e['score']:.4f} [{hits} sub-query hits, via {paths}]")
             lines.append("\nRelevant excerpts:")
             for c in result["chunks"][:5]:
-                lines.append(f"  [{c['document_title']}]: {c['text'][:200]}")
+                overlap = c.get("entity_overlap", 0)
+                matching = c.get("matching_entities", "")
+                lines.append(f"  [{c['document_title']}] (entities:{overlap}): {c['text'][:200]}")
+                if matching:
+                    lines.append(f"    entities in chunk: {matching}")
             return "\n".join(lines)
 
         elif name == "get_entity":
