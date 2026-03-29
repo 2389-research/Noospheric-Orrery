@@ -252,37 +252,75 @@ export class WorldState {
     }
   }
 
-  /** Trigger search glow on entities */
+  /** Trigger search glow — cascaded timing per animation spec */
   triggerSearchGlow(entityNames) {
-    const now = performance.now();
-    let idx = 0;
+    const hitEntities = [];
+    const hitDomainPaths = new Set();
 
+    // Find hit entities (preserve search ranking order)
     for (const name of entityNames) {
       const nameLower = name.toLowerCase();
       for (const [, e] of this.entities) {
         if (e.label.toLowerCase() === nameLower) {
-          e.activityGlow = Math.min(1.0, e.activityGlow + 0.7);
-          idx++;
+          hitEntities.push(e);
+          if (e.domainWeights) {
+            for (const path of Object.keys(e.domainWeights)) hitDomainPaths.add(path);
+          }
           break;
         }
       }
     }
 
-    // Brighten affected domains
-    const hitDomains = new Set();
-    for (const name of entityNames) {
-      for (const [, e] of this.entities) {
-        if (e.label.toLowerCase() === name.toLowerCase() && e.domainWeights) {
-          for (const path of Object.keys(e.domainWeights)) {
-            hitDomains.add(path);
+    if (!hitEntities.length) return;
+
+    // t=0: Flash entities (+0.85, staggered by rank)
+    hitEntities.forEach((e, i) => {
+      setTimeout(() => {
+        e.activityGlow = Math.min(1.0, e.activityGlow + 0.85);
+      }, i * 60);
+    });
+
+    // t=80ms: Brighten domains (+0.7)
+    setTimeout(() => {
+      for (const path of hitDomainPaths) {
+        const dom = this.domains.get(path);
+        if (dom) dom.activityGlow = Math.min(1.0, dom.activityGlow + 0.7);
+      }
+    }, 80);
+
+    // t=250ms: Fire route pulses between hit domains
+    setTimeout(() => {
+      // Score routes by hit density
+      const domainHitCount = {};
+      for (const e of hitEntities) {
+        if (e.domainWeights) {
+          for (const [path, w] of Object.entries(e.domainWeights)) {
+            domainHitCount[path] = (domainHitCount[path] || 0) + w;
           }
         }
       }
-    }
 
-    for (const path of hitDomains) {
-      const dom = this.domains.get(path);
-      if (dom) dom.activityGlow = Math.min(1.0, dom.activityGlow + 0.5);
-    }
+      const candidates = [];
+      for (const route of this.tradeRoutes) {
+        if (hitDomainPaths.has(route.source) && hitDomainPaths.has(route.target)) {
+          const score = (domainHitCount[route.source] || 0) + (domainHitCount[route.target] || 0);
+          candidates.push({ route, score });
+        }
+      }
+      candidates.sort((a, b) => b.score - a.score);
+
+      candidates.forEach((c, i) => {
+        c.route.pulseStart = performance.now() + i * 150;
+        c.route.pulseDuration = 900;
+      });
+    }, 250);
+
+    // t=900ms: Arrival — destination domains get secondary pulse
+    setTimeout(() => {
+      for (const path of hitDomainPaths) {
+        const dom = this.domains.get(path);
+        if (dom) dom.activityGlow = Math.min(1.0, dom.activityGlow + 0.4);
+      }
+    }, 900);
   }
 }
