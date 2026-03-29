@@ -44,10 +44,11 @@ app.include_router(graph_router)
 app.include_router(reader_router)
 app.include_router(search_router)
 
+from fastapi import WebSocket as WS
 from .broadcast import ws_endpoint
 
 @app.websocket("/ws")
-async def websocket_route(websocket):
+async def websocket_route(websocket: WS):
     await ws_endpoint(websocket)
 
 @app.get("/health")
