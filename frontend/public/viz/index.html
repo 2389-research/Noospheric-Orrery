@@ -17,7 +17,7 @@ canvas:active { cursor: grabbing; }
 #tooltip .tt-name { color: #eef0f8; font-size: 13px; font-weight: bold; margin-bottom: 2px; }
 #tooltip .tt-sub { color: rgba(140,200,255,0.65); font-size: 11px; line-height: 1.5; }
 #hud {
-  position: fixed; top: 12px; left: 12px; z-index: 10;
+  position: fixed; top: 36px; left: 14px; z-index: 10;
   font-size: 10px; color: rgba(100,180,255,0.5);
 }
 #zoom-level {
@@ -36,7 +36,7 @@ canvas:active { cursor: grabbing; }
 import { Camera } from './core/camera.js';
 import { WorldState } from './core/state.js';
 import { getCurrentLevel, WORLD_W, WORLD_H } from './core/utils.js';
-import { drawBackground, drawClusterCloud, drawDomainNebula, drawTradeRoutes, drawEntityStars } from './renderers/galaxy.js';
+import { drawBackground, drawClusterCloud, drawDomainNebula, drawDomainSectorDetail, drawTradeRoutes, drawEntityStars, drawRouteWeightLabels, drawNeighborhoodLines, getNeighborhood } from './renderers/galaxy.js';
 
 const canvas = document.getElementById('c');
 const camera = new Camera();
@@ -55,11 +55,42 @@ fetch(`${API_URL}/graph`).then(r => r.json()).then(data => {
   updateHUD();
 });
 
-// Listen for search glow
+// Listen for messages from parent
 window.addEventListener('message', e => {
   if (e.data?.type === 'search_result' && e.data.entities) {
-    console.log('Search glow:', e.data.entities.length, 'entities', e.data.entities.slice(0,3));
     state.triggerSearchGlow(e.data.entities);
+  }
+  // Fly to a specific entity or domain (from search results click)
+  if (e.data?.type === 'fly_to_entity') {
+    for (const [, ent] of state.entities) {
+      if (ent.id === e.data.entityId) {
+        camera.flyTo(ent.x, ent.y, 0.8, 1000);
+        state.pinnedId = ent.id;
+        window.parent.postMessage({
+          type: 'node_selected', nodeType: 'entity',
+          data: { id: ent.id, name: ent.label, entityType: ent.type, source_count: ent.sourceCount, domain_weights: ent.domainWeights }
+        }, '*');
+        break;
+      }
+    }
+  }
+  if (e.data?.type === 'fly_to_domain') {
+    for (const [, dom] of state.domains) {
+      if (dom.path === e.data.domainPath) {
+        camera.flyTo(dom.x, dom.y, 0.6, 1000);
+        state.pinnedId = dom.id;
+        window.parent.postMessage({
+          type: 'node_selected', nodeType: 'domain',
+          data: { path: dom.path, name: dom.label, document_count: dom.docCount }
+        }, '*');
+        break;
+      }
+    }
+  }
+  // Reset to galaxy view
+  if (e.data?.type === 'reset_galaxy') {
+    camera.flyTo(WORLD_W / 2, WORLD_H / 2, 0.18, 1200);
+    state.pinnedId = null;
   }
 });
 
@@ -105,15 +136,10 @@ canvas.addEventListener('mouseup', e => {
     const hit = hitTest(w.x, w.y);
 
     if (hit) {
+      // Single-click = select/show neighborhood (no fly for domains or entities)
+      // Clusters still fly on single click
       if (hit.kind === 'cluster') {
-        // Fly to cluster
         camera.flyTo(hit.centroidX, hit.centroidY, 0.5, 800);
-      } else if (hit.kind === 'domain') {
-        // Fly to domain
-        camera.flyTo(hit.x, hit.y, 1.0, 800);
-      } else if (hit.kind === 'entity') {
-        // Fly to entity
-        camera.flyTo(hit.x, hit.y, 2.0, 800);
       }
 
       // Pin + postMessage
@@ -137,16 +163,36 @@ canvas.addEventListener('mouseup', e => {
   }
 });
 
+// Double-click: domain → fly to it, entity → enter star view
+canvas.addEventListener('dblclick', e => {
+  W = canvas.width / devicePixelRatio;
+  H = canvas.height / devicePixelRatio;
+  const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
+  const hit = hitTest(w.x, w.y);
+  if (hit && hit.kind === 'entity') {
+    window.parent.postMessage({
+      type: 'enter_star', entityId: hit.id, entityName: hit.label,
+    }, '*');
+  } else if (hit && hit.kind === 'domain') {
+    camera.flyTo(hit.x, hit.y, 0.6, 800);
+  }
+});
+
 canvas.addEventListener('wheel', e => camera.handleWheel(e), { passive: false });
 
 function hitTest(wx, wy) {
   const level = camera.level;
+  const sectorZoom = camera.zoom >= 0.5;
+  const deepZoom = camera.zoom >= 0.75;
+  const minSource = deepZoom ? 1 : sectorZoom ? 3 : 5;
 
-  // Entities (if visible at this zoom)
-  if (camera.zoom > 0.15) {
+  // Entities (only at sector zoom+, only visible ones)
+  if (camera.zoom >= 0.35) {
     for (const [, e] of state.entities) {
+      if (e.sourceCount < minSource && e.activityGlow < 0.1) continue;
       const dist = Math.hypot(wx - e.x, wy - e.y);
-      if (dist < (e.radius + 6) / Math.min(camera.zoom, 1)) return e;
+      const hitR = e.radius * 1.2 + 8;
+      if (dist < hitR) return e;
     }
   }
 
@@ -195,6 +241,7 @@ function frame() {
   camera.applyTransform(ctx, W, H);
 
   const level = getCurrentLevel(camera.zoom);
+  const neighborhood = getNeighborhood(state);
 
   // Cluster clouds (galaxy view)
   for (const cluster of state.clusters) {
@@ -202,15 +249,27 @@ function frame() {
   }
 
   // Trade routes (faint at galaxy, stronger at sector)
-  drawTradeRoutes(ctx, state);
+  drawTradeRoutes(ctx, state, camera);
 
-  // Domain nebulae
+  // Domain nebulae — brighter at sector zoom, dim when not in neighborhood
+  const activeId = state.pinnedId ?? state.hoveredId;
   for (const [, dom] of state.domains) {
-    drawDomainNebula(ctx, dom, state.tick);
+    dom._hoveredId = state.hoveredId;
+    dom._pinnedId = state.pinnedId;
+    drawDomainNebula(ctx, dom, state.tick, camera, neighborhood);
+    if (camera.zoom >= 0.45) {
+      drawDomainSectorDetail(ctx, dom);
+    }
   }
 
-  // Entity stars
-  drawEntityStars(ctx, state, camera);
+  // Neighborhood highlight lines (when entity/domain selected)
+  drawNeighborhoodLines(ctx, state, camera);
+
+  // Route weight labels (sector zoom)
+  drawRouteWeightLabels(ctx, state, camera);
+
+  // Entity stars — neighborhood members always visible, non-members dim
+  drawEntityStars(ctx, state, camera, W, H, neighborhood);
 
   ctx.restore();
 

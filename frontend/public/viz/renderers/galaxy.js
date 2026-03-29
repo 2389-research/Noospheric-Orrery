@@ -56,11 +56,15 @@ export function drawClusterCloud(ctx, cluster, state) {
 }
 
 /** Draw a domain nebula (3 states: unformed, simmering, formed) */
-export function drawDomainNebula(ctx, dom, tick) {
+export function drawDomainNebula(ctx, dom, tick, camera, neighborhood) {
   const [r, g, b] = hexRGB(dom.color);
   const bR = dom.radius * clamp(dom.birthScale, 0, 1);
   const act = dom.activityGlow;
-  const brightness = 1 + act * 2.2; // match reference boost
+  const zoomBright = camera ? clamp((camera.zoom - 0.18) / 0.4, 0, 0.6) : 0;
+  // Dim non-neighborhood domains when something is selected
+  const hasNb = neighborhood && neighborhood.size > 0;
+  const dimFactor = hasNb && !neighborhood.has(dom.id) ? 0.3 : 1.0;
+  const brightness = (1 + act * 2.2 + zoomBright) * dimFactor;
 
   if (dom.simmering) {
     _drawSimmering(ctx, dom, bR, r, g, b, tick, brightness);
@@ -80,9 +84,21 @@ export function drawDomainNebula(ctx, dom, tick) {
     ctx.stroke();
   }
 
-  // Label
+  // Hover/selected ring — dashed outline so you know you're on one
+  const isActive = dom.id === dom._hoveredId || dom.id === dom._pinnedId;
+  if (isActive) {
+    ctx.strokeStyle = rgba(r, g, b, 0.35);
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 10]);
+    ctx.beginPath();
+    ctx.arc(dom.x, dom.y, bR * 1.4, 0, TAU);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Label — closer to core so it's clear what it belongs to
   const labelA = 0.2 + act * 0.6 + (dom.maturity > 0 ? 0.1 : 0);
-  const labelY = dom.y + bR * 1.8 + 20;
+  const labelY = dom.y + bR * 1.1 + 12;
   ctx.fillStyle = rgba(r, g, b, min(1, labelA + 0.7));
   ctx.font = `${dom.isSubdomain ? 28 : 36}px 'Courier New', monospace`;
   ctx.textAlign = 'center';
@@ -90,6 +106,101 @@ export function drawDomainNebula(ctx, dom, tick) {
   ctx.fillStyle = rgba(r, g, b, 0.4);
   ctx.font = "24px 'Courier New', monospace";
   ctx.fillText(`${dom.docCount} docs`, dom.x, labelY + 30);
+}
+
+/** Compute neighborhood set for an active node */
+export function getNeighborhood(state) {
+  const activeId = state.pinnedId ?? state.hoveredId;
+  if (!activeId) return null;
+
+  const ids = new Set([activeId]);
+
+  // Find active node
+  let activeNode = null;
+  for (const [, e] of state.entities) {
+    if (e.id === activeId) { activeNode = e; break; }
+  }
+  if (!activeNode) {
+    for (const [, d] of state.domains) {
+      if (d.id === activeId) { activeNode = d; break; }
+    }
+  }
+  if (!activeNode) return null;
+
+  if (activeNode.kind === 'entity') {
+    // Entity selected: neighborhood = its parent domains only
+    const dw = activeNode.domainWeights || {};
+    for (const path of Object.keys(dw)) {
+      const dom = state.domains.get(path);
+      if (dom) ids.add(dom.id);
+    }
+  } else if (activeNode.kind === 'domain') {
+    // Add ALL entities in this domain — brightening shows the domain's reach
+    for (const [, e] of state.entities) {
+      if (e.domainWeights?.[activeNode.path]) ids.add(e.id);
+    }
+  }
+
+  return ids;
+}
+
+/** Draw neighborhood highlight lines when entity/domain is selected. */
+export function drawNeighborhoodLines(ctx, state, camera) {
+  const activeId = state.pinnedId ?? state.hoveredId;
+  if (!activeId) return;
+
+  let activeNode = null;
+  for (const [, e] of state.entities) {
+    if (e.id === activeId) { activeNode = e; break; }
+  }
+  if (!activeNode) {
+    for (const [, d] of state.domains) {
+      if (d.id === activeId) { activeNode = d; break; }
+    }
+  }
+  if (!activeNode) return;
+
+  if (activeNode.kind === 'entity') {
+    const dw = activeNode.domainWeights || {};
+
+    // Lines to parent domains only — entity↔entity belongs in star view
+    for (const [path] of Object.entries(dw)) {
+      const dom = state.domains.get(path);
+      if (!dom) continue;
+      ctx.strokeStyle = rgba(100, 160, 220, 0.3);
+      ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      ctx.moveTo(activeNode.x, activeNode.y);
+      ctx.lineTo(dom.x, dom.y);
+      ctx.stroke();
+    }
+  } else if (activeNode.kind === 'domain') {
+    // Lines to ALL entities in this domain — subtle since there are many
+    for (const [, e] of state.entities) {
+      if (!e.domainWeights?.[activeNode.path]) continue;
+      ctx.strokeStyle = rgba(100, 160, 220, 0.15);
+      ctx.lineWidth = 0.4;
+      ctx.beginPath();
+      ctx.moveTo(activeNode.x, activeNode.y);
+      ctx.lineTo(e.x, e.y);
+      ctx.stroke();
+    }
+  }
+}
+
+/** Draw sector-level metadata for a domain (only at zoom > 0.35) */
+export function drawDomainSectorDetail(ctx, dom) {
+  const [r, g, b] = hexRGB(dom.color);
+  const bR = dom.radius * clamp(dom.birthScale, 0, 1);
+
+  // Spec version + entity count
+  const specStr = dom.maturity > 0 ? `spec v${dom.specVersion || '?'}` : 'no spec';
+  const meta = `${specStr} · ${dom.entityCount || '?'} entities`;
+  const labelY = dom.y + bR * 1.1 + 42;
+  ctx.fillStyle = rgba(r, g, b, 0.3);
+  ctx.font = "20px 'Courier New', monospace";
+  ctx.textAlign = 'center';
+  ctx.fillText(meta, dom.x, labelY + 30);
 }
 
 function _drawUnformed(ctx, dom, bR, r, g, b, tick, brightness) {
@@ -215,8 +326,12 @@ function _drawFormed(ctx, dom, bR, r, g, b, tick, brightness) {
   }
 }
 
-/** Draw faint trade routes + traveling pulses */
-export function drawTradeRoutes(ctx, state) {
+/** Draw trade routes + traveling pulses — only visible at sector zoom */
+export function drawTradeRoutes(ctx, state, camera) {
+  // Routes fade in starting at zoom 0.35, fully visible at 0.55
+  const routeAlpha = camera ? clamp((camera.zoom - 0.35) / 0.2, 0, 1) : 1;
+  if (routeAlpha <= 0 && !state.pulses.length) return;
+
   const maxWeight = Math.max(1, ...state.tradeRoutes.map(r => r.weight));
 
   // Draw route lines
@@ -226,8 +341,9 @@ export function drawTradeRoutes(ctx, state) {
     if (!srcDom || !tgtDom) continue;
 
     const normWeight = route.weight / maxWeight;
-    const a = 0.04 + normWeight * 0.08;
-    const lw = 0.5 + normWeight * 1.5;
+    const a = (0.06 + normWeight * 0.12) * routeAlpha;
+    const lw = (0.6 + normWeight * 1.5) * routeAlpha;
+    if (a < 0.01) continue;
 
     ctx.setLineDash([8, 16]);
     ctx.strokeStyle = rgba(0, 200, 180, a);
@@ -298,21 +414,170 @@ export function drawTradeRoutes(ctx, state) {
   }
 }
 
-/** Draw entity stars (small dots at galaxy zoom) */
-export function drawEntityStars(ctx, state, camera) {
-  if (camera.zoom < 0.35) return; // entities only visible at sector zoom and below
+/** Draw entity stars — LOD based on zoom, viewport culling, neighborhood highlight */
+export function drawEntityStars(ctx, state, camera, W, H, neighborhood) {
+  const hasNeighborhood = neighborhood && neighborhood.size > 0;
+  const galaxyZoom = camera.zoom < 0.35;
+
+  // At galaxy zoom with no selection, don't render entities
+  if (galaxyZoom && !hasNeighborhood) return;
+
+  const sectorZoom = camera.zoom >= 0.5;
+  const deepZoom = camera.zoom >= 0.75;
+
+  // Viewport culling
+  const margin = 200 / camera.zoom;
+  const viewLeft = camera.x - W / 2 / camera.zoom - margin;
+  const viewRight = camera.x + W / 2 / camera.zoom + margin;
+  const viewTop = camera.y - H / 2 / camera.zoom - margin;
+  const viewBottom = camera.y + H / 2 / camera.zoom + margin;
+
+  const minSource = deepZoom ? 1 : sectorZoom ? 3 : 5;
+  const zoomScale = clamp((camera.zoom - 0.3) / 0.5, 0, 1);
 
   for (const [, e] of state.entities) {
     if (e.birthScale < 0.1) continue;
-    const bR = (e.radius * 0.6 + e.activityGlow * 3) * e.birthScale;
-    const [r, g, b] = hexRGB(e.color);
-    const alpha = clamp(0.3 + e.activityGlow * 0.7, 0, 1);
 
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = e.color;
-    ctx.beginPath();
-    ctx.arc(e.x, e.y, bR, 0, TAU);
-    ctx.fill();
-    ctx.globalAlpha = 1;
+    const inNeighborhood = hasNeighborhood && neighborhood.has(e.id);
+
+    // LOD filter — but always render neighborhood members
+    if (!inNeighborhood) {
+      if (galaxyZoom) continue;
+      if (e.sourceCount < minSource && e.activityGlow < 0.1) continue;
+      if (e.x < viewLeft || e.x > viewRight || e.y < viewTop || e.y > viewBottom) continue;
+    }
+
+    // Dim non-neighborhood when something is selected, brighten members
+    const dimFactor = hasNeighborhood && !inNeighborhood ? 0.15 : 1.0;
+    const brightFactor = inNeighborhood ? 1.3 : 1.0;
+
+    const act = e.activityGlow;
+    const sizeBoost = (1 + zoomScale * 1.5) * brightFactor;
+    const bR = (e.radius * 0.6 + act * 3) * e.birthScale * sizeBoost;
+    const [r, g, b] = hexRGB(e.color);
+    const alpha = clamp((0.3 + act * 0.7 + zoomScale * 0.3) * dimFactor * brightFactor, 0, 1);
+
+    if (sectorZoom) {
+      // Multi-layer glow at sector zoom — 30% brighter than galaxy
+      const sectorBright = 1.3;
+
+      // Layer 1: wide outer halo
+      const haloR = bR * 5;
+      const haloA = 0.08 * alpha * dimFactor * sectorBright;
+      const g1 = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, haloR);
+      g1.addColorStop(0, rgba(r, g, b, haloA));
+      g1.addColorStop(0.4, rgba(r, g, b, haloA * 0.3));
+      g1.addColorStop(1, rgba(r, g, b, 0));
+      ctx.fillStyle = g1;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, haloR, 0, TAU);
+      ctx.fill();
+
+      // Layer 2: inner glow
+      const innerR = bR * 2.5;
+      const innerA = 0.20 * alpha * sectorBright;
+      const g2 = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, innerR);
+      g2.addColorStop(0, rgba(r, g, b, innerA));
+      g2.addColorStop(0.6, rgba(r, g, b, innerA * 0.3));
+      g2.addColorStop(1, rgba(r, g, b, 0));
+      ctx.fillStyle = g2;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, innerR, 0, TAU);
+      ctx.fill();
+
+      // Layer 3: hot white core — small and bright, sells the star
+      const coreR = bR * 0.35;
+      ctx.fillStyle = `rgba(255,255,255,${min(1, 0.95 * alpha * sectorBright)})`;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, coreR * 0.4, 0, TAU);
+      ctx.fill();
+
+      // Layer 4: color bloom around the core
+      const bloomR = bR * 0.8;
+      const bg = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, bloomR);
+      bg.addColorStop(0, `rgba(255,255,255,${min(1, 0.7 * alpha * sectorBright)})`);
+      bg.addColorStop(0.2, rgba(r, g, b, 0.8 * alpha * sectorBright));
+      bg.addColorStop(0.6, rgba(r, g, b, 0.2 * alpha * sectorBright));
+      bg.addColorStop(1, rgba(r, g, b, 0));
+      ctx.fillStyle = bg;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, bloomR, 0, TAU);
+      ctx.fill();
+    } else {
+      // Galaxy zoom — simple dot
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = e.color;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, bR, 0, TAU);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // Activity flash ring
+    if (act > 0.3) {
+      ctx.strokeStyle = rgba(r, g, b, act * 0.5);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, bR * 3, 0, TAU);
+      ctx.stroke();
+    }
+
+    // Labels — only if space available (collision check via placedLabels)
+    const showLabel = deepZoom || (sectorZoom && e.sourceCount >= 8);
+    if (showLabel && _labelSlotFree(e.x, e.y - bR * 2 - 4, camera.zoom)) {
+      const labelBright = sectorZoom ? 1.3 : 1.0;
+      ctx.fillStyle = rgba(r, g, b, min(1, (0.5 + act * 0.4) * labelBright * dimFactor));
+      ctx.font = "14px 'Courier New', monospace";
+      ctx.textAlign = 'center';
+      ctx.fillText(e.label, e.x, e.y - bR * 2 - 4);
+      _labelSlotReserve(e.x, e.y - bR * 2 - 4, camera.zoom);
+    }
+  }
+
+  // Clear label slots for next frame
+  _labelSlotsClear();
+}
+
+// Simple grid-based label collision avoidance
+const _labelGrid = new Set();
+function _labelSlotFree(x, y, zoom) {
+  // Quantize to grid cells — each cell is ~80px at current zoom
+  const cellSize = 80 / zoom;
+  const key = `${Math.round(x / cellSize)},${Math.round(y / cellSize)}`;
+  return !_labelGrid.has(key);
+}
+function _labelSlotReserve(x, y, zoom) {
+  const cellSize = 80 / zoom;
+  const key = `${Math.round(x / cellSize)},${Math.round(y / cellSize)}`;
+  _labelGrid.add(key);
+}
+function _labelSlotsClear() {
+  _labelGrid.clear();
+}
+
+/** Draw trade route weight labels — only on hover via state.hoveredId */
+export function drawRouteWeightLabels(ctx, state, camera) {
+  // Route weight labels only show when hovering a domain —
+  // shows weights on all routes connected to that domain
+  if (camera.zoom < 0.4) return;
+  if (!state.hoveredId) return;
+
+  const hovDom = state.hoveredId.startsWith('dom:')
+    ? state.domains.get(state.hoveredId.replace('dom:', ''))
+    : null;
+  if (!hovDom) return;
+
+  for (const route of state.tradeRoutes) {
+    if (route.source !== hovDom.path && route.target !== hovDom.path) continue;
+    const srcDom = state.domains.get(route.source);
+    const tgtDom = state.domains.get(route.target);
+    if (!srcDom || !tgtDom) continue;
+
+    const mx = (srcDom.x + tgtDom.x) / 2;
+    const my = (srcDom.y + tgtDom.y) / 2;
+    ctx.fillStyle = 'rgba(0,200,180,0.45)';
+    ctx.font = "18px 'Courier New', monospace";
+    ctx.textAlign = 'center';
+    ctx.fillText(`${route.weight} shared`, mx, my - 10);
   }
 }

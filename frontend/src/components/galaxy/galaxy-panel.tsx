@@ -20,6 +20,8 @@ interface GalaxyPanelProps {
   selectedNode: SelectedNodeRaw | null;
   domainColors: Record<string, string>;
   onClose?: () => void;
+  onNavigateToEntity?: (entityId: string, entityName: string) => void;
+  onNavigateToDomain?: (domainPath: string) => void;
 }
 
 function parseSelectedNode(selectedNode: SelectedNodeRaw | null): PanelNode | null {
@@ -82,7 +84,7 @@ function parseSelectedNode(selectedNode: SelectedNodeRaw | null): PanelNode | nu
   return null;
 }
 
-export function GalaxyPanel({ selectedNode, domainColors, onClose }: GalaxyPanelProps) {
+export function GalaxyPanel({ selectedNode, domainColors, onClose, onNavigateToEntity, onNavigateToDomain }: GalaxyPanelProps) {
   // Internal navigation stack: [root, ...navigated]
   const [navStack, setNavStack] = useState<PanelNode[]>([]);
   const prevSelectedNodeRef = useRef<SelectedNodeRaw | null>(null);
@@ -123,11 +125,12 @@ export function GalaxyPanel({ selectedNode, domainColors, onClose }: GalaxyPanel
       };
       setNavStack((prev) => {
         const next = [...prev, node];
-        // Keep max 3 trail items visible by limiting stack to 4 (3 trail + 1 current)
         return next.slice(-4);
       });
+      // Tell the canvas to fly to this entity
+      onNavigateToEntity?.(entity.id, entity.name);
     },
-    []
+    [onNavigateToEntity]
   );
 
   const handleNavigateDomain = useCallback(
@@ -144,8 +147,10 @@ export function GalaxyPanel({ selectedNode, domainColors, onClose }: GalaxyPanel
         const next = [...prev, node];
         return next.slice(-4);
       });
+      // Tell the canvas to fly to this domain
+      onNavigateToDomain?.(domainPath);
     },
-    []
+    [onNavigateToDomain]
   );
 
   const handleTrailNavigate = useCallback((item: TrailItem, index: number) => {
