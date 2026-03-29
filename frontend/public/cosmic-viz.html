@@ -63,6 +63,7 @@ canvas:active { cursor: grabbing; }
   <button onclick="ingestDoc()">INGEST DOC</button>
   <button onclick="docBurst()">DOC BURST ×8</button>
   <button onclick="triggerSimmer()">SIMMER DOMAIN</button>
+  <button onclick="testSearchGlow()">TEST SEARCH GLOW</button>
 </div>
 
 <div id="tooltip"></div>
@@ -248,6 +249,13 @@ function drawNebula(n, highlighted) {
   const maturity = n._maturity || 0;
   const isSimmering = n._simmering || false;
 
+  // Search brighten effect — multiply into rendering
+  const brighten = getGlowFactor(n._brightenStart, n._brightenDuration || 1800);
+  n._brightenMult = 1 + brighten * 1.2; // passed to draw functions
+  if (n._brightenStart !== null && n._brightenStart !== undefined) {
+    if (performance.now() - n._brightenStart > (n._brightenDuration || 1800)) n._brightenStart = null;
+  }
+
   if (isSimmering) {
     drawNebulaSimmering(n, bR, r, g, b);
   } else if (maturity > 0) {
@@ -289,7 +297,7 @@ function drawNebula(n, highlighted) {
 
 // State 1: Unformed — visible cloud but no core
 function drawNebulaUnformed(n, bR, r, g, b, isHov) {
-  const brightness = isHov ? 1.8 : 1.0;
+  const brightness = (isHov ? 1.8 : 1.0) * (n._brightenMult || 1);
   for (let i = 0; i < 4; i++) {
     const angle = n._rot*(1-i*0.15) + i*1.4;
     const lr = bR*(2.0 - i*0.15);
@@ -354,7 +362,7 @@ function drawNebulaSimmering(n, bR, r, g, b) {
 
 // State 3: Formed — bright star with cloud, spikes, clearly different from unformed
 function drawNebulaFormed(n, bR, r, g, b, maturity, isHov) {
-  const bright = (0.5 + maturity*0.5) * (isHov ? 1.4 : 1.0);
+  const bright = (0.5 + maturity*0.5) * (isHov ? 1.4 : 1.0) * (n._brightenMult || 1);
   const coreR = bR*(0.12 + maturity*0.08);
   const breathe = 0.94 + 0.06*sin(tick*0.001);
 
@@ -437,6 +445,29 @@ function drawStar(n, state) {
   ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(n.x,n.y,bR,0,TAU); ctx.fill();
   ctx.shadowBlur = 0;
 
+  // Search glow effect
+  const glow = getGlowFactor(n._glowStart, n._glowDuration || 1400);
+  if (glow > 0) {
+    const prevAlpha = ctx.globalAlpha;
+    ctx.globalAlpha = 1;
+    // Outer bloom
+    const bloom = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,bR*6);
+    bloom.addColorStop(0,rgba(r,g,b,0.35*glow));
+    bloom.addColorStop(0.4,rgba(r,g,b,0.15*glow));
+    bloom.addColorStop(1,rgba(r,g,b,0));
+    ctx.fillStyle = bloom; ctx.beginPath(); ctx.arc(n.x,n.y,bR*6,0,TAU); ctx.fill();
+    // Inner ring
+    const ring = ctx.createRadialGradient(n.x,n.y,bR*0.8,n.x,n.y,bR*2.5);
+    ring.addColorStop(0,`rgba(255,255,255,${0.7*glow})`);
+    ring.addColorStop(0.5,rgba(r,g,b,0.4*glow));
+    ring.addColorStop(1,rgba(r,g,b,0));
+    ctx.fillStyle = ring; ctx.beginPath(); ctx.arc(n.x,n.y,bR*2.5,0,TAU); ctx.fill();
+    ctx.globalAlpha = prevAlpha;
+  }
+  if (n._glowStart !== null && n._glowStart !== undefined) {
+    if (performance.now() - n._glowStart > (n._glowDuration || 1400)) n._glowStart = null;
+  }
+
   // Label
   if (isHov) {
     // Hovered: visible but not overpowering
@@ -484,6 +515,39 @@ function drawEdges() {
         ctx.beginPath(); ctx.arc(lerp(s.x,t.x,p.t),lerp(s.y,t.y,p.t),1.2,0,TAU); ctx.fill();
       }
       ctx.globalAlpha = 1;
+    }
+
+    // Search pulse effect on trade routes
+    const pulseFactor = getGlowFactor(e._pulseStart, e._pulseDuration || 900);
+    if (pulseFactor > 0 && s && t) {
+      const elapsed = max(0, performance.now() - e._pulseStart);
+      const rawProgress = min(1, elapsed / (e._pulseDuration || 900));
+      // Ease in-out
+      const progress = rawProgress < 0.5
+        ? 2*rawProgress*rawProgress
+        : -1 + (4 - 2*rawProgress)*rawProgress;
+
+      const px = s.x + (t.x-s.x)*progress;
+      const py = s.y + (t.y-s.y)*progress;
+
+      // Traveling glow dot
+      const dotG = ctx.createRadialGradient(px,py,0,px,py,8);
+      dotG.addColorStop(0,`rgba(0,255,220,${0.9*pulseFactor})`);
+      dotG.addColorStop(0.3,`rgba(0,220,200,${0.5*pulseFactor})`);
+      dotG.addColorStop(1,'rgba(0,180,160,0)');
+      ctx.fillStyle = dotG; ctx.beginPath(); ctx.arc(px,py,8,0,TAU); ctx.fill();
+
+      // Trail behind dot
+      const trailStart = max(0, progress - 0.08);
+      const tx = s.x + (t.x-s.x)*trailStart;
+      const ty = s.y + (t.y-s.y)*trailStart;
+      const tg = ctx.createLinearGradient(tx,ty,px,py);
+      tg.addColorStop(0,'rgba(0,255,220,0)');
+      tg.addColorStop(1,`rgba(0,255,220,${0.3*pulseFactor})`);
+      ctx.strokeStyle = tg; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(tx,ty); ctx.lineTo(px,py); ctx.stroke();
+
+      if (rawProgress >= 1) e._pulseStart = null;
     }
   }
 }
@@ -536,6 +600,84 @@ function drawSparks() {
     ctx.globalAlpha=1;
   }
 }
+
+// ── SEARCH GLOW ───────────────────────────────────────────────
+function getGlowFactor(startTime, duration) {
+  if (startTime === null || startTime === undefined) return 0;
+  const elapsed = performance.now() - startTime;
+  if (elapsed < 0 || elapsed > duration) return 0;
+  return sin((elapsed / duration) * PI);
+}
+
+function triggerSearchGlow(entityNames, explicitRoutes) {
+  const now = performance.now();
+
+  // 1. Flash hit entity stars — staggered
+  const hitNodes = [];
+  for (const [id, n] of nodes) {
+    if (n.kind === 'entity' && entityNames.some(name =>
+      n.label.toLowerCase() === name.toLowerCase()
+    )) {
+      hitNodes.push(n);
+    }
+  }
+  if (hitNodes.length === 0) return;
+
+  hitNodes.forEach((n, i) => {
+    n._glowStart = now + i * 40;
+    n._glowDuration = 1400;
+  });
+
+  // 2. Find affected domains
+  const hitDomainPaths = new Set();
+  for (const n of hitNodes) {
+    if (n.domainWeights) {
+      for (const path of Object.keys(n.domainWeights)) hitDomainPaths.add(path);
+    }
+  }
+
+  // 3. Brighten domains — delayed 200ms after stars
+  const domainDelay = 200;
+  for (const [id, n] of nodes) {
+    if (n.kind === 'domain' && hitDomainPaths.has(n.fullPath)) {
+      n._brightenStart = now + domainDelay;
+      n._brightenDuration = 1800;
+    }
+  }
+
+  // 4. Pulse routes connecting hit domains
+  const routeDelay = domainDelay;
+  let routeIdx = 0;
+  for (const e of edges) {
+    if (e.kind !== 'cross-domain') continue;
+    const srcNode = nodes.get(e.source);
+    const tgtNode = nodes.get(e.target);
+    if (!srcNode || !tgtNode) continue;
+    if (hitDomainPaths.has(srcNode.fullPath) && hitDomainPaths.has(tgtNode.fullPath)) {
+      e._pulseStart = now + routeDelay + routeIdx * 150;
+      e._pulseDuration = 900;
+      routeIdx++;
+    }
+  }
+}
+
+// Test trigger — pick 5 random entities and glow them
+function testSearchGlow() {
+  const ents = [...nodes.values()].filter(n => n.kind === 'entity');
+  const sample = [];
+  for (let i = 0; i < min(5, ents.length); i++) {
+    sample.push(ents[floor(random() * ents.length)].label);
+  }
+  console.log('Search glow test:', sample);
+  triggerSearchGlow(sample, null);
+}
+
+// Listen for search results from parent
+window.addEventListener('message', e => {
+  if (e.data?.type === 'search_result' && e.data.entities) {
+    triggerSearchGlow(e.data.entities, e.data.routes || null);
+  }
+});
 
 // ── INTERACTION ────────────────────────────────────────────────
 function getNeighborhood(id) {
