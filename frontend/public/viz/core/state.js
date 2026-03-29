@@ -92,6 +92,8 @@ export class WorldState {
         x: wx, y: wy,  // current position (after repulsion)
         docCount: vc,
         maturity,
+        specVersion: hasSpec ? specs[path].spec_version : 0,
+        entityCount: 0, // populated after entities are loaded
         simmering: isSimmering,
         isSubdomain: isSub,
         phase: random() * TAU,
@@ -153,6 +155,17 @@ export class WorldState {
         stability: Math.min(0.9, 0.3 * Math.log(vc + 1) / Math.log(30)),
         activityGlow: 0,
       });
+    }
+
+    // Entity repulsion — push overlapping entities apart
+    this._spreadEntities(30, 50);
+
+    // Count entities per domain
+    for (const [, e] of this.entities) {
+      for (const path of Object.keys(e.domainWeights || {})) {
+        const dom = this.domains.get(path);
+        if (dom) dom.entityCount++;
+      }
     }
 
     // Trade routes
@@ -243,6 +256,59 @@ export class WorldState {
     }
   }
 
+  /** Push overlapping entities apart using spatial grid for performance */
+  _spreadEntities(minDist, iterations) {
+    const ents = [...this.entities.values()];
+    if (ents.length < 2) return;
+
+    const cellSize = minDist * 2;
+
+    for (let iter = 0; iter < iterations; iter++) {
+      // Build spatial grid
+      const grid = {};
+      for (const e of ents) {
+        const cx = Math.floor(e.x / cellSize);
+        const cy = Math.floor(e.y / cellSize);
+        const key = `${cx},${cy}`;
+        (grid[key] ??= []).push(e);
+      }
+
+      // Check neighbors in adjacent cells
+      for (const e of ents) {
+        const cx = Math.floor(e.x / cellSize);
+        const cy = Math.floor(e.y / cellSize);
+
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            const neighbors = grid[`${cx + dx},${cy + dy}`];
+            if (!neighbors) continue;
+
+            for (const other of neighbors) {
+              if (other === e) continue;
+              const ddx = e.x - other.x;
+              const ddy = e.y - other.y;
+              const dist = hypot(ddx, ddy) || 0.1;
+              if (dist < minDist) {
+                const push = (minDist - dist) / 2 * 0.3;
+                const nx = ddx / dist, ny = ddy / dist;
+                e.x += nx * push;
+                e.y += ny * push;
+                other.x -= nx * push;
+                other.y -= ny * push;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Update worldX/Y
+    for (const e of ents) {
+      e.worldX = e.x;
+      e.worldY = e.y;
+    }
+  }
+
   /** Update per-frame state */
   update(dt) {
     this.tick++;
@@ -297,19 +363,33 @@ export class WorldState {
 
     if (!hitEntities.length) return;
 
-    // t=0: Flash entities (+0.85, staggered by rank)
+    // t=0: Flash entities (subtle, staggered)
     hitEntities.forEach((e, i) => {
       setTimeout(() => {
-        e.activityGlow = Math.min(1.0, e.activityGlow + 0.85);
+        e.activityGlow = Math.min(1.0, e.activityGlow + 0.5);
       }, i * 60);
     });
 
-    // t=80ms: Brighten domains (+0.7)
+    // t=80ms: Brighten top 5 hit domains (not all)
     setTimeout(() => {
+      // Rank domains by how many hit entities touch them
+      const domScores = {};
       for (const path of hitDomainPaths) {
-        const dom = this.domains.get(path);
-        if (dom) dom.activityGlow = Math.min(1.0, dom.activityGlow + 0.7);
+        domScores[path] = hitEntities.filter(e =>
+          e.domainWeights && path in e.domainWeights
+        ).length;
       }
+      const topDomains = [...hitDomainPaths]
+        .sort((a, b) => (domScores[b] || 0) - (domScores[a] || 0))
+        .slice(0, 5);
+
+      for (const path of topDomains) {
+        const dom = this.domains.get(path);
+        if (dom) dom.activityGlow = Math.min(1.0, dom.activityGlow + 0.45);
+      }
+      // Replace hitDomainPaths for pulse firing below
+      hitDomainPaths.clear();
+      for (const p of topDomains) hitDomainPaths.add(p);
     }, 80);
 
     // t=250ms: Fire route pulses between hit domains
@@ -334,7 +414,8 @@ export class WorldState {
       // Sort by score, shuffle ties to avoid alphabetical spatial bias
       candidates.sort((a, b) => b.score - a.score || (random() - 0.5));
 
-      candidates.forEach((c, i) => {
+      // Cap at 4 pulses — enough to show activity without chaos
+      candidates.slice(0, 4).forEach((c, i) => {
         const srcDom = this.domains.get(c.route.source);
         if (srcDom) {
           setTimeout(() => {

@@ -9,11 +9,23 @@
 body { background: #01040a; color: #c0c8e0; font-family: 'Courier New', monospace; overflow: hidden; }
 canvas { display: block; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; cursor: grab; z-index: 1; }
 canvas:active { cursor: grabbing; }
-#hud {
+#nav {
   position: fixed; top: 12px; left: 14px; z-index: 10;
+  display: flex; align-items: center; gap: 8px;
+  font: 10px 'Courier New', monospace;
+}
+#nav .nav-btn {
+  padding: 0; background: none; border: none; cursor: pointer;
+  color: rgba(100,200,180,0.6); font: 10px 'Courier New', monospace;
+  letter-spacing: .06em; transition: color .12s;
+}
+#nav .nav-btn:hover { color: rgba(100,220,180,1); }
+#nav .sep { color: rgba(100,200,180,0.25); font-size: 10px; }
+#nav .current { color: rgba(100,200,180,0.9); font-size: 10px; letter-spacing: .06em; }
+#hud {
+  position: fixed; top: 36px; left: 14px; z-index: 10;
   font-size: 10px; letter-spacing: .08em; line-height: 1.8; pointer-events: none;
 }
-#hud .title { font-size: 13px; color: rgba(100,200,180,0.9); letter-spacing: .12em; margin-bottom: 4px; }
 #hud .info { color: rgba(80,180,160,0.6); }
 #hud .sub { color: rgba(80,180,160,0.35); }
 #tooltip {
@@ -24,25 +36,22 @@ canvas:active { cursor: grabbing; }
 }
 #tooltip .tt-title { font-size: 11px; color: rgba(100,220,180,0.95); margin-bottom: 4px; letter-spacing: .06em; }
 #tooltip .tt-dim { color: rgba(100,200,180,0.4); font-size: 9px; }
-#back-btn {
-  position: fixed; top: 12px; right: 14px; z-index: 10;
-  font: 10px 'Courier New', monospace; padding: 5px 14px;
-  border: 0.5px solid rgba(100,200,180,0.3); border-radius: 3px;
-  color: rgba(100,200,180,0.6); background: rgba(100,200,180,0.05);
-  cursor: pointer; letter-spacing: .08em; transition: all .12s;
-}
-#back-btn:hover { color: rgba(100,220,180,1); border-color: rgba(100,220,180,0.7); }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="nav">
+  <button class="nav-btn" onclick="window.parent.postMessage({type:'navigate_galaxy'},'*')" title="Back to galaxy">⌂</button>
+  <span class="sep">›</span>
+  <button class="nav-btn" onclick="window.parent.postMessage({type:'navigate_galaxy'},'*')">Galaxy</button>
+  <span class="sep">›</span>
+  <span class="current" id="nav-name">...</span>
+</div>
 <div id="hud">
-  <div class="title" id="hud-title">★ LOADING...</div>
   <div class="info" id="hud-info"></div>
   <div class="sub" id="hud-sub"></div>
 </div>
 <div id="tooltip"></div>
-<button id="back-btn" onclick="window.parent.postMessage({type:'navigate_galaxy'},'*')">← galaxy</button>
 
 <script type="module">
 import { Camera } from './core/camera.js';
@@ -68,7 +77,7 @@ const API_URL = window.API_URL || 'http://localhost:8100';
 
 async function loadData() {
   if (!entityId) {
-    document.getElementById('hud-title').textContent = '★ NO ENTITY SPECIFIED';
+    document.getElementById('nav-name').textContent = 'no entity specified';
     return;
   }
   try {
@@ -76,7 +85,7 @@ async function loadData() {
     buildStarView(graph);
   } catch (err) {
     console.error('Star view: load failed', err);
-    document.getElementById('hud-title').textContent = '★ LOAD FAILED';
+    document.getElementById('nav-name').textContent = 'load failed';
   }
 }
 loadData();
@@ -253,10 +262,10 @@ function buildStarView(graph) {
 
   camera.x = cx;
   camera.y = cy;
-  camera.zoom = 1.5;
-  camera.targetZoom = 1.5;
+  camera.zoom = 0.75;
+  camera.targetZoom = 0.75;
 
-  document.getElementById('hud-title').textContent = `★ ${ent.canonical_name.toUpperCase()}`;
+  document.getElementById('nav-name').textContent = ent.canonical_name;
   document.getElementById('hud-info').textContent =
     `${ent.type} · ${docList.length} docs · ${sortedCo.length} co-entities`;
   document.getElementById('hud-sub').textContent = `${ent.source_count} source mentions`;

@@ -75,14 +75,14 @@ export function drawCentralStar(ctx, entity, tick) {
   }
 
   // Label
-  ctx.fillStyle = `rgba(255,240,220,${0.9 * boost})`;
-  ctx.font = `600 28px 'Courier New', monospace`;
+  ctx.fillStyle = `rgba(220,215,200,${0.65 * boost})`;
+  ctx.font = `400 22px 'Courier New', monospace`;
   ctx.textAlign = 'center';
   ctx.fillText(entity.name, entity.x, entity.y + sz * 3.5);
-  ctx.font = "18px 'Courier New', monospace";
+  ctx.font = "14px 'Courier New', monospace";
   const [tr, tg, tb] = hexRGB(tc);
-  ctx.fillStyle = rgba(tr, tg, tb, 0.6);
-  ctx.fillText(`${entity.type} · ${entity.sourceCount} docs`, entity.x, entity.y + sz * 3.5 + 24);
+  ctx.fillStyle = rgba(tr, tg, tb, 0.45);
+  ctx.fillText(`${entity.type} · ${entity.sourceCount} docs`, entity.x, entity.y + sz * 3.5 + 20);
 }
 
 /** Draw document nodes orbiting the entity */
