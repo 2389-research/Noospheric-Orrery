@@ -645,20 +645,38 @@ function triggerSearchGlow(entityNames, explicitRoutes) {
     }
   }
 
-  // 4. Pulse routes connecting hit domains
-  const routeDelay = domainDelay;
-  let routeIdx = 0;
+  // 4. Pulse routes — ordered by relevance (how many hit entities connect to each route's domains)
+  // Count hit entities per domain for scoring
+  const domainHitCount = {};
+  for (const n of hitNodes) {
+    if (n.domainWeights) {
+      for (const [path, w] of Object.entries(n.domainWeights)) {
+        domainHitCount[path] = (domainHitCount[path] || 0) + w;
+      }
+    }
+  }
+
+  // Score and collect candidate routes
+  const candidateRoutes = [];
   for (const e of edges) {
     if (e.kind !== 'cross-domain') continue;
     const srcNode = nodes.get(e.source);
     const tgtNode = nodes.get(e.target);
     if (!srcNode || !tgtNode) continue;
     if (hitDomainPaths.has(srcNode.fullPath) && hitDomainPaths.has(tgtNode.fullPath)) {
-      e._pulseStart = now + routeDelay + routeIdx * 150;
-      e._pulseDuration = 900;
-      routeIdx++;
+      const score = (domainHitCount[srcNode.fullPath] || 0) + (domainHitCount[tgtNode.fullPath] || 0);
+      candidateRoutes.push({ edge: e, score });
     }
   }
+
+  // Sort by score descending — most relevant routes pulse first
+  candidateRoutes.sort((a, b) => b.score - a.score);
+
+  const routeDelay = domainDelay;
+  candidateRoutes.forEach((cr, i) => {
+    cr.edge._pulseStart = now + routeDelay + i * 150;
+    cr.edge._pulseDuration = 900;
+  });
 }
 
 // Test trigger — pick 5 random entities and glow them
