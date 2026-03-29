@@ -522,13 +522,15 @@ function drawEdges() {
     if (pulseFactor > 0 && s && t) {
       const elapsed = max(0, performance.now() - e._pulseStart);
       const rawProgress = min(1, elapsed / (e._pulseDuration || 900));
-      // Ease in-out
       const progress = rawProgress < 0.5
         ? 2*rawProgress*rawProgress
         : -1 + (4 - 2*rawProgress)*rawProgress;
 
-      const px = s.x + (t.x-s.x)*progress;
-      const py = s.y + (t.y-s.y)*progress;
+      // Direction: flow from domain with more hits toward domain with fewer
+      const from = e._pulseReversed ? t : s;
+      const to = e._pulseReversed ? s : t;
+      const px = from.x + (to.x-from.x)*progress;
+      const py = from.y + (to.y-from.y)*progress;
 
       // Traveling glow dot
       const dotG = ctx.createRadialGradient(px,py,0,px,py,8);
@@ -539,8 +541,8 @@ function drawEdges() {
 
       // Trail behind dot
       const trailStart = max(0, progress - 0.08);
-      const tx = s.x + (t.x-s.x)*trailStart;
-      const ty = s.y + (t.y-s.y)*trailStart;
+      const tx = from.x + (to.x-from.x)*trailStart;
+      const ty = from.y + (to.y-from.y)*trailStart;
       const tg = ctx.createLinearGradient(tx,ty,px,py);
       tg.addColorStop(0,'rgba(0,255,220,0)');
       tg.addColorStop(1,`rgba(0,255,220,${0.3*pulseFactor})`);
@@ -679,6 +681,12 @@ function triggerSearchGlow(entityNames, explicitRoutes) {
   candidateRoutes.forEach((cr, i) => {
     cr.edge._pulseStart = now + routeDelay + i * 150;
     cr.edge._pulseDuration = 900;
+    // Pulse direction: flow FROM the domain with more hits TO the one with fewer
+    const srcNode = nodes.get(cr.edge.source);
+    const tgtNode = nodes.get(cr.edge.target);
+    const srcHits = domainHitCount[srcNode?.fullPath] || 0;
+    const tgtHits = domainHitCount[tgtNode?.fullPath] || 0;
+    cr.edge._pulseReversed = tgtHits > srcHits;  // reverse if target has more hits
   });
 }
 
