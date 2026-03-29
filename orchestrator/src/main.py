@@ -44,6 +44,12 @@ app.include_router(graph_router)
 app.include_router(reader_router)
 app.include_router(search_router)
 
+from .broadcast import ws_endpoint
+
+@app.websocket("/ws")
+async def websocket_route(websocket):
+    await ws_endpoint(websocket)
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
