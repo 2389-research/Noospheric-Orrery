@@ -1,17 +1,19 @@
 """Search endpoint — hybrid FAISS + graph search with RRF fusion."""
 
+import asyncio
 from fastapi import APIRouter
 from ..config import get_settings
 from ..db import get_connection
 from ..pipeline.search import search, build_indexes
+from ..broadcast import broadcast_search
 
 router = APIRouter()
 _indexes_built = False
 
 
 @router.get("/search")
-def search_query(q: str, top_k: int = 20):
-    """Search entities and chunks. Returns fused results."""
+async def search_query(q: str, top_k: int = 20):
+    """Search entities and chunks. Broadcasts results to connected viz clients."""
     global _indexes_built
     settings = get_settings()
     conn = get_connection(settings.db_path)
@@ -22,6 +24,12 @@ def search_query(q: str, top_k: int = 20):
 
     results = search(conn, q, top_k=top_k)
     conn.close()
+
+    # Broadcast to viz clients
+    entity_names = [e["name"] for e in results["entities"][:10]]
+    if entity_names:
+        await broadcast_search(q, entity_names)
+
     return results
 
 

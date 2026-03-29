@@ -41,6 +41,38 @@ export default function VizPage() {
     return () => window.removeEventListener("message", handler);
   }, []);
 
+  // Subscribe to WebSocket for real-time search broadcasts (from agents, API, etc.)
+  useEffect(() => {
+    const wsUrl = API_URL.replace("http", "ws") + "/ws";
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout>;
+
+    function connect() {
+      ws = new WebSocket(wsUrl);
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "search_result" && data.entities) {
+            // Forward to viz iframe
+            iframeRef.current?.contentWindow?.postMessage({
+              type: "search_result",
+              entities: data.entities,
+            }, "*");
+          }
+        } catch { /* ignore bad messages */ }
+      };
+      ws.onclose = () => {
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+    }
+    connect();
+
+    return () => {
+      clearTimeout(reconnectTimer);
+      ws?.close();
+    };
+  }, []);
+
   // Fetch domain colors
   useEffect(() => {
     (async () => {
