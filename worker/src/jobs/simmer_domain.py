@@ -89,6 +89,10 @@ Keep the general types but add domain-specific ones."""
         primary="coverage",
         iterations=settings.simmer_iterations,
         judge_mode="board",
+        judge_panel=[
+            {"name": "Coverage & Depth", "lens": "Focus on whether the spec captures all entity types specific to this domain that the general spec misses"},
+            {"name": "Precision & Quality", "lens": "Focus on whether extracted entities are accurate, well-typed, and free of noise or hallucination"},
+        ],
         output_dir=domain_dir / "golden",
         generator_model="claude-sonnet-4-6",
         judge_model="claude-sonnet-4-6",
@@ -108,6 +112,10 @@ Keep the general types but add domain-specific ones."""
         primary="coverage",
         iterations=settings.simmer_iterations,
         judge_mode="board",
+        judge_panel=[
+            {"name": "Coverage & Depth", "lens": "Focus on whether the spec captures all entity types specific to this domain that the general spec misses"},
+            {"name": "Precision & Quality", "lens": "Focus on whether extracted entities are accurate, well-typed, and free of noise or hallucination"},
+        ],
         output_dir=domain_dir / "spec",
         generator_model="claude-sonnet-4-6",
         judge_model="claude-sonnet-4-6",

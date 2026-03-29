@@ -168,6 +168,10 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         primary="coverage",
         iterations=settings.simmer_iterations,
         judge_mode="board",
+        judge_panel=[
+            {"name": "Coverage & Depth", "lens": "Focus on whether the spec captures all entity types and important entities present in the sample documents"},
+            {"name": "Precision & Quality", "lens": "Focus on whether extracted entities are accurate, well-typed, and free of noise or hallucination"},
+        ],
         output_dir=specs_dir / "general_golden",
         generator_model="claude-sonnet-4-6",
         judge_model="claude-sonnet-4-6",
@@ -187,6 +191,10 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         primary="coverage",
         iterations=settings.simmer_iterations,
         judge_mode="board",
+        judge_panel=[
+            {"name": "Coverage & Depth", "lens": "Focus on whether the spec captures all entity types and important entities present in the sample documents"},
+            {"name": "Precision & Quality", "lens": "Focus on whether extracted entities are accurate, well-typed, and free of noise or hallucination"},
+        ],
         output_dir=specs_dir / "general_spec",
         generator_model="claude-sonnet-4-6",
         judge_model="claude-sonnet-4-6",
