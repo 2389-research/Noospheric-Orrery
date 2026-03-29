@@ -58,6 +58,7 @@ fetch(`${API_URL}/graph`).then(r => r.json()).then(data => {
 // Listen for search glow
 window.addEventListener('message', e => {
   if (e.data?.type === 'search_result' && e.data.entities) {
+    console.log('Search glow:', e.data.entities.length, 'entities', e.data.entities.slice(0,3));
     state.triggerSearchGlow(e.data.entities);
   }
 });
