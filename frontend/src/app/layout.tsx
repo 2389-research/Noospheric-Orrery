@@ -18,6 +18,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Link href="/pipeline" className="text-xs text-muted-foreground hover:text-foreground transition-colors">Pipeline</Link>
             <Link href="/entities" className="text-xs text-muted-foreground hover:text-foreground transition-colors">Entities</Link>
             <Link href="/viz" className="text-xs text-muted-foreground hover:text-foreground transition-colors">Galaxy</Link>
+            <Link href="/viz/sector" className="text-xs text-muted-foreground hover:text-foreground transition-colors">Sector</Link>
+            <Link href="/viz/system" className="text-xs text-muted-foreground hover:text-foreground transition-colors">System</Link>
+            <Link href="/viz/star" className="text-xs text-muted-foreground hover:text-foreground transition-colors">Star</Link>
           </div>
         </nav>
         <main className="p-6">{children}</main>

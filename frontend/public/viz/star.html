@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Noospheric Orrery — Star</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #01040a; color: #c0c8e0; font-family: 'Courier New', monospace; overflow: hidden; }
+canvas { display: block; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; cursor: grab; z-index: 1; }
+canvas:active { cursor: grabbing; }
+#hud {
+  position: fixed; top: 12px; left: 14px; z-index: 10;
+  font-size: 10px; letter-spacing: .08em; line-height: 1.8; pointer-events: none;
+}
+#hud .title { font-size: 13px; color: rgba(100,200,180,0.9); letter-spacing: .12em; margin-bottom: 4px; }
+#hud .info { color: rgba(80,180,160,0.6); }
+#hud .sub { color: rgba(80,180,160,0.35); }
+#tooltip {
+  position: fixed; z-index: 20; pointer-events: none; display: none;
+  background: rgba(6,13,34,0.95); border: 0.5px solid rgba(100,200,180,0.25);
+  border-radius: 4px; padding: 8px 12px; min-width: 200px; max-width: 350px;
+  font: 10px 'Courier New', monospace; color: rgba(210,230,220,0.8); line-height: 1.9;
+}
+#tooltip .tt-title { font-size: 11px; color: rgba(100,220,180,0.95); margin-bottom: 4px; letter-spacing: .06em; }
+#tooltip .tt-dim { color: rgba(100,200,180,0.4); font-size: 9px; }
+#back-btn {
+  position: fixed; top: 12px; right: 14px; z-index: 10;
+  font: 10px 'Courier New', monospace; padding: 5px 14px;
+  border: 0.5px solid rgba(100,200,180,0.3); border-radius: 3px;
+  color: rgba(100,200,180,0.6); background: rgba(100,200,180,0.05);
+  cursor: pointer; letter-spacing: .08em; transition: all .12s;
+}
+#back-btn:hover { color: rgba(100,220,180,1); border-color: rgba(100,220,180,0.7); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div class="title" id="hud-title">★ LOADING...</div>
+  <div class="info" id="hud-info"></div>
+  <div class="sub" id="hud-sub"></div>
+</div>
+<div id="tooltip"></div>
+<button id="back-btn" onclick="window.parent.postMessage({type:'navigate_galaxy'},'*')">← galaxy</button>
+
+<script type="module">
+import { Camera } from './core/camera.js';
+import { sin, cos, hexRGB, rgba, sqrt, clamp, random, hypot, TAU, PI } from './core/utils.js';
+import { drawBackground } from './renderers/galaxy.js';
+import { drawCentralStar, drawDocuments, drawCoEntities, drawConnections } from './renderers/star.js';
+
+const canvas = document.getElementById('c');
+const camera = new Camera();
+let W, H, ctx;
+let tick = 0;
+
+const params = new URLSearchParams(location.search);
+const entityId = params.get('entity') || '';
+
+let centralEntity = null;
+const docs = [];
+const coEntities = [];
+const pulses = []; // traveling dots along connections
+let hoveredId = null;
+
+const API_URL = window.API_URL || 'http://localhost:8100';
+
+async function loadData() {
+  if (!entityId) {
+    document.getElementById('hud-title').textContent = '★ NO ENTITY SPECIFIED';
+    return;
+  }
+  try {
+    const graph = await fetch(`${API_URL}/entities/${entityId}/star-graph?co_limit=30`).then(r => r.json());
+    buildStarView(graph);
+  } catch (err) {
+    console.error('Star view: load failed', err);
+    document.getElementById('hud-title').textContent = '★ LOAD FAILED';
+  }
+}
+loadData();
+
+// Search glow — cascaded: docs flash → pulses travel → entities flash
+window.addEventListener('message', e => {
+  if (e.data?.type === 'search_result') {
+    const hitDocIds = new Set(e.data.doc_ids || []);
+    const hitEntityNames = new Set((e.data.entities || []).map(n => n.toLowerCase()));
+
+    // Find hit docs in our view — preserve search relevance order, cap at 10
+    const hitDocsAll = docs.filter(d => hitDocIds.has(d.id));
+    // Re-order by search result order (doc_ids comes in score order)
+    const docIdOrder = [...hitDocIds];
+    hitDocsAll.sort((a, b) => docIdOrder.indexOf(a.id) - docIdOrder.indexOf(b.id));
+    const hitDocs = hitDocsAll.slice(0, 10);
+    // Find hit co-entities
+    const hitCos = coEntities.filter(co => hitEntityNames.has(co.name.toLowerCase()));
+
+    if (!hitDocs.length && !hitCos.length && !hitEntityNames.has(centralEntity?.name?.toLowerCase())) return;
+
+    // Shuffle hit docs so they don't sweep uniformly around the ring
+    const shuffledDocs = [...hitDocs].sort(() => random() - 0.5);
+
+    // t=0: Docs flash (staggered, random order)
+    shuffledDocs.forEach((doc, i) => {
+      setTimeout(() => {
+        doc.activityGlow = Math.min(1, doc.activityGlow + 0.7);
+      }, i * 30 + random() * 40);
+    });
+
+    // t=150ms: Pulses travel from hit docs → central entity (random order, varied timing)
+    setTimeout(() => {
+      shuffledDocs.slice(0, 12).forEach((doc, i) => {
+        setTimeout(() => {
+          pulses.push({
+            fromX: doc._px, fromY: doc._py,
+            toX: centralEntity.x, toY: centralEntity.y,
+            progress: 0,
+            speed: 0.006 + random() * 0.006,
+            col: [255, 200, 120],
+          });
+        }, i * 50 + random() * 60);
+      });
+    }, 150);
+
+    // t=400ms: Central entity flashes from arriving pulses
+    setTimeout(() => {
+      if (centralEntity && (hitDocs.length > 0 || hitEntityNames.has(centralEntity.name.toLowerCase()))) {
+        centralEntity.activityGlow = Math.min(1, centralEntity.activityGlow + 0.8);
+      }
+    }, 400);
+
+    // t=500ms: Pulses travel from hit docs → co-entities that share those docs
+    setTimeout(() => {
+      for (const co of hitCos) {
+        const sharedHitDocs = hitDocs.filter(d => co.sharedDocIds.includes(d.id));
+        const sourceDocs = sharedHitDocs.length > 0 ? sharedHitDocs : hitDocs.slice(0, 3);
+        sourceDocs.forEach((doc, i) => {
+          setTimeout(() => {
+            const tc = { Person:[55,138,221], Organization:[127,119,221], Product:[29,158,117],
+              Technology:[186,117,23], Event:[216,90,48] }[co.type] || [156,154,146];
+            pulses.push({
+              fromX: doc._px, fromY: doc._py,
+              toX: co._px, toY: co._py,
+              progress: 0,
+              speed: 0.006 + random() * 0.004,
+              col: tc,
+            });
+          }, i * 80);
+        });
+      }
+    }, 500);
+
+    // t=800ms: Co-entities flash from arriving pulses
+    setTimeout(() => {
+      hitCos.forEach((co, i) => {
+        setTimeout(() => {
+          co.activityGlow = Math.min(1, co.activityGlow + 0.7);
+        }, i * 50);
+      });
+    }, 800);
+  }
+});
+
+function buildStarView(graph) {
+  const { entity: ent, documents: docList, co_entities: coList } = graph;
+  const cx = 2500, cy = 2500;
+
+  centralEntity = {
+    id: ent.id,
+    name: ent.canonical_name,
+    type: ent.type,
+    sourceCount: ent.source_count,
+    radius: 30,
+    x: cx, y: cy,
+    activityGlow: 0,
+  };
+
+  // Doc ID → doc object (for linking co-entities to docs)
+  const docById = {};
+
+  // Place documents in inner ring
+  const docRing = 180;
+  for (let i = 0; i < docList.length; i++) {
+    const d = docList[i];
+    const angle = (i / docList.length) * TAU - PI / 2;
+    const r = docRing + (i % 3) * 20 - 15;
+    const dx = cx + cos(angle) * r;
+    const dy = cy + sin(angle) * r;
+    const doc = {
+      id: d.id,
+      kind: 'document',
+      title: d.title || 'Untitled',
+      radius: 8,
+      x: dx, y: dy,
+      _px: dx, _py: dy,
+      angle,
+      orbitPhase: random() * TAU,
+      orbitSpeed: 0.5 + random() * 0.5,
+      orbitDrift: 4 + random() * 6,
+      activityGlow: 0,
+    };
+    docs.push(doc);
+    docById[d.id] = doc;
+  }
+
+  // Place co-entities — filter out Domain types, position near their shared docs
+  const filteredCo = coList.filter(c => c.type !== 'Domain');
+  const maxWeight = Math.max(1, ...filteredCo.map(c => c.weight));
+  const sortedCo = [...filteredCo].sort((a, b) => b.weight - a.weight);
+  const labelThreshold = sortedCo.length > 8
+    ? sortedCo[Math.floor(sortedCo.length * 0.3)]?.weight || 1
+    : 0;
+
+  const coRing = 380;
+  for (let i = 0; i < sortedCo.length; i++) {
+    const co = sortedCo[i];
+    const sharedDocs = (co.shared_doc_ids || []).map(id => docById[id]).filter(Boolean);
+
+    let angle;
+    if (sharedDocs.length > 0) {
+      // Average angle of shared docs — cluster near them
+      let sx = 0, sy = 0;
+      for (const sd of sharedDocs) { sx += cos(sd.angle); sy += sin(sd.angle); }
+      angle = Math.atan2(sy, sx);
+      angle += (random() - 0.5) * 0.5;
+    } else {
+      angle = i * 2.399963;
+    }
+
+    const wNorm = co.weight / maxWeight;
+    const r = coRing - wNorm * 80 + (random() - 0.5) * 50;
+
+    coEntities.push({
+      id: co.id,
+      kind: 'co_entity',
+      name: co.canonical_name,
+      type: co.type,
+      weight: co.weight,
+      sharedDocIds: co.shared_doc_ids || [],
+      labelThreshold,
+      radius: 5 + sqrt(co.weight) * 2,
+      x: cx + cos(angle) * r,
+      y: cy + sin(angle) * r,
+      _px: cx + cos(angle) * r,
+      _py: cy + sin(angle) * r,
+      orbitPhase: random() * TAU,
+      orbitSpeed: 0.4 + random() * 0.6,
+      orbitDrift: 5 + random() * 8,
+      activityGlow: 0,
+    });
+  }
+
+  camera.x = cx;
+  camera.y = cy;
+  camera.zoom = 1.5;
+  camera.targetZoom = 1.5;
+
+  document.getElementById('hud-title').textContent = `★ ${ent.canonical_name.toUpperCase()}`;
+  document.getElementById('hud-info').textContent =
+    `${ent.type} · ${docList.length} docs · ${sortedCo.length} co-entities`;
+  document.getElementById('hud-sub').textContent = `${ent.source_count} source mentions`;
+  console.log(`Star loaded: ${docList.length} docs, ${sortedCo.length} co-entities`);
+}
+
+// Hit test
+function hitTest(wx, wy) {
+  for (const d of docs) {
+    if (hypot(wx - d._px, wy - d._py) < d.radius * 1.5 + 5) return d;
+  }
+  for (const e of coEntities) {
+    if (hypot(wx - e._px, wy - e._py) < e.radius * 1.2 + 5) return e;
+  }
+  if (centralEntity && hypot(wx - centralEntity.x, wy - centralEntity.y) < centralEntity.radius * 2) {
+    return { ...centralEntity, kind: 'central' };
+  }
+  return null;
+}
+
+// Input
+canvas.addEventListener('mousedown', e => camera.handleMouseDown(e));
+canvas.addEventListener('mousemove', e => {
+  if (camera.handleMouseDrag(e)) return;
+  W = canvas.width / devicePixelRatio;
+  H = canvas.height / devicePixelRatio;
+  const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
+  const hit = hitTest(w.x, w.y);
+
+  hoveredId = hit ? hit.id : null;
+  canvas.style.cursor = hit ? 'pointer' : 'grab';
+
+  const tt = document.getElementById('tooltip');
+  if (hit && hit.kind === 'document') {
+    // Find co-entities that share this doc
+    const sharedEnts = coEntities.filter(co => co.sharedDocIds.includes(hit.id));
+    const sharedList = sharedEnts.slice(0, 5).map(e => e.name).join(', ');
+    tt.style.display = 'block';
+    tt.style.left = Math.min(e.clientX + 14, W - 350) + 'px';
+    tt.style.top = Math.min(e.clientY - 8, H - 120) + 'px';
+    tt.innerHTML = `<div class="tt-title">${hit.title}</div>
+      ${sharedEnts.length > 0 ? `<div>also mentions: ${sharedList}${sharedEnts.length > 5 ? '…' : ''}</div>` : ''}
+      <div class="tt-dim">click to open document</div>`;
+  } else if (hit && hit.kind === 'co_entity') {
+    const sharedDocNames = hit.sharedDocIds
+      .map(id => docs.find(d => d.id === id)?.title)
+      .filter(Boolean).slice(0, 3);
+    tt.style.display = 'block';
+    tt.style.left = Math.min(e.clientX + 14, W - 350) + 'px';
+    tt.style.top = Math.min(e.clientY - 8, H - 120) + 'px';
+    tt.innerHTML = `<div class="tt-title">${hit.name}</div>
+      <div>${hit.type} · ${hit.weight} co-occurrences</div>
+      ${sharedDocNames.length > 0 ? `<div>shared docs: ${sharedDocNames.join(', ')}${hit.sharedDocIds.length > 3 ? '…' : ''}</div>` : ''}
+      <div class="tt-dim">click to re-center on this entity</div>`;
+  } else if (hit && hit.kind === 'central') {
+    tt.style.display = 'block';
+    tt.style.left = Math.min(e.clientX + 14, W - 350) + 'px';
+    tt.style.top = Math.min(e.clientY - 8, H - 80) + 'px';
+    tt.innerHTML = `<div class="tt-title">${hit.name}</div>
+      <div>${hit.type} · ${hit.sourceCount} docs</div>`;
+  } else {
+    tt.style.display = 'none';
+  }
+});
+
+canvas.addEventListener('mouseup', e => {
+  const wasDrag = camera.didDrag;
+  camera.handleMouseUp();
+  if (!wasDrag) {
+    W = canvas.width / devicePixelRatio;
+    H = canvas.height / devicePixelRatio;
+    const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
+    const hit = hitTest(w.x, w.y);
+    if (hit) {
+      if (hit.kind === 'co_entity') {
+        window.location.search = `?entity=${encodeURIComponent(hit.id)}`;
+      } else if (hit.kind === 'document') {
+        window.parent.postMessage({
+          type: 'node_selected', nodeType: 'document',
+          data: { id: hit.id, title: hit.title }
+        }, '*');
+      }
+    } else {
+      // Clicked empty space — close any open panel
+      window.parent.postMessage({ type: 'node_cleared' }, '*');
+    }
+  }
+});
+
+canvas.addEventListener('wheel', e => camera.handleWheel(e), { passive: false });
+
+// Render loop
+function frame() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W * devicePixelRatio;
+  canvas.height = H * devicePixelRatio;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx = canvas.getContext('2d');
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+
+  tick++;
+  camera.update();
+
+  if (centralEntity && centralEntity.activityGlow > 0) {
+    centralEntity.activityGlow = Math.max(0, centralEntity.activityGlow - 0.0025 * 16.67);
+  }
+  for (const e of coEntities) {
+    if (e.activityGlow > 0) e.activityGlow = Math.max(0, e.activityGlow - 0.0025 * 16.67);
+  }
+  for (const d of docs) {
+    if (d.activityGlow > 0) d.activityGlow = Math.max(0, d.activityGlow - 0.0025 * 16.67);
+  }
+
+  // Update pulses
+  for (let i = pulses.length - 1; i >= 0; i--) {
+    pulses[i].progress += pulses[i].speed;
+    if (pulses[i].progress >= 1) pulses.splice(i, 1);
+  }
+
+  drawBackground(ctx, W, H, tick);
+
+  ctx.save();
+  camera.applyTransform(ctx, W, H);
+
+  if (centralEntity) {
+    drawConnections(ctx, centralEntity.x, centralEntity.y, docs, coEntities, hoveredId);
+
+    // Draw traveling pulses
+    for (const p of pulses) {
+      const rawP = p.progress;
+      const ep = rawP < 0.5 ? 2 * rawP * rawP : -1 + (4 - 2 * rawP) * rawP;
+      const gf = sin(rawP * Math.PI);
+      const px = p.fromX + (p.toX - p.fromX) * ep;
+      const py = p.fromY + (p.toY - p.fromY) * ep;
+
+      // Trail — subtle
+      const tp = Math.max(0, rawP - 0.10);
+      const tep = tp < 0.5 ? 2 * tp * tp : -1 + (4 - 2 * tp) * tp;
+      const tx = p.fromX + (p.toX - p.fromX) * tep;
+      const ty = p.fromY + (p.toY - p.fromY) * tep;
+      const tg = ctx.createLinearGradient(tx, ty, px, py);
+      tg.addColorStop(0, `rgba(${p.col[0]},${p.col[1]},${p.col[2]},0)`);
+      tg.addColorStop(1, `rgba(${p.col[0]},${p.col[1]},${p.col[2]},${0.30 * gf})`);
+      ctx.strokeStyle = tg;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(px, py);
+      ctx.stroke();
+
+      // Dot — small and soft
+      const sz = 3 + gf * 2.5;
+      const dg = ctx.createRadialGradient(px, py, 0, px, py, sz);
+      dg.addColorStop(0, `rgba(255,255,255,${0.85 * gf})`);
+      dg.addColorStop(0.3, `rgba(${p.col[0]},${p.col[1]},${p.col[2]},${0.6 * gf})`);
+      dg.addColorStop(1, `rgba(${p.col[0]},${p.col[1]},${p.col[2]},0)`);
+      ctx.fillStyle = dg;
+      ctx.beginPath();
+      ctx.arc(px, py, sz, 0, TAU);
+      ctx.fill();
+    }
+
+    drawDocuments(ctx, docs, tick, hoveredId);
+    drawCoEntities(ctx, coEntities, tick, hoveredId);
+    drawCentralStar(ctx, centralEntity, tick);
+  }
+
+  ctx.restore();
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

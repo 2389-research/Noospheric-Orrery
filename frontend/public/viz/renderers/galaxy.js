@@ -59,7 +59,8 @@ export function drawClusterCloud(ctx, cluster, state) {
 export function drawDomainNebula(ctx, dom, tick) {
   const [r, g, b] = hexRGB(dom.color);
   const bR = dom.radius * clamp(dom.birthScale, 0, 1);
-  const brightness = 1 + dom.activityGlow * 1.8;
+  const act = dom.activityGlow;
+  const brightness = 1 + act * 2.2; // match reference boost
 
   if (dom.simmering) {
     _drawSimmering(ctx, dom, bR, r, g, b, tick, brightness);
@@ -69,9 +70,20 @@ export function drawDomainNebula(ctx, dom, tick) {
     _drawUnformed(ctx, dom, bR, r, g, b, tick, brightness);
   }
 
+  // Activity ring — visible when domain is hit by a pulse
+  if (act > 0.25) {
+    const ringR = bR * (0.9 + act * 0.6);
+    ctx.strokeStyle = rgba(r, g, b, act * 0.45);
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(dom.x, dom.y, ringR, 0, TAU);
+    ctx.stroke();
+  }
+
   // Label
+  const labelA = 0.2 + act * 0.6 + (dom.maturity > 0 ? 0.1 : 0);
   const labelY = dom.y + bR * 1.8 + 20;
-  ctx.fillStyle = rgba(r, g, b, 0.9 * brightness);
+  ctx.fillStyle = rgba(r, g, b, min(1, labelA + 0.7));
   ctx.font = `${dom.isSubdomain ? 28 : 36}px 'Courier New', monospace`;
   ctx.textAlign = 'center';
   ctx.fillText(dom.label.split('/').pop(), dom.x, labelY);
@@ -203,10 +215,11 @@ function _drawFormed(ctx, dom, bR, r, g, b, tick, brightness) {
   }
 }
 
-/** Draw faint trade routes + activity pulses */
+/** Draw faint trade routes + traveling pulses */
 export function drawTradeRoutes(ctx, state) {
   const maxWeight = Math.max(1, ...state.tradeRoutes.map(r => r.weight));
 
+  // Draw route lines
   for (const route of state.tradeRoutes) {
     const srcDom = state.domains.get(route.source);
     const tgtDom = state.domains.get(route.target);
@@ -224,66 +237,63 @@ export function drawTradeRoutes(ctx, state) {
     ctx.lineTo(tgtDom.x, tgtDom.y);
     ctx.stroke();
     ctx.setLineDash([]);
+  }
 
-    // Activity pulse
-    if (route.pulseStart) {
-      const elapsed = performance.now() - route.pulseStart;
-      const rawP = clamp(elapsed / (route.pulseDuration || 900), 0, 1);
+  // Draw traveling pulses (from state.pulses)
+  for (const p of state.pulses) {
+    const srcDom = state.domains.get(p.source);
+    const tgtDom = state.domains.get(p.target);
+    if (!srcDom || !tgtDom) continue;
 
-      if (rawP < 1) {
-        // Ease in-out
-        const progress = rawP < 0.5 ? 2 * rawP * rawP : -1 + (4 - 2 * rawP) * rawP;
-        // Sine brightness envelope
-        const brightness = sin(rawP * Math.PI);
+    const rawP = p.progress;
+    // Ease in-out
+    const ep = rawP < 0.5 ? 2 * rawP * rawP : -1 + (4 - 2 * rawP) * rawP;
+    // Sine brightness envelope
+    const gf = sin(rawP * Math.PI);
 
-        // Bidirectional — two dots from center outward
-        const midX = (srcDom.x + tgtDom.x) / 2;
-        const midY = (srcDom.y + tgtDom.y) / 2;
+    const ax = srcDom.x, ay = srcDom.y;
+    const bx = tgtDom.x, by = tgtDom.y;
+    const px = ax + (bx - ax) * ep;
+    const py = ay + (by - ay) * ep;
 
-        for (let dir = 0; dir < 2; dir++) {
-          const dest = dir === 0 ? srcDom : tgtDom;
-          const px = midX + (dest.x - midX) * progress;
-          const py = midY + (dest.y - midY) * progress;
+    // Trail — white gradient behind the dot
+    const trailP = max(0, rawP - 0.10);
+    const tep = trailP < 0.5 ? 2 * trailP * trailP : -1 + (4 - 2 * trailP) * trailP;
+    const tx = ax + (bx - ax) * tep;
+    const ty = ay + (by - ay) * tep;
+    const tg = ctx.createLinearGradient(tx, ty, px, py);
+    tg.addColorStop(0, `rgba(255,255,255,0)`);
+    tg.addColorStop(1, `rgba(255,255,255,${0.50 * gf})`);
+    ctx.strokeStyle = tg;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(px, py);
+    ctx.stroke();
 
-          const dotSize = 25;  // world units — visible at galaxy zoom
-          const dotG = ctx.createRadialGradient(px, py, 0, px, py, dotSize);
-          dotG.addColorStop(0, `rgba(0,255,220,${0.9 * brightness})`);
-          dotG.addColorStop(0.3, `rgba(0,220,200,${0.5 * brightness})`);
-          dotG.addColorStop(1, 'rgba(0,180,160,0)');
-          ctx.fillStyle = dotG;
-          ctx.beginPath();
-          ctx.arc(px, py, dotSize, 0, TAU);
-          ctx.fill();
+    // Dot — white core → domain color
+    const [pr, pg, pb] = p.col;
+    const sz = 20 + gf * 12; // world units
+    const dg = ctx.createRadialGradient(px, py, 0, px, py, sz);
+    dg.addColorStop(0, `rgba(255,255,255,${0.98 * gf})`);
+    dg.addColorStop(0.2, `rgba(${pr},${pg},${pb},${0.85 * gf})`);
+    dg.addColorStop(0.6, `rgba(${pr},${pg},${pb},${0.30 * gf})`);
+    dg.addColorStop(1, `rgba(${pr},${pg},${pb},0)`);
+    ctx.fillStyle = dg;
+    ctx.beginPath();
+    ctx.arc(px, py, sz, 0, TAU);
+    ctx.fill();
 
-          // Trail
-          const trailP = max(0, progress - 0.1);
-          const tx = midX + (dest.x - midX) * trailP;
-          const ty = midY + (dest.y - midY) * trailP;
-          const tg = ctx.createLinearGradient(tx, ty, px, py);
-          tg.addColorStop(0, 'rgba(0,255,220,0)');
-          tg.addColorStop(1, `rgba(0,255,220,${0.25 * brightness})`);
-          ctx.strokeStyle = tg;
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.moveTo(tx, ty);
-          ctx.lineTo(px, py);
-          ctx.stroke();
-
-          // Arrival ripple (last 18% of travel)
-          if (rawP > 0.82) {
-            const rippleP = (rawP - 0.82) / 0.18;
-            const rippleR = 60 * rippleP;
-            const rippleA = 0.3 * (1 - rippleP) * brightness;
-            ctx.strokeStyle = `rgba(0,255,220,${rippleA})`;
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.arc(dest.x, dest.y, rippleR, 0, TAU);
-            ctx.stroke();
-          }
-        }
-      } else {
-        route.pulseStart = null;
-      }
+    // Arrival ripple at destination (last 18% of travel)
+    if (rawP > 0.82) {
+      const rp = (rawP - 0.82) / 0.18;
+      const rippleR = tgtDom.radius * (0.2 + rp * 0.7);
+      const rippleA = (1 - rp) * 0.55;
+      ctx.strokeStyle = `rgba(255,255,255,${rippleA})`;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(tgtDom.x, tgtDom.y, rippleR, 0, TAU);
+      ctx.stroke();
     }
   }
 }

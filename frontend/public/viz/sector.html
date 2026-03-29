@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Noospheric Orrery — Sector</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #01040a; color: #c0c8e0; font-family: 'Courier New', monospace; overflow: hidden; }
+canvas { display: block; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; cursor: grab; z-index: 1; }
+canvas:active { cursor: grabbing; }
+#hud {
+  position: fixed; top: 12px; left: 14px; z-index: 10;
+  font-size: 10px; letter-spacing: .08em; line-height: 1.8; pointer-events: none;
+}
+#hud .title { font-size: 13px; color: rgba(220,130,80,0.9); letter-spacing: .12em; margin-bottom: 4px; }
+#hud .info { color: rgba(200,120,80,0.6); }
+#hud .sub { color: rgba(200,120,80,0.35); }
+#tooltip {
+  position: fixed; z-index: 20; pointer-events: none; display: none;
+  background: rgba(6,13,34,0.95); border: 0.5px solid rgba(200,120,80,0.25);
+  border-radius: 4px; padding: 8px 10px; min-width: 180px; max-width: 300px;
+  font: 10px 'Courier New', monospace; color: rgba(220,200,180,0.8); line-height: 1.9;
+}
+#tooltip .tt-title { font-size: 11px; color: rgba(220,140,80,0.95); margin-bottom: 4px; letter-spacing: .06em; }
+#tooltip .tt-dim { color: rgba(200,120,80,0.4); font-size: 9px; }
+#back-btn {
+  position: fixed; top: 12px; right: 14px; z-index: 10;
+  font: 10px 'Courier New', monospace; padding: 5px 14px;
+  border: 0.5px solid rgba(200,120,80,0.3); border-radius: 3px;
+  color: rgba(200,120,80,0.6); background: rgba(200,120,80,0.05);
+  cursor: pointer; letter-spacing: .08em; transition: all .12s;
+}
+#back-btn:hover { color: rgba(220,140,80,1); border-color: rgba(220,140,80,0.7); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div class="title" id="hud-title">◎ LOADING...</div>
+  <div class="info" id="hud-info"></div>
+  <div class="sub" id="hud-sub"></div>
+</div>
+<div id="tooltip"></div>
+<button id="back-btn" onclick="window.parent.postMessage({type:'navigate_galaxy'},'*')">← galaxy</button>
+
+<script type="module">
+import { Camera } from './core/camera.js';
+import { hexRGB, rgba, WORLD_W, WORLD_H, sqrt, clamp, random, hypot, TAU, assignDomainColors, blendColors } from './core/utils.js';
+import { drawBackground } from './renderers/galaxy.js';
+import { drawEdgeDomains, drawSectorRoutes, drawSectorDomain, drawSectorEntities } from './renderers/sector.js';
+
+const canvas = document.getElementById('c');
+const camera = new Camera();
+let W, H, ctx;
+let tick = 0;
+
+// Parse params — ?domain=path or ?cluster=N
+const params = new URLSearchParams(location.search);
+const focusDomain = params.get('domain');
+const focusCluster = params.get('cluster');
+
+// State
+const sectorDomains = new Map();   // path → domain object
+const edgeDomains = [];            // peripheral domain objects
+const sectorRoutes = [];           // routes between sector domains
+const sectorEntities = [];         // visible entities
+const pulses = [];                 // traveling pulses
+
+let hoveredDomainId = null;
+let hoveredRouteIdx = -1;
+let hoveredEntityId = null;
+
+// Load data
+const API_URL = window.API_URL || 'http://localhost:8100';
+fetch(`${API_URL}/graph`).then(r => r.json()).then(data => {
+  buildSectorView(data);
+});
+
+// Listen for search glow
+window.addEventListener('message', e => {
+  if (e.data?.type === 'search_result' && e.data.entities) {
+    triggerSearchGlow(e.data.entities);
+  }
+});
+
+function buildSectorView(data) {
+  // Compute domain colors
+  const domainList = Object.keys(data.domain_positions).map(path => ({
+    path,
+    spec_version: data.domain_specs?.[path]?.spec_version ?? null,
+  }));
+  const domainColors = assignDomainColors(domainList);
+  if (data.region_colors) {
+    for (const [path, color] of Object.entries(data.region_colors)) {
+      if (!domainColors[path]) domainColors[path] = color;
+    }
+  }
+
+  // Build all domain nodes in world space (same as galaxy view)
+  const allDomains = new Map();
+  const PADDING = 0.08;
+  for (const [path, pos] of Object.entries(data.domain_positions)) {
+    const vc = data.domain_video_counts?.[path] || 0;
+    const specs = data.domain_specs || {};
+    const hasSpec = specs[path] && specs[path].spec_version > 0;
+    const specVersion = specs[path]?.spec_version || 0;
+    const isSub = (data.subdomains || []).includes(path);
+    const isSimmering = (data.active_simmers || []).includes(path);
+
+    const wx = (PADDING + pos.x * (1 - 2 * PADDING)) * WORLD_W;
+    const wy = (PADDING + pos.y * (1 - 2 * PADDING)) * WORLD_H;
+
+    // Maturity
+    const allPaths = Object.keys(data.domain_positions);
+    const subdoms = allPaths.filter(p => p.startsWith(path + '/') && p !== path);
+    let maturity = 0;
+    if (subdoms.length === 0) {
+      maturity = hasSpec ? 1.0 : 0.0;
+    } else {
+      const subWithSpec = subdoms.filter(p => specs[p] && specs[p].spec_version > 0).length;
+      const subCoverage = subWithSpec / subdoms.length;
+      maturity = hasSpec ? 0.5 + subCoverage * 0.5 : subCoverage * 0.4;
+    }
+
+    allDomains.set(path, {
+      id: 'dom:' + path,
+      kind: 'domain',
+      path,
+      label: path,
+      color: domainColors[path] || '#81d4fa',
+      radius: isSub ? 60 + sqrt(vc) * 20 : 120 + sqrt(vc) * 35,
+      x: wx, y: wy,
+      docCount: vc,
+      maturity,
+      specVersion,
+      simmering: isSimmering,
+      isSubdomain: isSub,
+      birthScale: 1,
+      activityGlow: 0,
+    });
+  }
+
+  // Enforce minimum separation (same as galaxy)
+  const doms = [...allDomains.values()];
+  for (let iter = 0; iter < 200; iter++) {
+    for (let i = 0; i < doms.length; i++) {
+      for (let j = i + 1; j < doms.length; j++) {
+        const a = doms[i], b = doms[j];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = hypot(dx, dy) || 1;
+        if (dist < 400) {
+          const push = (400 - dist) / 2;
+          const nx = dx / dist, ny = dy / dist;
+          a.x -= nx * push * 0.5;
+          a.y -= ny * push * 0.5;
+          b.x += nx * push * 0.5;
+          b.y += ny * push * 0.5;
+        }
+      }
+    }
+  }
+
+  // Compute clusters (same as galaxy)
+  const assigned = new Set();
+  const clusters = [];
+  for (let i = 0; i < doms.length; i++) {
+    if (assigned.has(i)) continue;
+    const members = [i];
+    assigned.add(i);
+    for (let j = i + 1; j < doms.length; j++) {
+      if (assigned.has(j)) continue;
+      if (hypot(doms[i].x - doms[j].x, doms[i].y - doms[j].y) < 600) {
+        members.push(j);
+        assigned.add(j);
+      }
+    }
+    clusters.push(members.map(mi => doms[mi]));
+  }
+
+  // Find which cluster to focus on
+  let focusClusterDoms;
+  if (focusDomain) {
+    focusClusterDoms = clusters.find(c => c.some(d => d.path === focusDomain));
+  } else if (focusCluster !== null) {
+    focusClusterDoms = clusters[parseInt(focusCluster)] || clusters[0];
+  }
+  if (!focusClusterDoms) focusClusterDoms = clusters[0] || doms;
+
+  const focusPaths = new Set(focusClusterDoms.map(d => d.path));
+
+  // Sector domains — scale up radius for sector view
+  for (const d of focusClusterDoms) {
+    d.radius *= 1.8; // larger at sector zoom
+    sectorDomains.set(d.path, d);
+  }
+
+  // Count entities per domain
+  const entityCountByDomain = {};
+  for (const ent of (data.entities || [])) {
+    for (const path of Object.keys(ent.domainWeights || {})) {
+      entityCountByDomain[path] = (entityCountByDomain[path] || 0) + 1;
+    }
+  }
+  for (const [path, dom] of sectorDomains) {
+    dom.entityCount = entityCountByDomain[path] || 0;
+  }
+
+  // Edge domains — from other clusters that share trade routes with focused cluster
+  const connectedPaths = new Set();
+  for (const route of (data.trade_routes || [])) {
+    if (focusPaths.has(route.source) && !focusPaths.has(route.target)) connectedPaths.add(route.target);
+    if (focusPaths.has(route.target) && !focusPaths.has(route.source)) connectedPaths.add(route.source);
+  }
+  for (const path of connectedPaths) {
+    const d = allDomains.get(path);
+    if (d) {
+      // Position edge domains further out from cluster center
+      const cx = focusClusterDoms.reduce((s, d) => s + d.x, 0) / focusClusterDoms.length;
+      const cy = focusClusterDoms.reduce((s, d) => s + d.y, 0) / focusClusterDoms.length;
+      const dx = d.x - cx, dy = d.y - cy;
+      const dist = hypot(dx, dy) || 1;
+      // Push edge domains to periphery
+      const edgeDist = Math.max(dist, 800);
+      d.x = cx + (dx / dist) * edgeDist;
+      d.y = cy + (dy / dist) * edgeDist;
+      d.radius *= 0.7;
+      edgeDomains.push(d);
+    }
+  }
+
+  // Trade routes between sector domains
+  for (const route of (data.trade_routes || [])) {
+    if (focusPaths.has(route.source) && focusPaths.has(route.target)) {
+      sectorRoutes.push(route);
+    }
+  }
+
+  // Key entities — those belonging to sector domains, sorted by source count
+  const allEntities = (data.entities || [])
+    .filter(ent => {
+      const dw = ent.domainWeights || {};
+      return Object.keys(dw).some(p => focusPaths.has(p));
+    })
+    .sort((a, b) => (b.videoCount || 0) - (a.videoCount || 0))
+    .slice(0, 40); // top 40
+
+  for (const ent of allEntities) {
+    const dw = ent.domainWeights || {};
+    const domNames = Object.keys(dw).filter(p => focusPaths.has(p));
+    const isBridge = domNames.length > 1;
+
+    // Position: weighted average of domain positions
+    let sx = 0, sy = 0, tw = 0;
+    const domColors = [], domWeights = [];
+    for (const [dname, w] of Object.entries(dw)) {
+      const dom = sectorDomains.get(dname);
+      if (!dom) continue;
+      const cw = w * w * w;
+      sx += dom.x * cw;
+      sy += dom.y * cw;
+      tw += cw;
+      domColors.push(dom.color);
+      domWeights.push(w);
+    }
+    if (tw === 0) continue;
+    sx /= tw; sy /= tw;
+
+    // Add jitter so entities don't stack
+    sx += (random() - 0.5) * 80;
+    sy += (random() - 0.5) * 80;
+
+    const vc = ent.videoCount || 0;
+    const color = domColors.length > 1 ? blendColors(domColors, domWeights) : domColors[0];
+
+    sectorEntities.push({
+      id: ent.entityId,
+      name: ent.name,
+      type: ent.type,
+      color,
+      radius: 4 + Math.min(sqrt(vc) * 2, 16),
+      x: sx, y: sy,
+      sourceCount: vc,
+      domainWeights: dw,
+      bright: clamp(0.4 + sqrt(vc) * 0.08, 0.3, 1.0),
+      bridge: isBridge,
+      domainNames: domNames,
+    });
+  }
+
+  // Center camera on the sector
+  const cx = focusClusterDoms.reduce((s, d) => s + d.x, 0) / focusClusterDoms.length;
+  const cy = focusClusterDoms.reduce((s, d) => s + d.y, 0) / focusClusterDoms.length;
+  camera.x = cx;
+  camera.y = cy;
+  camera.zoom = 0.55;
+  camera.targetZoom = 0.55;
+
+  // Update HUD
+  const specCount = focusClusterDoms.filter(d => d.maturity > 0).length;
+  const totalEntities = sectorEntities.length;
+  const sectorName = focusClusterDoms.map(d => d.path.split('/').pop()).join(' / ');
+  document.getElementById('hud-title').textContent = `◎ ${sectorName.toUpperCase()}`;
+  document.getElementById('hud-info').textContent = `${focusClusterDoms.length} domains · ${specCount} specs · ~${totalEntities} entities`;
+  document.getElementById('hud-sub').textContent = focusClusterDoms[0]?.path.split('/').slice(0, -1).join('/') || '';
+
+  console.log(`Sector loaded: ${sectorDomains.size} domains, ${sectorEntities.length} entities, ${sectorRoutes.length} routes`);
+}
+
+// Search glow
+function triggerSearchGlow(entityNames) {
+  const hitDomainPaths = new Set();
+
+  for (const name of entityNames) {
+    const nameLower = name.toLowerCase();
+    for (const e of sectorEntities) {
+      if (e.name.toLowerCase() === nameLower) {
+        e.bright = Math.min(1.0, e.bright + 0.5);
+        for (const p of Object.keys(e.domainWeights)) hitDomainPaths.add(p);
+        break;
+      }
+    }
+  }
+
+  // Brighten hit domains
+  for (const path of hitDomainPaths) {
+    const dom = sectorDomains.get(path);
+    if (dom) dom.activityGlow = Math.min(1.0, dom.activityGlow + 0.8);
+  }
+
+  // Fire pulses along routes between hit domains
+  const candidates = sectorRoutes.filter(r =>
+    hitDomainPaths.has(r.source) && hitDomainPaths.has(r.target)
+  );
+  candidates.forEach((route, i) => {
+    const srcDom = sectorDomains.get(route.source);
+    if (srcDom) {
+      setTimeout(() => {
+        pulses.push({
+          source: route.source,
+          target: route.target,
+          col: hexRGB(srcDom.color),
+          progress: 0,
+          speed: 0.005 + random() * 0.005,
+          arrivedFlag: false,
+        });
+      }, i * 150);
+    }
+  });
+}
+
+// Hit testing
+function hitTest(wx, wy) {
+  // Entities first (smaller targets)
+  for (const e of sectorEntities) {
+    if (hypot(wx - e.x, wy - e.y) < (e.radius + 10)) return { kind: 'entity', obj: e };
+  }
+
+  // Domains
+  for (const [, d] of sectorDomains) {
+    if (hypot(wx - d.x, wy - d.y) < d.radius * 1.2) return { kind: 'domain', obj: d };
+  }
+
+  // Trade routes
+  for (let i = 0; i < sectorRoutes.length; i++) {
+    const route = sectorRoutes[i];
+    const s = sectorDomains.get(route.source);
+    const t = sectorDomains.get(route.target);
+    if (!s || !t) continue;
+    const len2 = (t.x - s.x) ** 2 + (t.y - s.y) ** 2;
+    const param = Math.max(0, Math.min(1, ((wx - s.x) * (t.x - s.x) + (wy - s.y) * (t.y - s.y)) / len2));
+    const px = s.x + param * (t.x - s.x), py = s.y + param * (t.y - s.y);
+    if (hypot(wx - px, wy - py) < 30 / camera.zoom) return { kind: 'route', idx: i, obj: route };
+  }
+
+  return null;
+}
+
+// Input
+canvas.addEventListener('mousedown', e => camera.handleMouseDown(e));
+canvas.addEventListener('mousemove', e => {
+  if (camera.handleMouseDrag(e)) return;
+  W = canvas.width / devicePixelRatio;
+  H = canvas.height / devicePixelRatio;
+  const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
+  const hit = hitTest(w.x, w.y);
+
+  hoveredDomainId = null;
+  hoveredRouteIdx = -1;
+  hoveredEntityId = null;
+  canvas.style.cursor = hit ? 'pointer' : 'grab';
+
+  const tt = document.getElementById('tooltip');
+  if (hit) {
+    tt.style.display = 'block';
+    tt.style.left = Math.min(e.clientX + 14, W - 300) + 'px';
+    tt.style.top = Math.min(e.clientY - 8, H - 100) + 'px';
+
+    if (hit.kind === 'domain') {
+      hoveredDomainId = hit.obj.id;
+      const d = hit.obj;
+      const specStr = d.maturity > 0 ? `spec v${d.specVersion} · active` : 'no spec yet';
+      tt.innerHTML = `<div class="tt-title">${d.path.split('/').pop()}</div>
+        <div>${d.docCount} docs · ${d.entityCount || 0} entities</div>
+        <div>${specStr}</div>
+        <div class="tt-dim">click to enter system view</div>`;
+    } else if (hit.kind === 'route') {
+      hoveredRouteIdx = hit.idx;
+      const r = hit.obj;
+      const strength = r.weight >= 30 ? 'strong' : r.weight >= 15 ? 'moderate' : 'light';
+      tt.innerHTML = `<div class="tt-title">${r.source.split('/').pop()} ↔ ${r.target.split('/').pop()}</div>
+        <div>weight: ${r.weight} · ${strength} connection</div>
+        <div class="tt-dim">shared entities bridge these domains</div>`;
+    } else if (hit.kind === 'entity') {
+      hoveredEntityId = hit.obj.id;
+      const ent = hit.obj;
+      const doms = ent.domainNames.map(p => p.split('/').pop()).join(', ');
+      tt.innerHTML = `<div class="tt-title">${ent.name}</div>
+        <div>${ent.bridge ? 'bridge entity · ' : ''}${ent.type}</div>
+        <div>${doms} · ${ent.sourceCount} docs</div>
+        <div class="tt-dim">click to enter star view</div>`;
+    }
+  } else {
+    tt.style.display = 'none';
+  }
+});
+
+canvas.addEventListener('mouseup', e => {
+  const wasDrag = camera.didDrag;
+  camera.handleMouseUp();
+
+  if (!wasDrag) {
+    W = canvas.width / devicePixelRatio;
+    H = canvas.height / devicePixelRatio;
+    const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
+    const hit = hitTest(w.x, w.y);
+
+    if (hit) {
+      if (hit.kind === 'domain') {
+        // Fly into domain
+        camera.flyTo(hit.obj.x, hit.obj.y, 1.2, 800);
+        window.parent.postMessage({
+          type: 'node_selected', nodeType: 'domain',
+          data: { path: hit.obj.path, name: hit.obj.label, document_count: hit.obj.docCount }
+        }, '*');
+      } else if (hit.kind === 'entity') {
+        camera.flyTo(hit.obj.x, hit.obj.y, 2.0, 800);
+        window.parent.postMessage({
+          type: 'node_selected', nodeType: 'entity',
+          data: { id: hit.obj.id, name: hit.obj.name, entityType: hit.obj.type, source_count: hit.obj.sourceCount }
+        }, '*');
+      }
+    }
+  }
+});
+
+canvas.addEventListener('wheel', e => camera.handleWheel(e), { passive: false });
+
+// Render loop
+function frame() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W * devicePixelRatio;
+  canvas.height = H * devicePixelRatio;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx = canvas.getContext('2d');
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+
+  tick++;
+  camera.update();
+
+  // Update activity decay
+  for (const d of sectorDomains.values()) {
+    if (d.activityGlow > 0) d.activityGlow = Math.max(0, d.activityGlow - 0.0012 * 16.67);
+  }
+
+  // Update pulses
+  for (let i = pulses.length - 1; i >= 0; i--) {
+    pulses[i].progress += pulses[i].speed;
+    if (pulses[i].progress >= 0.82 && !pulses[i].arrivedFlag) {
+      pulses[i].arrivedFlag = true;
+      const tgt = sectorDomains.get(pulses[i].target);
+      if (tgt) tgt.activityGlow = Math.min(1, tgt.activityGlow + 0.5);
+    }
+    if (pulses[i].progress >= 1) pulses.splice(i, 1);
+  }
+
+  // Draw background (screen space)
+  drawBackground(ctx, W, H, tick);
+
+  // World space
+  ctx.save();
+  camera.applyTransform(ctx, W, H);
+
+  // Edge domains (dim, non-interactive)
+  drawEdgeDomains(ctx, edgeDomains);
+
+  // Trade routes + pulses
+  drawSectorRoutes(ctx, sectorRoutes, sectorDomains, hoveredRouteIdx, pulses);
+
+  // Domain nebulae
+  for (const [, dom] of sectorDomains) {
+    drawSectorDomain(ctx, dom, tick, hoveredDomainId);
+  }
+
+  // Entities
+  drawSectorEntities(ctx, sectorEntities, hoveredEntityId);
+
+  ctx.restore();
+
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

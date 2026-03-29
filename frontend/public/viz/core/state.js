@@ -3,7 +3,7 @@
  * Single source of truth for all renderers.
  */
 
-import { WORLD_W, WORLD_H, sqrt, random, hypot, assignDomainColors, blendColors, rnd, TAU } from './utils.js';
+import { WORLD_W, WORLD_H, sqrt, random, hypot, assignDomainColors, blendColors, hexRGB, rnd, TAU } from './utils.js';
 
 export class WorldState {
   constructor() {
@@ -20,6 +20,11 @@ export class WorldState {
 
     // Raw data
     this.graphData = null;
+
+    // Ambient pulse system
+    this.pulses = [];
+    this.nextPulseTime = 0;
+    this.pulseInterval = 600;
   }
 
   get activeId() {
@@ -158,6 +163,10 @@ export class WorldState {
       pulseStart: null,
       pulseDuration: 900,
     }));
+
+    // Reset ambient pulses on data reload
+    this.pulses = [];
+    this.nextPulseTime = 0;
   }
 
   /** Push domains apart to enforce minimum separation */
@@ -237,19 +246,34 @@ export class WorldState {
   /** Update per-frame state */
   update(dt) {
     this.tick++;
+    const now = performance.now();
 
     // Grow birthScale
     for (const d of this.domains.values()) {
       if (d.birthScale < 1) d.birthScale = Math.min(1, d.birthScale + 0.015);
-      // Decay activity
-      if (d.activityGlow > 0) d.activityGlow = Math.max(0, d.activityGlow - 0.0008 * dt);
+      // Decay activity — matches reference: 0.0015 * dt
+      if (d.activityGlow > 0) d.activityGlow = Math.max(0, d.activityGlow - 0.0015 * dt);
       d.rot += 0.0003;
     }
 
     for (const e of this.entities.values()) {
       if (e.birthScale < 1) e.birthScale = Math.min(1, e.birthScale + 0.012);
-      if (e.activityGlow > 0) e.activityGlow = Math.max(0, e.activityGlow - 0.0012 * dt);
+      if (e.activityGlow > 0) e.activityGlow = Math.max(0, e.activityGlow - 0.0015 * dt);
     }
+
+    // Update active pulses
+    this.pulses = this.pulses.filter(p => p.progress < 1);
+    for (const p of this.pulses) {
+      p.progress += p.speed;
+      // Boost destination domain on arrival
+      if (p.progress >= 0.82 && !p.arrivedFlag) {
+        p.arrivedFlag = true;
+        const tgtDom = this.domains.get(p.target);
+        if (tgtDom) tgtDom.activityGlow = Math.min(1, tgtDom.activityGlow + 0.5);
+      }
+    }
+
+    // Pulses are only spawned by search glow — no ambient firing
   }
 
   /** Trigger search glow — cascaded timing per animation spec */
@@ -307,11 +331,23 @@ export class WorldState {
           candidates.push({ route, score });
         }
       }
-      candidates.sort((a, b) => b.score - a.score);
+      // Sort by score, shuffle ties to avoid alphabetical spatial bias
+      candidates.sort((a, b) => b.score - a.score || (random() - 0.5));
 
       candidates.forEach((c, i) => {
-        c.route.pulseStart = performance.now() + i * 150;
-        c.route.pulseDuration = 900;
+        const srcDom = this.domains.get(c.route.source);
+        if (srcDom) {
+          setTimeout(() => {
+            this.pulses.push({
+              source: c.route.source,
+              target: c.route.target,
+              col: hexRGB(srcDom.color),
+              progress: 0,
+              speed: 0.008,
+              arrivedFlag: false,
+            });
+          }, i * 150);
+        }
       });
     }, 250);
 
