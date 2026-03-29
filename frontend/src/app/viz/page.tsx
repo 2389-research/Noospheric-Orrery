@@ -155,7 +155,7 @@ export default function VizPage() {
 
       <iframe
         ref={iframeRef}
-        src="/cosmic-viz.html"
+        src="/viz/index.html"
         style={{ width: "100%", height: "100%", border: "none", position: "absolute", top: 0, left: 0 }}
         title="Cosmic Knowledge Graph"
       />

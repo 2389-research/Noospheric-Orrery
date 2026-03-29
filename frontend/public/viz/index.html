@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Noospheric Orrery — Galaxy</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #01040a; color: #c0c8e0; font-family: 'Courier New', monospace; overflow: hidden; }
+canvas { display: block; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; cursor: grab; z-index: 1; }
+canvas:active { cursor: grabbing; }
+#tooltip {
+  position: fixed; z-index: 20; pointer-events: none; display: none;
+  background: rgba(6,13,34,0.95); border: 1px solid rgba(100,180,255,0.15);
+  border-radius: 6px; padding: 10px 14px; min-width: 160px; max-width: 280px;
+}
+#tooltip .tt-name { color: #eef0f8; font-size: 13px; font-weight: bold; margin-bottom: 2px; }
+#tooltip .tt-sub { color: rgba(140,200,255,0.65); font-size: 11px; line-height: 1.5; }
+#hud {
+  position: fixed; top: 12px; left: 12px; z-index: 10;
+  font-size: 10px; color: rgba(100,180,255,0.5);
+}
+#zoom-level {
+  position: fixed; bottom: 12px; right: 12px; z-index: 10;
+  font-size: 9px; color: rgba(100,180,255,0.3);
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="tooltip"></div>
+<div id="hud"></div>
+<div id="zoom-level"></div>
+
+<script type="module">
+import { Camera } from './core/camera.js';
+import { WorldState } from './core/state.js';
+import { getCurrentLevel, WORLD_W, WORLD_H } from './core/utils.js';
+import { drawBackground, drawClusterCloud, drawDomainNebula, drawTradeRoutes, drawEntityStars } from './renderers/galaxy.js';
+
+const canvas = document.getElementById('c');
+const camera = new Camera();
+const state = new WorldState();
+let W, H, ctx;
+
+// Center camera on world
+camera.x = WORLD_W / 2;
+camera.y = WORLD_H / 2;
+
+// Load data
+const API_URL = window.API_URL || 'http://localhost:8100';
+fetch(`${API_URL}/graph`).then(r => r.json()).then(data => {
+  state.loadGraphData(data);
+  console.log(`Loaded: ${state.domains.size} domains, ${state.entities.size} entities, ${state.clusters.length} clusters`);
+  updateHUD();
+});
+
+// Listen for search glow
+window.addEventListener('message', e => {
+  if (e.data?.type === 'search_result' && e.data.entities) {
+    state.triggerSearchGlow(e.data.entities);
+  }
+});
+
+// Input handling
+canvas.addEventListener('mousedown', e => camera.handleMouseDown(e));
+canvas.addEventListener('mousemove', e => {
+  if (camera.handleMouseDrag(e)) return;
+
+  W = canvas.width / devicePixelRatio;
+  H = canvas.height / devicePixelRatio;
+  const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
+
+  // Hit test
+  const hit = hitTest(w.x, w.y);
+  canvas.style.cursor = hit ? 'pointer' : 'grab';
+  state.hoveredId = hit ? hit.id : null;
+
+  const tt = document.getElementById('tooltip');
+  if (hit) {
+    tt.style.display = 'block';
+    tt.style.left = Math.min(e.clientX + 14, W - 280) + 'px';
+    tt.style.top = Math.min(e.clientY - 8, H - 100) + 'px';
+    if (hit.kind === 'domain') {
+      tt.innerHTML = `<div class="tt-name">${hit.label}</div><div class="tt-sub">${hit.docCount} docs · maturity ${(hit.maturity * 100).toFixed(0)}%</div>`;
+    } else if (hit.kind === 'entity') {
+      tt.innerHTML = `<div class="tt-name">${hit.label}</div><div class="tt-sub">${hit.type} · ${hit.sourceCount} docs</div>`;
+    } else if (hit.kind === 'cluster') {
+      tt.innerHTML = `<div class="tt-name">${hit.domainPaths.length} domains</div><div class="tt-sub">${hit.domainPaths.map(p => p.split('/').pop()).join(', ')}</div>`;
+    }
+  } else {
+    tt.style.display = 'none';
+  }
+});
+
+canvas.addEventListener('mouseup', e => {
+  const wasDrag = camera.didDrag;
+  camera.handleMouseUp();
+
+  if (!wasDrag) {
+    W = canvas.width / devicePixelRatio;
+    H = canvas.height / devicePixelRatio;
+    const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
+    const hit = hitTest(w.x, w.y);
+
+    if (hit) {
+      if (hit.kind === 'cluster') {
+        // Fly to cluster
+        camera.flyTo(hit.centroidX, hit.centroidY, 0.5, 800);
+      } else if (hit.kind === 'domain') {
+        // Fly to domain
+        camera.flyTo(hit.x, hit.y, 1.0, 800);
+      } else if (hit.kind === 'entity') {
+        // Fly to entity
+        camera.flyTo(hit.x, hit.y, 2.0, 800);
+      }
+
+      // Pin + postMessage
+      state.pinnedId = (state.pinnedId === hit.id) ? null : hit.id;
+      const pinnedNode = state.pinnedId ? hit : null;
+      if (pinnedNode) {
+        const payload = { type: 'node_selected', nodeType: pinnedNode.kind };
+        if (pinnedNode.kind === 'entity') {
+          payload.data = { id: pinnedNode.id, name: pinnedNode.label, entityType: pinnedNode.type, source_count: pinnedNode.sourceCount, domain_weights: pinnedNode.domainWeights };
+        } else if (pinnedNode.kind === 'domain') {
+          payload.data = { path: pinnedNode.path, name: pinnedNode.label, document_count: pinnedNode.docCount };
+        }
+        window.parent.postMessage(payload, '*');
+      } else {
+        window.parent.postMessage({ type: 'node_cleared' }, '*');
+      }
+    } else {
+      state.pinnedId = null;
+      window.parent.postMessage({ type: 'node_cleared' }, '*');
+    }
+  }
+});
+
+canvas.addEventListener('wheel', e => camera.handleWheel(e), { passive: false });
+
+function hitTest(wx, wy) {
+  const level = camera.level;
+
+  // Entities (if visible at this zoom)
+  if (camera.zoom > 0.15) {
+    for (const [, e] of state.entities) {
+      const dist = Math.hypot(wx - e.x, wy - e.y);
+      if (dist < (e.radius + 6) / Math.min(camera.zoom, 1)) return e;
+    }
+  }
+
+  // Domains
+  for (const [, d] of state.domains) {
+    const dist = Math.hypot(wx - d.x, wy - d.y);
+    if (dist < d.radius * 1.5) return d;
+  }
+
+  // Clusters (galaxy view only)
+  if (level === 'galaxy') {
+    for (const c of state.clusters) {
+      const dist = Math.hypot(wx - c.centroidX, wy - c.centroidY);
+      if (dist < c.radius * 0.8) return { ...c, kind: 'cluster', id: c.id };
+    }
+  }
+
+  return null;
+}
+
+function updateHUD() {
+  const hud = document.getElementById('hud');
+  hud.textContent = `${state.domains.size} domains · ${state.entities.size} entities · ${state.clusters.length} clusters`;
+}
+
+// Main render loop
+function frame() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W * devicePixelRatio;
+  canvas.height = H * devicePixelRatio;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx = canvas.getContext('2d');
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+
+  // Update
+  camera.update();
+  state.update(16.67); // ~60fps
+
+  // Draw background (screen space)
+  drawBackground(ctx, W, H, state.tick);
+
+  // Draw world content
+  ctx.save();
+  camera.applyTransform(ctx, W, H);
+
+  const level = getCurrentLevel(camera.zoom);
+
+  // Cluster clouds (galaxy view)
+  for (const cluster of state.clusters) {
+    drawClusterCloud(ctx, cluster, state);
+  }
+
+  // Trade routes (faint at galaxy, stronger at sector)
+  drawTradeRoutes(ctx, state);
+
+  // Domain nebulae
+  for (const [, dom] of state.domains) {
+    drawDomainNebula(ctx, dom, state.tick);
+  }
+
+  // Entity stars
+  drawEntityStars(ctx, state, camera);
+
+  ctx.restore();
+
+  // HUD
+  document.getElementById('zoom-level').textContent = `${Math.round(camera.zoom * 100)}% · ${level}`;
+
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
