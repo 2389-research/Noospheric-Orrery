@@ -1,45 +1,52 @@
-"""Search endpoint — hybrid FAISS + graph search with RRF fusion."""
+"""Search endpoint — full staged pipeline."""
 
-import asyncio
 from fastapi import APIRouter
 from ..config import get_settings
 from ..db import get_connection
-from ..pipeline.search import search, build_indexes
+from ..pipeline.search import search_knowledge_graph, build_indexes, embed_new_entities, embed_new_chunks
 from ..broadcast import broadcast_search
 
 router = APIRouter()
-_indexes_built = False
 
 
 @router.get("/search")
-async def search_query(q: str, top_k: int = 20):
-    """Search entities and chunks. Broadcasts results to connected viz clients."""
-    global _indexes_built
+async def search_query(q: str, top_k: int = 20, expand: bool = True):
+    """Search the knowledge graph. Broadcasts results to viz clients."""
     settings = get_settings()
     conn = get_connection(settings.db_path)
 
-    if not _indexes_built:
-        stats = build_indexes(conn)
-        _indexes_built = True
-
-    results = search(conn, q, top_k=top_k)
+    response = await search_knowledge_graph(
+        conn, q,
+        expand=expand,
+        aws_access_key=settings.aws_access_key,
+        aws_secret_key=settings.aws_secret_key,
+        aws_region=settings.aws_region,
+        top_k=top_k,
+    )
     conn.close()
 
-    # Broadcast to viz clients
-    entity_names = [e["name"] for e in results["entities"][:10]]
+    # Broadcast to viz
+    entity_names = [e["name"] for e in response.entities[:10] if e.get("name")]
     if entity_names:
         await broadcast_search(q, entity_names)
 
-    return results
+    return {
+        "query": response.query,
+        "entities": response.entities,
+        "chunks": response.chunks,
+        "sub_queries_used": response.sub_queries_used,
+        "total_entities": response.total_entities,
+        "total_chunks": response.total_chunks,
+    }
 
 
 @router.post("/search/rebuild")
 def rebuild_search_index():
-    """Rebuild FAISS indexes from current DB state."""
-    global _indexes_built
+    """Rebuild FAISS indexes and embed any unembedded entities/chunks."""
     settings = get_settings()
     conn = get_connection(settings.db_path)
+    new_entities = embed_new_entities(conn)
+    new_chunks = embed_new_chunks(conn)
     stats = build_indexes(conn)
-    _indexes_built = True
     conn.close()
-    return {"status": "rebuilt", **stats}
+    return {"status": "rebuilt", "new_entities_embedded": new_entities, "new_chunks_embedded": new_chunks, **stats}

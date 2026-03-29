@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     chunk_index INTEGER,
     offset INTEGER,
     length INTEGER,
-    text TEXT
+    text TEXT,
+    embedding BLOB
 );
 
 CREATE TABLE IF NOT EXISTS domains (
@@ -50,6 +51,7 @@ CREATE TABLE IF NOT EXISTS entities (
     id TEXT PRIMARY KEY,
     canonical_name TEXT,
     type TEXT,
+    embedding BLOB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -141,6 +143,7 @@ CREATE TABLE IF NOT EXISTS simmer_criterion_details (
     evidence TEXT,
     improve TEXT
 );
+
 
 CREATE TABLE IF NOT EXISTS specs (
     id TEXT PRIMARY KEY,
