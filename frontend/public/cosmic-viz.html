@@ -612,19 +612,22 @@ function getGlowFactor(startTime, duration) {
 function triggerSearchGlow(entityNames, explicitRoutes) {
   const now = performance.now();
 
-  // 1. Flash hit entity stars — staggered
+  // 1. Flash hit entity stars — ordered by search ranking (first result glows first)
+  const nameLower = entityNames.map(n => n.toLowerCase());
   const hitNodes = [];
-  for (const [id, n] of nodes) {
-    if (n.kind === 'entity' && entityNames.some(name =>
-      n.label.toLowerCase() === name.toLowerCase()
-    )) {
-      hitNodes.push(n);
+  for (const name of nameLower) {
+    for (const [, n] of nodes) {
+      if (n.kind === 'entity' && n.label.toLowerCase() === name) {
+        hitNodes.push(n);
+        break;
+      }
     }
   }
   if (hitNodes.length === 0) return;
 
+  // Stagger by search rank — top result glows first, wave propagates outward
   hitNodes.forEach((n, i) => {
-    n._glowStart = now + i * 40;
+    n._glowStart = now + i * 60;
     n._glowDuration = 1400;
   });
 
