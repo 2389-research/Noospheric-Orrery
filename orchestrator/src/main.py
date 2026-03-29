@@ -30,6 +30,7 @@ from .routes.subdomains import router as subdomains_router
 from .routes.graph import router as graph_router
 from .routes.reader import router as reader_router
 from .routes.search import router as search_router
+from .routes.reclassify import router as reclassify_router
 
 app.include_router(ingest_router)
 app.include_router(documents_router)
@@ -43,6 +44,7 @@ app.include_router(subdomains_router)
 app.include_router(graph_router)
 app.include_router(reader_router)
 app.include_router(search_router)
+app.include_router(reclassify_router)
 
 from fastapi import WebSocket as WS
 from .broadcast import ws_endpoint
