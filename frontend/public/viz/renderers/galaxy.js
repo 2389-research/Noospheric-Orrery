@@ -224,7 +224,7 @@ export function drawTradeRoutes(ctx, state) {
 
 /** Draw entity stars (small dots at galaxy zoom) */
 export function drawEntityStars(ctx, state, camera) {
-  if (camera.zoom < 0.15) return; // too zoomed out
+  if (camera.zoom < 0.35) return; // entities only visible at sector zoom and below
 
   for (const [, e] of state.entities) {
     if (e.birthScale < 0.1) continue;
