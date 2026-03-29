@@ -245,13 +245,14 @@ export function drawTradeRoutes(ctx, state) {
           const px = midX + (dest.x - midX) * progress;
           const py = midY + (dest.y - midY) * progress;
 
-          const dotG = ctx.createRadialGradient(px, py, 0, px, py, 10);
-          dotG.addColorStop(0, `rgba(0,255,220,${0.8 * brightness})`);
-          dotG.addColorStop(0.3, `rgba(0,220,200,${0.4 * brightness})`);
+          const dotSize = 25;  // world units — visible at galaxy zoom
+          const dotG = ctx.createRadialGradient(px, py, 0, px, py, dotSize);
+          dotG.addColorStop(0, `rgba(0,255,220,${0.9 * brightness})`);
+          dotG.addColorStop(0.3, `rgba(0,220,200,${0.5 * brightness})`);
           dotG.addColorStop(1, 'rgba(0,180,160,0)');
           ctx.fillStyle = dotG;
           ctx.beginPath();
-          ctx.arc(px, py, 10, 0, TAU);
+          ctx.arc(px, py, dotSize, 0, TAU);
           ctx.fill();
 
           // Trail
@@ -271,7 +272,7 @@ export function drawTradeRoutes(ctx, state) {
           // Arrival ripple (last 18% of travel)
           if (rawP > 0.82) {
             const rippleP = (rawP - 0.82) / 0.18;
-            const rippleR = 20 * rippleP;
+            const rippleR = 60 * rippleP;
             const rippleA = 0.3 * (1 - rippleP) * brightness;
             ctx.strokeStyle = `rgba(0,255,220,${rippleA})`;
             ctx.lineWidth = 1;
