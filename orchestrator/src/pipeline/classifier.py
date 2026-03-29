@@ -13,15 +13,16 @@ Respond with JSON only:
 {{
     "primary_domain": "region/parent/subdomain",
     "secondary_domains": ["other/domains"],
-    "new_domains": ["proposed/new/domains"],
     "confidence": 0.0-1.0
 }}
 
 Rules:
-- Use existing domains when they fit (exact path match)
-- Propose new domains only when nothing in the taxonomy covers the content
-- Domain paths are hierarchical: region/parent/subdomain
+- Use existing domains when they fit
+- You CAN and SHOULD create new domain paths that don't exist in the taxonomy if the document covers a topic not well represented by existing domains
+- Domain paths are hierarchical: region/parent/subdomain (e.g., business/technology/ai, business/legal/contracts)
 - A document can have 1 primary and 0-3 secondary domains
+- Be specific — prefer "business/fundraising/seed_round" over just "business/fundraising" if the content is clearly about seed rounds
+- New domains are automatically added to the taxonomy, so don't hesitate to propose them
 """
 
 async def classify_document(
