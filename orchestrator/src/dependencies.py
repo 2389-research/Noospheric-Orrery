@@ -1,3 +1,4 @@
+from __future__ import annotations
 """FastAPI dependencies for authenticated data access.
 
 Usage:

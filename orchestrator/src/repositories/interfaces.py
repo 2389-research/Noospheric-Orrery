@@ -4,6 +4,7 @@ Each interface defines the operations needed by the application layer.
 SQLite and Firestore each provide concrete implementations.
 """
 
+from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
