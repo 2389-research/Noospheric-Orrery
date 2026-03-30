@@ -151,7 +151,10 @@ result = await refine(
 )
 ```
 
-simmer-sdk is installed in the worker container from a local checkout (not PyPI). See `worker/Dockerfile`.
+simmer-sdk is an internal dependency — clone from the same GitHub org:
+- **Repo**: alongside this repo at `../simmer-sdk/`
+- **Docker**: copy into `worker/simmer-sdk/` before `docker compose build`
+- **Local dev**: `pip install -e ../simmer-sdk/`
 
 ### SQLite WAL Mode
 
