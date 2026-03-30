@@ -43,13 +43,8 @@ class FirestoreDocumentRepository(DocumentRepository):
         self._col = db.collection("workspaces").document(workspace_id).collection("documents")
 
     def count(self):
-        # Firestore doesn't have a native count without reading docs
-        # Use aggregation query
-        from google.cloud.firestore_v1.aggregation import AggregationQuery
-        query = AggregationQuery(self._col)
-        query.count(alias="total")
-        results = query.get()
-        return results[0][0].value if results else 0
+        results = self._col.count().get()
+        return int(results[0][0].value) if results else 0
 
     def create(self, id, title, content, content_hash, source_path=None):
         self._col.document(id).set({
@@ -276,11 +271,8 @@ class FirestoreEntityRepository(EntityRepository):
         self._col = db.collection("workspaces").document(workspace_id).collection("entities")
 
     def count(self):
-        from google.cloud.firestore_v1.aggregation import AggregationQuery
-        query = AggregationQuery(self._col)
-        query.count(alias="total")
-        results = query.get()
-        return results[0][0].value if results else 0
+        results = self._col.count().get()
+        return int(results[0][0].value) if results else 0
 
     def create(self, id, name, type):
         self._col.document(id).set({
