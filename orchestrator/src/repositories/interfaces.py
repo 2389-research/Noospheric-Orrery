@@ -150,6 +150,9 @@ class CoEntity:
 
 class DocumentRepository(ABC):
     @abstractmethod
+    def count(self) -> int: ...
+
+    @abstractmethod
     def create(self, id: str, title: str, content: str, content_hash: str,
                source_path: str | None = None) -> str: ...
 
@@ -227,6 +230,9 @@ class DomainRepository(ABC):
 
 class EntityRepository(ABC):
     @abstractmethod
+    def count(self) -> int: ...
+
+    @abstractmethod
     def create(self, id: str, name: str, type: str) -> str: ...
 
     @abstractmethod
@@ -295,6 +301,9 @@ class RelationshipRepository(ABC):
 
 
 class JobRepository(ABC):
+    @abstractmethod
+    def count_active(self) -> int: ...
+
     @abstractmethod
     def create(self, id: str, type: str, target: str, config: dict | None = None) -> None: ...
 

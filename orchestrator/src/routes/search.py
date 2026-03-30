@@ -1,10 +1,8 @@
-# ABOUTME: Search route — exposes the staged search pipeline over HTTP.
-# ABOUTME: Supports query expansion via Relay and broadcasts results to viz clients.
+"""Search endpoint — full staged pipeline."""
 
 from fastapi import APIRouter
-from orrery_relay import Relay
 from ..config import get_settings
-from ..db import get_connection
+from ..repositories.factory import get_store
 from ..pipeline.search import search_knowledge_graph, build_indexes, embed_new_entities, embed_new_chunks
 from ..broadcast import broadcast_search
 
@@ -13,20 +11,18 @@ router = APIRouter()
 
 @router.get("/search")
 async def search_query(q: str, top_k: int = 20, expand: bool = True):
-    """Search the knowledge graph. Broadcasts results to viz clients."""
     settings = get_settings()
-    conn = get_connection(settings.db_path)
-
-    relay = Relay.from_settings(settings)
+    store = get_store()
     response = await search_knowledge_graph(
-        conn, q,
+        store.conn, q,  # pipeline still uses raw conn
         expand=expand,
-        relay=relay,
+        aws_access_key=settings.aws_access_key,
+        aws_secret_key=settings.aws_secret_key,
+        aws_region=settings.aws_region,
         top_k=top_k,
     )
-    conn.close()
+    store.close()
 
-    # Broadcast to viz
     entity_names = [e["name"] for e in response.entities[:10] if e.get("name")]
     if entity_names:
         await broadcast_search(q, entity_names)
@@ -43,11 +39,10 @@ async def search_query(q: str, top_k: int = 20, expand: bool = True):
 
 @router.post("/search/rebuild")
 def rebuild_search_index():
-    """Rebuild FAISS indexes and embed any unembedded entities/chunks."""
-    settings = get_settings()
-    conn = get_connection(settings.db_path)
-    new_entities = embed_new_entities(conn)
-    new_chunks = embed_new_chunks(conn)
-    stats = build_indexes(conn)
-    conn.close()
-    return {"status": "rebuilt", "new_entities_embedded": new_entities, "new_chunks_embedded": new_chunks, **stats}
+    store = get_store()
+    new_entities = embed_new_entities(store.conn)
+    new_chunks = embed_new_chunks(store.conn)
+    stats = build_indexes(store.conn)
+    store.close()
+    return {"status": "rebuilt", "new_entities_embedded": new_entities,
+            "new_chunks_embedded": new_chunks, **stats}

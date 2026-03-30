@@ -1,10 +1,9 @@
-# ABOUTME: Reclassify route — re-runs the classifier on all existing documents.
-# ABOUTME: Additive: adds new domain assignments without removing existing ones.
+"""Reclassify existing documents with the current classifier prompt."""
 
 from fastapi import APIRouter
-from orrery_relay import Relay
+from anthropic import AsyncAnthropicBedrock
 from ..config import get_settings
-from ..db import get_connection
+from ..repositories.factory import get_store
 from ..pipeline.excerpt import build_classification_excerpt
 from ..pipeline.classifier import classify_document
 from ..pipeline.domain_normalizer import normalize_domain_label
@@ -16,8 +15,13 @@ router = APIRouter()
 async def reclassify_all():
     """Re-run classification on all documents. Adds new domains without removing existing ones."""
     settings = get_settings()
-    conn = get_connection(settings.db_path)
-    relay = Relay.from_settings(settings)
+    store = get_store()
+    conn = store.conn  # legacy access during migration
+    client = AsyncAnthropicBedrock(
+        aws_access_key=settings.aws_access_key,
+        aws_secret_key=settings.aws_secret_key,
+        aws_region=settings.aws_region,
+    )
 
     docs = conn.execute("SELECT id, title, content FROM documents ORDER BY created_at").fetchall()
     results = {"docs_processed": 0, "new_domains": [], "new_assignments": 0}
@@ -37,7 +41,7 @@ async def reclassify_all():
         excerpt = build_classification_excerpt(title, content)
         try:
             classification = await classify_document(
-                relay=relay, title=title, excerpt=excerpt,
+                client=client, title=title, excerpt=excerpt,
                 existing_taxonomy=taxonomy, model=settings.classification_model,
             )
         except Exception as e:
@@ -74,5 +78,5 @@ async def reclassify_all():
         await asyncio.sleep(0.5)  # Rate limit
 
     conn.commit()
-    conn.close()
+    store.close()
     return results
