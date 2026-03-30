@@ -7,6 +7,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from anthropic import AsyncAnthropicBedrock
 
 from ..config import get_settings
+from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
 from ..repositories.interfaces import Chunk
 from ..models import IngestResult, DirectoryIngestRequest

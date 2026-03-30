@@ -5,6 +5,7 @@ import numpy as np
 from collections import defaultdict
 from fastapi import APIRouter
 from ..config import get_settings
+from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
 
 router = APIRouter()

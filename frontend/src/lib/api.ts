@@ -1,5 +1,33 @@
+import { getAuthToken } from "./firebase";
+
+// Module-level workspace ID — set by auth context, read by fetchAPI
+let _currentWorkspaceId: string | null = null;
+
+export function setApiWorkspaceId(id: string | null) {
+  _currentWorkspaceId = id;
+}
+
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, options);
+  const headers: Record<string, string> = {
+    ...(options?.headers as Record<string, string> || {}),
+  };
+
+  // Add auth token if available
+  try {
+    const token = await getAuthToken();
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+  } catch {
+    // Auth not initialized or user not signed in — proceed without token
+  }
+
+  // Add workspace ID header
+  if (_currentWorkspaceId) {
+    headers["X-Workspace-Id"] = _currentWorkspaceId;
+  }
+
+  const res = await fetch(`/api${path}`, { ...options, headers });
   if (!res.ok) throw new Error(`API error: ${res.status} ${await res.text()}`);
   return res.json();
 }

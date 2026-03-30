@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
 from ..pipeline.embedding_normalizer import (
     run_batch_normalization,

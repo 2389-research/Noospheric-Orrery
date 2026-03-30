@@ -1,12 +1,12 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from ..models import Stats
-from ..repositories.factory import get_store
+from ..dependencies import get_auth_store, AuthStore
 
 router = APIRouter()
 
 @router.get("/stats", response_model=Stats)
-def get_stats():
-    store = get_store()
+def get_stats(auth: AuthStore = Depends(get_auth_store)):
+    store = auth.store
     result = Stats(
         document_count=store.documents.count(),
         entity_count=store.entities.count(),

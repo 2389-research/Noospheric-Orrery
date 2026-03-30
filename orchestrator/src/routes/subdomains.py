@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from anthropic import AsyncAnthropicBedrock
 from ..config import get_settings
+from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
 from ..pipeline.subdomain_discovery import run_subdomain_discovery
 
