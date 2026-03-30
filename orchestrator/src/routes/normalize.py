@@ -14,8 +14,7 @@ router = APIRouter()
 def trigger_normalization():
     store = get_store()
     try:
-        # Pipeline functions still use raw conn during migration
-        results = run_batch_normalization(store.conn)
+        results = run_batch_normalization(store)
     finally:
         store.close()
     return results
@@ -25,7 +24,7 @@ def trigger_normalization():
 def normalization_summary():
     store = get_store()
     try:
-        return get_normalization_summary(store.conn)
+        return get_normalization_summary(store)
     finally:
         store.close()
 
@@ -34,7 +33,7 @@ def normalization_summary():
 def review_queue():
     store = get_store()
     try:
-        return get_review_queue(store.conn)
+        return get_review_queue(store)
     finally:
         store.close()
 
@@ -45,7 +44,7 @@ def resolve_review_item(review_id: str, action: str = "merge"):
         raise HTTPException(status_code=400, detail="action must be 'merge' or 'keep_separate'")
     store = get_store()
     try:
-        resolve_review(store.conn, review_id, action)
+        resolve_review(store, review_id, action)
     finally:
         store.close()
     return {"status": "resolved", "action": action}
