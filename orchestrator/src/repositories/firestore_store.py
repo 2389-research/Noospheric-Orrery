@@ -195,16 +195,21 @@ class FirestoreDomainRepository(DomainRepository):
         return None
 
     def list(self, min_doc_count=0):
-        query = self._col
-        if min_doc_count > 0:
-            query = query.where("documentCount", ">=", min_doc_count)
-        results = query.order_by("path").stream()
-        return [Domain(id=d.to_dict().get("id", doc.id), path=d.to_dict()["path"],
-                        parent_path=d.to_dict().get("parentPath"),
-                        document_count=d.to_dict().get("documentCount", 0),
-                        spec_version=d.to_dict().get("specVersion"),
-                        created_at=str(d.to_dict().get("createdAt", "")))
-                for doc in (results,) for d in [doc]]
+        # Fetch all, filter + sort client-side to avoid composite index requirement
+        domains = []
+        for doc in self._col.stream():
+            d = doc.to_dict()
+            doc_count = d.get("documentCount", 0)
+            if doc_count >= min_doc_count:
+                domains.append(Domain(
+                    id=d.get("id", doc.id), path=d["path"],
+                    parent_path=d.get("parentPath"),
+                    document_count=doc_count,
+                    spec_version=d.get("specVersion"),
+                    created_at=str(d.get("createdAt", "")),
+                ))
+        domains.sort(key=lambda d: d.path)
+        return domains
 
     def get_all_paths(self):
         return [_decode_path(doc.id) for doc in self._col.stream()]
@@ -436,16 +441,22 @@ class FirestoreJobRepository(JobRepository):
                    completed_at=str(d.get("completedAt", "")) if d.get("completedAt") else None)
 
     def list(self, status_filter=None):
-        query = self._col.order_by("createdAt", direction=firestore.Query.DESCENDING)
+        # Avoid composite index — filter + sort client-side
+        query = self._col
         if status_filter:
             query = query.where("status", "==", status_filter)
-        return [Job(id=doc.id, type=doc.to_dict()["type"], target=doc.to_dict()["target"],
-                     status=doc.to_dict()["status"], config=doc.to_dict().get("config"),
-                     result=doc.to_dict().get("result"),
-                     created_at=str(doc.to_dict().get("createdAt", "")),
-                     started_at=str(doc.to_dict().get("startedAt", "")) if doc.to_dict().get("startedAt") else None,
-                     completed_at=str(doc.to_dict().get("completedAt", "")) if doc.to_dict().get("completedAt") else None)
-                for doc in query.stream()]
+        jobs = []
+        for doc in query.stream():
+            d = doc.to_dict()
+            jobs.append(Job(
+                id=doc.id, type=d["type"], target=d["target"], status=d["status"],
+                config=d.get("config"), result=d.get("result"),
+                created_at=str(d.get("createdAt", "")),
+                started_at=str(d.get("startedAt", "")) if d.get("startedAt") else None,
+                completed_at=str(d.get("completedAt", "")) if d.get("completedAt") else None,
+            ))
+        jobs.sort(key=lambda j: j.created_at or "", reverse=True)
+        return jobs
 
     def get_existing(self, type, target, statuses):
         for status in statuses:
@@ -455,12 +466,15 @@ class FirestoreJobRepository(JobRepository):
         return None
 
     def pick_next(self):
-        results = self._col.where("status", "==", "queued").order_by("createdAt").limit(1).stream()
-        for doc in results:
-            d = doc.to_dict()
-            return Job(id=doc.id, type=d["type"], target=d["target"], status="queued",
-                       config=d.get("config"))
-        return None
+        results = list(self._col.where("status", "==", "queued").stream())
+        if not results:
+            return None
+        # Sort by createdAt client-side
+        results.sort(key=lambda d: str(d.to_dict().get("createdAt", "")))
+        doc = results[0]
+        d = doc.to_dict()
+        return Job(id=doc.id, type=d["type"], target=d["target"], status="queued",
+                   config=d.get("config"))
 
     def mark_running(self, job_id):
         self._col.document(job_id).update({
@@ -661,13 +675,15 @@ class FirestoreNormalizationRepository(NormalizationRepository):
         })
 
     def get_review_queue(self):
-        results = self._review_col.where("status", "==", "pending").order_by("similarity", direction=firestore.Query.DESCENDING).stream()
-        return [NormalizationReview(id=doc.id, entity_a_id=doc.to_dict()["entityAId"],
-                                     entity_a_name=doc.to_dict()["entityAName"],
-                                     entity_b_id=doc.to_dict()["entityBId"],
-                                     entity_b_name=doc.to_dict()["entityBName"],
-                                     similarity=doc.to_dict()["similarity"],
-                                     status="pending") for doc in results]
+        results = self._review_col.where("status", "==", "pending").stream()
+        reviews = [NormalizationReview(id=doc.id, entity_a_id=doc.to_dict()["entityAId"],
+                                        entity_a_name=doc.to_dict()["entityAName"],
+                                        entity_b_id=doc.to_dict()["entityBId"],
+                                        entity_b_name=doc.to_dict()["entityBName"],
+                                        similarity=doc.to_dict()["similarity"],
+                                        status="pending") for doc in results]
+        reviews.sort(key=lambda r: r.similarity, reverse=True)
+        return reviews
 
     def resolve_review(self, review_id, action):
         self._review_col.document(review_id).update({"status": "resolved", "resolution": action})
@@ -869,11 +885,8 @@ class FirestoreDataStore(DataStore):
 
     @property
     def conn(self):
-        """Not available for Firestore — raises if legacy code tries to use it."""
-        raise NotImplementedError(
-            "Firestore backend does not support raw conn access. "
-            "Migrate this code path to use repository methods."
-        )
+        """Not available for Firestore — returns None so hasattr checks work."""
+        return None
 
     def close(self):
         pass  # Firestore client doesn't need explicit closing

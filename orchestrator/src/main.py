@@ -6,8 +6,10 @@ from .db import init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_settings()
-    init_db(settings.db_path)
+    import os
+    if os.environ.get("DB_BACKEND", "sqlite") == "sqlite":
+        settings = get_settings()
+        init_db(settings.db_path)
     yield
 
 app = FastAPI(title="Noospheric Orrery", lifespan=lifespan)

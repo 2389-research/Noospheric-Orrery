@@ -166,7 +166,7 @@ async def _ingest_document(title: str, content: str, source_path: str | None) ->
         from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
         search_store = get_store()
         # Search still needs raw conn for FAISS operations
-        if hasattr(search_store, 'conn'):
+        if search_store.conn is not None:
             embed_new_entities(search_store.conn)
             embed_new_chunks(search_store.conn)
         search_store.close()
