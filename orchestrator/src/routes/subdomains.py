@@ -17,10 +17,13 @@ async def trigger_subdomain_discovery():
         aws_region=settings.aws_region,
     )
     try:
-        # Pipeline function still uses raw conn during migration
-        results = await run_subdomain_discovery(
-            client=client, model=settings.classification_model, conn=store.conn,
-        )
+        # Subdomain discovery still needs raw conn for complex queries
+        if hasattr(store, 'conn'):
+            results = await run_subdomain_discovery(
+                client=client, model=settings.classification_model, conn=store.conn,
+            )
+        else:
+            results = {"error": "Subdomain discovery not yet supported on Firestore"}
     finally:
         store.close()
     return results
