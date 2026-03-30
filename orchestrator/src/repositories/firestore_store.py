@@ -515,6 +515,42 @@ class FirestoreRelationshipRepository(RelationshipRepository):
                 deduped.append(r)
         return deduped[:limit]
 
+    def get_trade_routes(self):
+        # Compute trade routes by finding domains that share entities
+        # This is expensive in Firestore — iterate all relationships
+        domain_pairs = {}
+        dd_col = self._db.collection("workspaces").document(self._ws).collection("documentDomains")
+        es_col = self._db.collection("workspaces").document(self._ws).collection("entitySources")
+
+        # Group entity sources by entity
+        entity_docs = {}
+        for s in es_col.stream():
+            d = s.to_dict()
+            entity_docs.setdefault(d["entityId"], set()).add(d["documentId"])
+
+        # For each entity that appears in multiple docs, find domain pairs
+        doc_domains_cache = {}
+        for entity_id, doc_ids in entity_docs.items():
+            if len(doc_ids) < 2:
+                continue
+            # Get domains for each doc
+            for did in doc_ids:
+                if did not in doc_domains_cache:
+                    domains = dd_col.where("documentId", "==", did).stream()
+                    doc_domains_cache[did] = [d.to_dict()["domainPath"] for d in domains]
+
+            # Count pairs
+            doc_list = list(doc_ids)
+            for i in range(len(doc_list)):
+                for j in range(i + 1, len(doc_list)):
+                    for d1 in doc_domains_cache.get(doc_list[i], []):
+                        for d2 in doc_domains_cache.get(doc_list[j], []):
+                            if d1 != d2:
+                                key = tuple(sorted([d1, d2]))
+                                domain_pairs[key] = domain_pairs.get(key, 0) + 1
+
+        return [{"source": k[0], "target": k[1], "weight": v} for k, v in domain_pairs.items()]
+
     def get_star_graph(self, entity_id, co_limit=30):
         # Complex query — simplified version
         ent_col = self._db.collection("workspaces").document(self._ws).collection("entities")
