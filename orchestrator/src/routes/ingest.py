@@ -1,16 +1,13 @@
-# ABOUTME: Ingest route — accepts file uploads and directory paths, runs the full pipeline.
-# ABOUTME: Handles dedup, chunking, classification, extraction, and job queuing.
-
 import uuid
 import os
 import json
 import hashlib
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from orrery_relay import Relay
+from anthropic import AsyncAnthropicBedrock
 
 from ..config import get_settings
-from ..db import get_connection
+from ..repositories.factory import get_store
 from ..models import IngestResult, DirectoryIngestRequest
 from ..pipeline.chunker import chunk_document
 from ..pipeline.excerpt import build_classification_excerpt
@@ -25,8 +22,13 @@ router = APIRouter()
 
 async def _ingest_document(title: str, content: str, source_path: str | None) -> dict:
     settings = get_settings()
-    conn = get_connection(settings.db_path)
-    relay = Relay.from_settings(settings)
+    store = get_store()
+    conn = store.conn  # legacy access during migration
+    client = AsyncAnthropicBedrock(
+        aws_access_key=settings.aws_access_key,
+        aws_secret_key=settings.aws_secret_key,
+        aws_region=settings.aws_region,
+    )
 
     try:
         # Dedup: skip if document with same content hash already exists
@@ -38,7 +40,7 @@ async def _ingest_document(title: str, content: str, source_path: str | None) ->
             domains = [r[0] for r in conn.execute(
                 "SELECT domain_path FROM document_domains WHERE document_id = ?", (existing[0],)
             ).fetchall()]
-            conn.close()
+            store.close()
             return {
                 "document_id": existing[0],
                 "title": title,
@@ -70,7 +72,7 @@ async def _ingest_document(title: str, content: str, source_path: str | None) ->
         taxonomy = [row[0] for row in conn.execute("SELECT path FROM domains ORDER BY path").fetchall()]
 
         classification = await classify_document(
-            relay=relay, title=title, excerpt=excerpt,
+            client=client, title=title, excerpt=excerpt,
             existing_taxonomy=taxonomy, model=settings.classification_model,
         )
 
@@ -89,7 +91,7 @@ async def _ingest_document(title: str, content: str, source_path: str | None) ->
             spec = spec_row[0]
             spec_version = spec_row[1]
             entities = await extract_document(
-                relay=relay, chunks=chunks, spec=spec, model=settings.extraction_model,
+                client=client, chunks=chunks, spec=spec, model=settings.extraction_model,
             )
             for entity in entities:
                 entity_id = normalize_entity(conn, entity["name"], entity["type"])
@@ -134,7 +136,7 @@ async def _ingest_document(title: str, content: str, source_path: str | None) ->
                 if domain_spec and domain_spec[0] not in seen_specs:
                     seen_specs.add(domain_spec[0])
                     d_entities = await extract_document(
-                        relay=relay, chunks=chunks,
+                        client=client, chunks=chunks,
                         spec=domain_spec[1], model=settings.extraction_model,
                     )
                     for entity in d_entities:
@@ -197,15 +199,15 @@ async def _ingest_document(title: str, content: str, source_path: str | None) ->
 
         conn.commit()
     finally:
-        conn.close()
+        store.close()
 
     # Rebuild search index to include new entities/chunks
     try:
         from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
-        search_conn = get_connection(settings.db_path)
-        embed_new_entities(search_conn)
-        embed_new_chunks(search_conn)
-        search_conn.close()
+        search_store = get_store()
+        embed_new_entities(search_store.conn)
+        embed_new_chunks(search_store.conn)
+        search_store.close()
     except Exception as e:
         print(f"Search index update after ingest: {e}")
 

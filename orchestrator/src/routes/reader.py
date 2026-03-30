@@ -3,7 +3,7 @@
 import re
 from fastapi import APIRouter, HTTPException
 from ..config import get_settings
-from ..db import get_connection
+from ..repositories.factory import get_store
 
 router = APIRouter()
 
@@ -128,12 +128,13 @@ def _get_snippets(text: str, spans: list[dict], entity_id: str, max_chars: int =
 def get_document_reader(document_id: str):
     """Return document content with entity spans for the reader view."""
     settings = get_settings()
-    conn = get_connection(settings.db_path)
+    store = get_store()
+    conn = store.conn  # legacy access during migration
 
     # Get document
     doc = conn.execute("SELECT id, title, content, status FROM documents WHERE id = ?", (document_id,)).fetchone()
     if not doc:
-        conn.close()
+        store.close()
         raise HTTPException(status_code=404, detail="Document not found")
 
     # Get entities for this document with merge history

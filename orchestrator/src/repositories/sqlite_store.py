@@ -23,6 +23,9 @@ class SQLiteDocumentRepository(DocumentRepository):
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
 
+    def count(self):
+        return self._conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+
     def create(self, id, title, content, content_hash, source_path=None):
         self._conn.execute(
             "INSERT INTO documents (id, title, content, content_hash, source_path, status) VALUES (?, ?, ?, ?, ?, 'pending')",
@@ -215,6 +218,9 @@ class SQLiteDomainRepository(DomainRepository):
 class SQLiteEntityRepository(EntityRepository):
     def __init__(self, conn):
         self._conn = conn
+
+    def count(self):
+        return self._conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
 
     def create(self, id, name, type):
         self._conn.execute(
@@ -455,6 +461,11 @@ class SQLiteRelationshipRepository(RelationshipRepository):
 class SQLiteJobRepository(JobRepository):
     def __init__(self, conn):
         self._conn = conn
+
+    def count_active(self):
+        return self._conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')"
+        ).fetchone()[0]
 
     def create(self, id, type, target, config=None):
         self._conn.execute(

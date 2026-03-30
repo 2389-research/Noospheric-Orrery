@@ -5,7 +5,7 @@ import numpy as np
 from collections import defaultdict
 from fastapi import APIRouter
 from ..config import get_settings
-from ..db import get_connection
+from ..repositories.factory import get_store
 
 router = APIRouter()
 
@@ -156,7 +156,8 @@ def _layout_domains(domains: list[dict]) -> dict[str, dict]:
 def get_graph_data():
     """Return graph data in cosmic_data_v4 format."""
     settings = get_settings()
-    conn = get_connection(settings.db_path)
+    store = get_store()
+    conn = store.conn
 
     # Get all domains with docs
     domains_raw = conn.execute(
@@ -266,7 +267,7 @@ def get_graph_data():
     ).fetchall()
     active_simmers = [r[0] for r in active_jobs]
 
-    conn.close()
+    store.close()
 
     return {
         "domain_positions": domain_positions,
@@ -361,7 +362,8 @@ def _layout_domains_umap(domains: list[dict], conn) -> dict[str, dict]:
 def get_graph_data_umap():
     """Same as /graph but with UMAP-based domain positions."""
     settings = get_settings()
-    conn = get_connection(settings.db_path)
+    store = get_store()
+    conn = store.conn
 
     domains_raw = conn.execute(
         "SELECT id, path, parent_path, document_count, spec_version FROM domains WHERE document_count > 0 ORDER BY path"
@@ -425,7 +427,7 @@ def get_graph_data_umap():
     ).fetchall()
     active_simmers = [r[0] for r in active_jobs]
 
-    conn.close()
+    store.close()
 
     return {
         "domain_positions": domain_positions,
