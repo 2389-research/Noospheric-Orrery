@@ -327,6 +327,8 @@ Replace WebSocket with Firestore listeners:
 
 ## Migration Path
 
+**Dev workflow**: Use the [Firebase Local Emulator Suite](https://firebase.google.com/docs/emulator-suite) throughout development. It runs Firestore, Auth, Storage, and Functions locally — no cloud resources burned, no deployment roundtrips. Standard Firebase dev practice.
+
 ### Phase 1: Auth + Hosting (1-2 days)
 - Add Firebase Auth to frontend
 - Deploy frontend to Vercel or Firebase Hosting
