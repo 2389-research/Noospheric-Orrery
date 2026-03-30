@@ -473,35 +473,36 @@ export function drawEntityStars(ctx, state, camera, W, H, neighborhood) {
       ctx.arc(e.x, e.y, haloR, 0, TAU);
       ctx.fill();
 
-      // Layer 2: inner glow
+      // Layer 2: inner glow — strong domain color
       const innerR = bR * 2.5;
-      const innerA = 0.20 * alpha * sectorBright;
+      const innerA = 0.28 * alpha * sectorBright;
       const g2 = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, innerR);
       g2.addColorStop(0, rgba(r, g, b, innerA));
-      g2.addColorStop(0.6, rgba(r, g, b, innerA * 0.3));
+      g2.addColorStop(0.5, rgba(r, g, b, innerA * 0.4));
       g2.addColorStop(1, rgba(r, g, b, 0));
       ctx.fillStyle = g2;
       ctx.beginPath();
       ctx.arc(e.x, e.y, innerR, 0, TAU);
       ctx.fill();
 
-      // Layer 3: hot white core — small and bright, sells the star
-      const coreR = bR * 0.35;
-      ctx.fillStyle = `rgba(255,255,255,${min(1, 0.95 * alpha * sectorBright)})`;
-      ctx.beginPath();
-      ctx.arc(e.x, e.y, coreR * 0.4, 0, TAU);
-      ctx.fill();
-
-      // Layer 4: color bloom around the core
-      const bloomR = bR * 0.8;
+      // Layer 3: color bloom — domain color radiating from center
+      const bloomR = bR * 1.0;
+      const bloomA = alpha * sectorBright;
       const bg = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, bloomR);
-      bg.addColorStop(0, `rgba(255,255,255,${min(1, 0.7 * alpha * sectorBright)})`);
-      bg.addColorStop(0.2, rgba(r, g, b, 0.8 * alpha * sectorBright));
-      bg.addColorStop(0.6, rgba(r, g, b, 0.2 * alpha * sectorBright));
+      bg.addColorStop(0, rgba(r, g, b, 0.9 * bloomA));
+      bg.addColorStop(0.3, rgba(r, g, b, 0.5 * bloomA));
+      bg.addColorStop(0.7, rgba(r, g, b, 0.1 * bloomA));
       bg.addColorStop(1, rgba(r, g, b, 0));
       ctx.fillStyle = bg;
       ctx.beginPath();
       ctx.arc(e.x, e.y, bloomR, 0, TAU);
+      ctx.fill();
+
+      // Layer 4: tiny hot white core
+      const coreR = bR * 0.25;
+      ctx.fillStyle = `rgba(255,255,255,${min(1, 0.9 * alpha * sectorBright)})`;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, coreR * 0.35, 0, TAU);
       ctx.fill();
     } else {
       // Galaxy zoom — simple dot

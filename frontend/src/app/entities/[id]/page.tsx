@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8100";
 
 const TYPE_COLORS: Record<string, string> = {
   Person: "#378ADD",
@@ -121,7 +121,7 @@ export default function EntityDetailPage() {
     <div className="max-w-3xl mx-auto space-y-6">
       <div>
         <button
-          onClick={() => router.back()}
+          onClick={() => router.push("/entities")}
           className="text-[10px] text-muted-foreground/80 hover:text-foreground/90 transition-colors mb-2"
         >
           ← back

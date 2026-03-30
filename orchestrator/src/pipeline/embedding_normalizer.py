@@ -172,11 +172,10 @@ def run_batch_normalization(conn: sqlite3.Connection) -> dict:
                     results["embedding_merges"] += 1
 
                 elif sim >= REVIEW_THRESHOLD:
-                    # Queue for LLM review
+                    # Queue for LLM review — skip if already reviewed (any status)
                     existing = conn.execute(
                         "SELECT id FROM normalization_review_queue WHERE "
-                        "((entity_a_id = ? AND entity_b_id = ?) OR (entity_a_id = ? AND entity_b_id = ?)) "
-                        "AND status = 'pending'",
+                        "((entity_a_id = ? AND entity_b_id = ?) OR (entity_a_id = ? AND entity_b_id = ?))",
                         (ids[i], ids[j], ids[j], ids[i])
                     ).fetchone()
                     if not existing:
