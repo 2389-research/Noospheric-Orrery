@@ -357,59 +357,72 @@ export function drawTradeRoutes(ctx, state, camera) {
 
   // Draw traveling pulses (from state.pulses)
   for (const p of state.pulses) {
-    const srcDom = state.domains.get(p.source);
-    const tgtDom = state.domains.get(p.target);
-    if (!srcDom || !tgtDom) continue;
+    // Support explicit fromX/fromY (entity→domain) or domain lookup (domain→domain)
+    let ax, ay, bx, by;
+    if (p.fromX !== undefined) {
+      ax = p.fromX; ay = p.fromY;
+      bx = p.toX; by = p.toY;
+    } else {
+      const srcDom = state.domains.get(p.source);
+      const tgtDom = state.domains.get(p.target);
+      if (!srcDom || !tgtDom) continue;
+      ax = srcDom.x; ay = srcDom.y;
+      bx = tgtDom.x; by = tgtDom.y;
+    }
 
     const rawP = p.progress;
-    // Ease in-out
     const ep = rawP < 0.5 ? 2 * rawP * rawP : -1 + (4 - 2 * rawP) * rawP;
-    // Sine brightness envelope
     const gf = sin(rawP * Math.PI);
 
-    const ax = srcDom.x, ay = srcDom.y;
-    const bx = tgtDom.x, by = tgtDom.y;
     const px = ax + (bx - ax) * ep;
     const py = ay + (by - ay) * ep;
 
-    // Trail — white gradient behind the dot
+    // Entity→domain pulses are smaller and dimmer
+    const isEntityPulse = p.fromX !== undefined;
+    const bright = isEntityPulse ? 0.5 : 1.0;
+    const scale = isEntityPulse ? 0.5 : 1.0;
+
+    // Trail
     const trailP = max(0, rawP - 0.10);
     const tep = trailP < 0.5 ? 2 * trailP * trailP : -1 + (4 - 2 * trailP) * trailP;
     const tx = ax + (bx - ax) * tep;
     const ty = ay + (by - ay) * tep;
     const tg = ctx.createLinearGradient(tx, ty, px, py);
     tg.addColorStop(0, `rgba(255,255,255,0)`);
-    tg.addColorStop(1, `rgba(255,255,255,${0.50 * gf})`);
+    tg.addColorStop(1, `rgba(255,255,255,${0.50 * gf * bright})`);
     ctx.strokeStyle = tg;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3 * scale;
     ctx.beginPath();
     ctx.moveTo(tx, ty);
     ctx.lineTo(px, py);
     ctx.stroke();
 
-    // Dot — white core → domain color
+    // Dot
     const [pr, pg, pb] = p.col;
-    const sz = 20 + gf * 12; // world units
+    const sz = (20 + gf * 12) * scale;
     const dg = ctx.createRadialGradient(px, py, 0, px, py, sz);
-    dg.addColorStop(0, `rgba(255,255,255,${0.98 * gf})`);
-    dg.addColorStop(0.2, `rgba(${pr},${pg},${pb},${0.85 * gf})`);
-    dg.addColorStop(0.6, `rgba(${pr},${pg},${pb},${0.30 * gf})`);
+    dg.addColorStop(0, `rgba(255,255,255,${0.98 * gf * bright})`);
+    dg.addColorStop(0.2, `rgba(${pr},${pg},${pb},${0.85 * gf * bright})`);
+    dg.addColorStop(0.6, `rgba(${pr},${pg},${pb},${0.30 * gf * bright})`);
     dg.addColorStop(1, `rgba(${pr},${pg},${pb},0)`);
     ctx.fillStyle = dg;
     ctx.beginPath();
     ctx.arc(px, py, sz, 0, TAU);
     ctx.fill();
 
-    // Arrival ripple at destination (last 18% of travel)
-    if (rawP > 0.82) {
-      const rp = (rawP - 0.82) / 0.18;
-      const rippleR = tgtDom.radius * (0.2 + rp * 0.7);
-      const rippleA = (1 - rp) * 0.55;
-      ctx.strokeStyle = `rgba(255,255,255,${rippleA})`;
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(tgtDom.x, tgtDom.y, rippleR, 0, TAU);
-      ctx.stroke();
+    // Arrival ripple (domain→domain only)
+    if (!isEntityPulse && rawP > 0.82) {
+      const tgtDom = state.domains.get(p.target);
+      if (tgtDom) {
+        const rp = (rawP - 0.82) / 0.18;
+        const rippleR = tgtDom.radius * (0.2 + rp * 0.7);
+        const rippleA = (1 - rp) * 0.55;
+        ctx.strokeStyle = `rgba(255,255,255,${rippleA})`;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(tgtDom.x, tgtDom.y, rippleR, 0, TAU);
+        ctx.stroke();
+      }
     }
   }
 }

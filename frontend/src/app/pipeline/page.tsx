@@ -108,7 +108,7 @@ export default function PipelinePage() {
       <div className="grid grid-cols-2 gap-6">
         <section>
           <h2 className="text-xs tracking-[3px] text-muted-foreground/85 uppercase mb-3">Domains</h2>
-          <DomainTree domains={domains} />
+          <DomainTree domains={domains} jobs={jobs} />
         </section>
         <section>
           <NormalizationPanel />

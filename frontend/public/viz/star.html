@@ -41,7 +41,7 @@ canvas:active { cursor: grabbing; }
 <body>
 <canvas id="c"></canvas>
 <div id="nav">
-  <button class="nav-btn" onclick="window.parent.postMessage({type:'navigate_galaxy'},'*')" title="Back to galaxy">⌂</button>
+  <button class="nav-btn" onclick="window.parent.postMessage({type:'reset_home'},'*')" title="Reset to galaxy overview">⌂</button>
   <span class="sep">›</span>
   <button class="nav-btn" onclick="window.parent.postMessage({type:'navigate_galaxy'},'*')">Galaxy</button>
   <span class="sep">›</span>
@@ -107,67 +107,64 @@ window.addEventListener('message', e => {
 
     if (!hitDocs.length && !hitCos.length && !hitEntityNames.has(centralEntity?.name?.toLowerCase())) return;
 
-    // Shuffle hit docs so they don't sweep uniformly around the ring
     const shuffledDocs = [...hitDocs].sort(() => random() - 0.5);
 
-    // t=0: Docs flash (staggered, random order)
+    // t=0: Docs flash (staggered, shuffled)
     shuffledDocs.forEach((doc, i) => {
       setTimeout(() => {
-        doc.activityGlow = Math.min(1, doc.activityGlow + 0.7);
+        doc.activityGlow = Math.min(1, doc.activityGlow + 0.6);
       }, i * 30 + random() * 40);
     });
 
-    // t=150ms: Pulses travel from hit docs → central entity (random order, varied timing)
+    // t=200ms: Small pulses travel from docs → central entity
     setTimeout(() => {
-      shuffledDocs.slice(0, 12).forEach((doc, i) => {
+      shuffledDocs.slice(0, 8).forEach((doc, i) => {
         setTimeout(() => {
           pulses.push({
             fromX: doc._px, fromY: doc._py,
             toX: centralEntity.x, toY: centralEntity.y,
             progress: 0,
-            speed: 0.006 + random() * 0.006,
+            speed: 0.007 + random() * 0.005,
             col: [255, 200, 120],
+            small: true, // smaller doc→entity pulses
           });
-        }, i * 50 + random() * 60);
+        }, i * 40 + random() * 50);
       });
-    }, 150);
+    }, 200);
 
-    // t=400ms: Central entity flashes from arriving pulses
+    // t=550ms: Central entity flashes on arrival
     setTimeout(() => {
-      if (centralEntity && (hitDocs.length > 0 || hitEntityNames.has(centralEntity.name.toLowerCase()))) {
-        centralEntity.activityGlow = Math.min(1, centralEntity.activityGlow + 0.8);
+      if (centralEntity) {
+        centralEntity.activityGlow = Math.min(1, centralEntity.activityGlow + 0.7);
       }
-    }, 400);
+    }, 550);
 
-    // t=500ms: Pulses travel from hit docs → co-entities that share those docs
+    // t=650ms: Pulses radiate from central entity → co-entities (full size)
     setTimeout(() => {
-      for (const co of hitCos) {
-        const sharedHitDocs = hitDocs.filter(d => co.sharedDocIds.includes(d.id));
-        const sourceDocs = sharedHitDocs.length > 0 ? sharedHitDocs : hitDocs.slice(0, 3);
-        sourceDocs.forEach((doc, i) => {
-          setTimeout(() => {
-            const tc = { Person:[55,138,221], Organization:[127,119,221], Product:[29,158,117],
-              Technology:[186,117,23], Event:[216,90,48] }[co.type] || [156,154,146];
-            pulses.push({
-              fromX: doc._px, fromY: doc._py,
-              toX: co._px, toY: co._py,
-              progress: 0,
-              speed: 0.006 + random() * 0.004,
-              col: tc,
-            });
-          }, i * 80);
-        });
-      }
-    }, 500);
+      hitCos.slice(0, 10).forEach((co, i) => {
+        setTimeout(() => {
+          const tc = { Person:[55,138,221], Organization:[127,119,221], Product:[29,158,117],
+            Technology:[186,117,23], Event:[216,90,48] }[co.type] || [156,154,146];
+          pulses.push({
+            fromX: centralEntity.x, fromY: centralEntity.y,
+            toX: co._px, toY: co._py,
+            progress: 0,
+            speed: 0.005 + random() * 0.004,
+            col: tc,
+            small: false,
+          });
+        }, i * 60 + random() * 40);
+      });
+    }, 650);
 
-    // t=800ms: Co-entities flash from arriving pulses
+    // t=1000ms: Co-entities flash on arrival
     setTimeout(() => {
       hitCos.forEach((co, i) => {
         setTimeout(() => {
-          co.activityGlow = Math.min(1, co.activityGlow + 0.7);
-        }, i * 50);
+          co.activityGlow = Math.min(1, co.activityGlow + 0.6);
+        }, i * 40);
       });
-    }, 800);
+    }, 1000);
   }
 });
 
@@ -260,10 +257,17 @@ function buildStarView(graph) {
     });
   }
 
-  camera.x = cx;
-  camera.y = cy;
-  camera.zoom = 0.75;
-  camera.targetZoom = 0.75;
+  // Fit camera to show all nodes
+  let minX = cx - 50, maxX = cx + 50, minY = cy - 50, maxY = cy + 50;
+  for (const d of docs) { minX = Math.min(minX, d.x); maxX = Math.max(maxX, d.x); minY = Math.min(minY, d.y); maxY = Math.max(maxY, d.y); }
+  for (const e of coEntities) { minX = Math.min(minX, e.x); maxX = Math.max(maxX, e.x); minY = Math.min(minY, e.y); maxY = Math.max(maxY, e.y); }
+  const spanX = maxX - minX + 200;
+  const spanY = maxY - minY + 200;
+  const fitZoom = Math.min(window.innerWidth / spanX, window.innerHeight / spanY) * 0.8;
+  camera.x = (minX + maxX) / 2;
+  camera.y = (minY + maxY) / 2;
+  camera.zoom = fitZoom;
+  camera.targetZoom = fitZoom;
 
   document.getElementById('nav-name').textContent = ent.canonical_name;
   document.getElementById('hud-info').textContent =
@@ -347,6 +351,16 @@ canvas.addEventListener('mouseup', e => {
           type: 'node_selected', nodeType: 'document',
           data: { id: hit.id, title: hit.title }
         }, '*');
+      } else if (hit.kind === 'central') {
+        window.parent.postMessage({
+          type: 'node_selected', nodeType: 'entity',
+          data: {
+            id: centralEntity.id,
+            name: centralEntity.name,
+            entityType: centralEntity.type,
+            source_count: centralEntity.sourceCount,
+          }
+        }, '*');
       }
     } else {
       // Clicked empty space — close any open panel
@@ -356,6 +370,17 @@ canvas.addEventListener('mouseup', e => {
 });
 
 canvas.addEventListener('wheel', e => camera.handleWheel(e), { passive: false });
+
+// Double-click empty space → zoom in toward cursor (Google Maps style)
+canvas.addEventListener('dblclick', e => {
+  W = canvas.width / devicePixelRatio;
+  H = canvas.height / devicePixelRatio;
+  const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
+  const hit = hitTest(w.x, w.y);
+  if (!hit) {
+    camera.flyTo(w.x, w.y, camera.zoom * 1.8, 400);
+  }
+});
 
 // Render loop
 function frame() {
@@ -393,7 +418,7 @@ function frame() {
   camera.applyTransform(ctx, W, H);
 
   if (centralEntity) {
-    drawConnections(ctx, centralEntity.x, centralEntity.y, docs, coEntities, hoveredId);
+    drawConnections(ctx, centralEntity.x, centralEntity.y, docs, coEntities, hoveredId, centralEntity.id);
 
     // Draw traveling pulses
     for (const p of pulses) {
@@ -402,27 +427,29 @@ function frame() {
       const gf = sin(rawP * Math.PI);
       const px = p.fromX + (p.toX - p.fromX) * ep;
       const py = p.fromY + (p.toY - p.fromY) * ep;
+      const bright = p.small ? 0.65 : 1.3;
+      const scale = p.small ? 0.7 : 1.0;
 
-      // Trail — subtle
+      // Trail
       const tp = Math.max(0, rawP - 0.10);
       const tep = tp < 0.5 ? 2 * tp * tp : -1 + (4 - 2 * tp) * tp;
       const tx = p.fromX + (p.toX - p.fromX) * tep;
       const ty = p.fromY + (p.toY - p.fromY) * tep;
       const tg = ctx.createLinearGradient(tx, ty, px, py);
       tg.addColorStop(0, `rgba(${p.col[0]},${p.col[1]},${p.col[2]},0)`);
-      tg.addColorStop(1, `rgba(${p.col[0]},${p.col[1]},${p.col[2]},${0.30 * gf})`);
+      tg.addColorStop(1, `rgba(${p.col[0]},${p.col[1]},${p.col[2]},${0.30 * gf * bright})`);
       ctx.strokeStyle = tg;
-      ctx.lineWidth = 1.2;
+      ctx.lineWidth = 1.2 * scale;
       ctx.beginPath();
       ctx.moveTo(tx, ty);
       ctx.lineTo(px, py);
       ctx.stroke();
 
-      // Dot — small and soft
-      const sz = 3 + gf * 2.5;
+      // Dot
+      const sz = (3 + gf * 2.5) * scale;
       const dg = ctx.createRadialGradient(px, py, 0, px, py, sz);
-      dg.addColorStop(0, `rgba(255,255,255,${0.85 * gf})`);
-      dg.addColorStop(0.3, `rgba(${p.col[0]},${p.col[1]},${p.col[2]},${0.6 * gf})`);
+      dg.addColorStop(0, `rgba(255,255,255,${0.85 * gf * bright})`);
+      dg.addColorStop(0.3, `rgba(${p.col[0]},${p.col[1]},${p.col[2]},${0.6 * gf * bright})`);
       dg.addColorStop(1, `rgba(${p.col[0]},${p.col[1]},${p.col[2]},0)`);
       ctx.fillStyle = dg;
       ctx.beginPath();

@@ -200,6 +200,16 @@ async def _ingest_document(title: str, content: str, source_path: str | None) ->
     finally:
         conn.close()
 
+    # Rebuild search index to include new entities/chunks
+    try:
+        from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
+        search_conn = get_connection(settings.db_path)
+        embed_new_entities(search_conn)
+        embed_new_chunks(search_conn)
+        search_conn.close()
+    except Exception as e:
+        print(f"Search index update after ingest: {e}")
+
     return {
         "document_id": doc_id,
         "title": title,

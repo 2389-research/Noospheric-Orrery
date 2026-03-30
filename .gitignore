@@ -5,3 +5,6 @@ __pycache__/
 node_modules/
 .next/
 data/
+test_docs/
+orrery-data/
+.venv/

@@ -195,14 +195,15 @@ export function drawCoEntities(ctx, coEntities, tick, hoveredId) {
  *  Hover highlights the full chain: hover doc → light up its co-entities,
  *  hover co-entity → light up its shared docs.
  */
-export function drawConnections(ctx, centerX, centerY, docs, coEntities, hoveredId) {
+export function drawConnections(ctx, centerX, centerY, docs, coEntities, hoveredId, centralEntityId) {
   const hovDoc = docs.find(d => d.id === hoveredId);
   const hovCo = coEntities.find(e => e.id === hoveredId);
+  const hovCenter = hoveredId === centralEntityId;
 
   // Center → documents
   for (const doc of docs) {
-    const lit = hovDoc && doc.id === hovDoc.id;
-    ctx.strokeStyle = `rgba(255,200,120,${lit ? 0.30 : 0.04})`;
+    const lit = hovCenter || (hovDoc && doc.id === hovDoc.id);
+    ctx.strokeStyle = `rgba(255,200,120,${lit ? 0.35 : 0.04})`;
     ctx.lineWidth = lit ? 1.8 : 0.5;
     ctx.setLineDash([3, 8]);
     ctx.beginPath();
@@ -219,12 +220,11 @@ export function drawConnections(ctx, centerX, centerY, docs, coEntities, hovered
     for (const docId of co.sharedDocIds) {
       const doc = docs.find(d => d.id === docId);
       if (!doc) continue;
-      // Light up if: hovering this co-entity, or hovering this doc
-      const lit = coHov || (hovDoc && doc.id === hovDoc.id);
+      const lit = hovCenter || coHov || (hovDoc && doc.id === hovDoc.id);
       const tc = typeColor(co.type);
       const [rc, gc, bc] = hexRGB(tc);
-      ctx.strokeStyle = rgba(rc, gc, bc, lit ? 0.25 : 0.035);
-      ctx.lineWidth = lit ? 1.2 : 0.4;
+      ctx.strokeStyle = rgba(rc, gc, bc, lit ? 0.30 : 0.035);
+      ctx.lineWidth = lit ? 1.3 : 0.4;
       ctx.setLineDash([2, 6]);
       ctx.beginPath();
       ctx.moveTo(doc._px, doc._py);
