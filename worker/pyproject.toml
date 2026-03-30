@@ -4,9 +4,9 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic[bedrock]>=0.40.0",
-    # simmer-sdk installed separately in Dockerfile from local copy
-    # sentence-transformers deferred until embedding normalization is implemented
-    # "sentence-transformers>=3.0.0",
+    "sentence-transformers>=3.0.0",
+    # simmer-sdk: install from PyPI or local path (see worker/Dockerfile)
+    # "simmer-sdk>=0.2.0",
 ]
 
 [project.optional-dependencies]

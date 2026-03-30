@@ -212,6 +212,9 @@ canvas.addEventListener('dblclick', e => {
     }, '*');
   } else if (hit && hit.kind === 'domain') {
     camera.flyTo(hit.x, hit.y, 0.6, 800);
+  } else if (!hit) {
+    // Empty space → zoom in toward cursor
+    camera.flyTo(w.x, w.y, camera.zoom * 1.8, 400);
   }
 });
 

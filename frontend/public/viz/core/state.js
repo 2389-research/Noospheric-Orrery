@@ -363,36 +363,63 @@ export class WorldState {
 
     if (!hitEntities.length) return;
 
+    // Rank domains by hit density
+    const domScores = {};
+    for (const path of hitDomainPaths) {
+      domScores[path] = hitEntities.filter(e =>
+        e.domainWeights && path in e.domainWeights
+      ).length;
+    }
+    const topDomains = [...hitDomainPaths]
+      .sort((a, b) => (domScores[b] || 0) - (domScores[a] || 0))
+      .slice(0, 5);
+    hitDomainPaths.clear();
+    for (const p of topDomains) hitDomainPaths.add(p);
+
     // t=0: Flash entities (subtle, staggered)
     hitEntities.forEach((e, i) => {
       setTimeout(() => {
         e.activityGlow = Math.min(1.0, e.activityGlow + 0.5);
-      }, i * 60);
+      }, i * 40);
     });
 
-    // t=80ms: Brighten top 5 hit domains (not all)
+    // t=150ms: Entity → domain pulses (energy flows up to parent domains)
     setTimeout(() => {
-      // Rank domains by how many hit entities touch them
-      const domScores = {};
-      for (const path of hitDomainPaths) {
-        domScores[path] = hitEntities.filter(e =>
-          e.domainWeights && path in e.domainWeights
-        ).length;
-      }
-      const topDomains = [...hitDomainPaths]
-        .sort((a, b) => (domScores[b] || 0) - (domScores[a] || 0))
-        .slice(0, 5);
+      const seen = new Set(); // one pulse per entity-domain pair
+      hitEntities.slice(0, 8).forEach((e, i) => {
+        if (!e.domainWeights) return;
+        for (const path of Object.keys(e.domainWeights)) {
+          if (!hitDomainPaths.has(path)) continue;
+          const key = `${e.id}:${path}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const dom = this.domains.get(path);
+          if (!dom) continue;
+          setTimeout(() => {
+            this.pulses.push({
+              source: path,  // we store domain path but use entity position for rendering
+              target: path,
+              fromX: e.x, fromY: e.y,
+              toX: dom.x, toY: dom.y,
+              col: hexRGB(dom.color),
+              progress: 0,
+              speed: 0.007 + random() * 0.005,
+              arrivedFlag: false,
+            });
+          }, i * 50);
+        }
+      });
+    }, 150);
 
-      for (const path of topDomains) {
+    // t=500ms: Domains brighten on pulse arrival
+    setTimeout(() => {
+      for (const path of hitDomainPaths) {
         const dom = this.domains.get(path);
         if (dom) dom.activityGlow = Math.min(1.0, dom.activityGlow + 0.45);
       }
-      // Replace hitDomainPaths for pulse firing below
-      hitDomainPaths.clear();
-      for (const p of topDomains) hitDomainPaths.add(p);
-    }, 80);
+    }, 500);
 
-    // t=250ms: Fire route pulses between hit domains
+    // t=700ms: Fire route pulses between hit domains (after entity→domain arrives)
     setTimeout(() => {
       // Score routes by hit density
       const domainHitCount = {};
@@ -414,14 +441,19 @@ export class WorldState {
       // Sort by score, shuffle ties to avoid alphabetical spatial bias
       candidates.sort((a, b) => b.score - a.score || (random() - 0.5));
 
-      // Cap at 4 pulses — enough to show activity without chaos
+      // Cap at 4 pulses — direction flows from more-hit domain outward
       candidates.slice(0, 4).forEach((c, i) => {
-        const srcDom = this.domains.get(c.route.source);
+        // Pulse flows from the domain with more search hits to the one with fewer
+        const scoreA = domainHitCount[c.route.source] || 0;
+        const scoreB = domainHitCount[c.route.target] || 0;
+        const from = scoreA >= scoreB ? c.route.source : c.route.target;
+        const to = scoreA >= scoreB ? c.route.target : c.route.source;
+        const srcDom = this.domains.get(from);
         if (srcDom) {
           setTimeout(() => {
             this.pulses.push({
-              source: c.route.source,
-              target: c.route.target,
+              source: from,
+              target: to,
               col: hexRGB(srcDom.color),
               progress: 0,
               speed: 0.008,
@@ -430,14 +462,14 @@ export class WorldState {
           }, i * 150);
         }
       });
-    }, 250);
+    }, 700);
 
-    // t=900ms: Arrival — destination domains get secondary pulse
+    // t=1200ms: Arrival — destination domains get secondary pulse
     setTimeout(() => {
       for (const path of hitDomainPaths) {
         const dom = this.domains.get(path);
         if (dom) dom.activityGlow = Math.min(1.0, dom.activityGlow + 0.4);
       }
-    }, 900);
+    }, 1200);
   }
 }

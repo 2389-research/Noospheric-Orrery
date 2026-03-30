@@ -108,6 +108,12 @@ export default function VizPage() {
         enterStarView(e.data.entityId, e.data.entityName);
       } else if (e.data?.type === "navigate_galaxy") {
         exitStarView();
+      } else if (e.data?.type === "reset_home") {
+        exitStarView();
+        // After fade back, reset galaxy camera to full overview
+        setTimeout(() => {
+          galaxyRef.current?.contentWindow?.postMessage({ type: "reset_galaxy" }, "*");
+        }, 400);
       }
     };
     window.addEventListener("message", handler);
@@ -308,7 +314,7 @@ export default function VizPage() {
       )}
 
       {/* Left panel: node details / doc reader / search results */}
-      {showPanel && viewMode === "galaxy" && (
+      {showPanel && (
         <div style={{ position: "absolute", top: 0, left: 0, height: "100%", zIndex: 10 }}>
           <GalaxyPanel
             selectedNode={selectedNode}

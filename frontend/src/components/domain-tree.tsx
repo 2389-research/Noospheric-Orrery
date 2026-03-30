@@ -4,14 +4,33 @@ import { useState, useMemo } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { DomainInfo } from "@/lib/types";
+import { DomainInfo, JobInfo } from "@/lib/types";
 import { api } from "@/lib/api";
 
 const PAGE_SIZE = 12;
 
 type SortKey = "size" | "name" | "spec";
 
-export function DomainTree({ domains }: { domains: DomainInfo[] }) {
+function SimmerAction({ domain: d, jobs, onSimmer }: { domain: DomainInfo; jobs: JobInfo[]; onSimmer: (path: string) => void }) {
+  if (d.spec_version) {
+    const simmerJob = jobs.find(j => j.type.startsWith("simmer") && j.target === d.path);
+    if (simmerJob) {
+      return (
+        <Link href={`/simmer/${simmerJob.id}`} className="text-[10px] text-purple-400/70 hover:text-purple-400 transition-colors">
+          view run
+        </Link>
+      );
+    }
+    return <span className="text-[10px] text-muted-foreground/40">spec v{d.spec_version}</span>;
+  }
+  return (
+    <Button size="sm" variant="outline" className="h-5 text-[10px] px-2" onClick={() => onSimmer(d.path)}>
+      simmer
+    </Button>
+  );
+}
+
+export function DomainTree({ domains, jobs = [] }: { domains: DomainInfo[]; jobs?: JobInfo[] }) {
   const [page, setPage] = useState(0);
   const [sortBy, setSortBy] = useState<SortKey>("size");
   const [filter, setFilter] = useState("");
@@ -90,18 +109,7 @@ export function DomainTree({ domains }: { domains: DomainInfo[] }) {
               >
                 {d.spec_version ? `v${d.spec_version}` : "—"}
               </Badge>
-              {d.spec_version ? (
-                <Link
-                  href={`/simmer/${d.id}`}
-                  className="text-[10px] text-purple-400/70 hover:text-purple-400 transition-colors"
-                >
-                  view run
-                </Link>
-              ) : (
-                <Button size="sm" variant="outline" className="h-5 text-[10px] px-2" onClick={() => handleSimmer(d.path)}>
-                  simmer
-                </Button>
-              )}
+              <SimmerAction domain={d} jobs={jobs} onSimmer={handleSimmer} />
             </div>
           );
         })}

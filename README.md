@@ -52,83 +52,89 @@ All three services run via `docker compose up`. Orchestrator and worker share a 
 | Classification model | `claude-sonnet-4-20250514` |
 | Extraction model | `claude-haiku-4-20250514` (or haiku-4-5) |
 | Iterative refinement | simmer-sdk |
-| Embeddings | all-MiniLM-L6-v2 (sentence-transformers, deferred) |
+| Embeddings | all-MiniLM-L6-v2 (sentence-transformers) |
+| Semantic search | FAISS IndexFlatIP + query expansion via Haiku |
+| Domain layout | UMAP on domain embeddings (persistent, stable) |
 | Storage | SQLite WAL mode |
-| Frontend | Next.js, shadcn/ui, TypeScript |
-| Cosmic viz | Canvas2D self-contained HTML, iframe + postMessage |
+| Frontend | Next.js 16, shadcn/ui, TypeScript |
+| Cosmic viz | Canvas2D ES modules, iframe + postMessage |
+| MCP server | stdio server for AI agent integration |
 | Containers | Docker Compose |
 
-## Running Locally
+## Quick Start
 
 ### Prerequisites
 
 - Docker and Docker Compose
-- AWS account with Bedrock access and cross-region inference enabled for `us-east-1`
+- AWS account with Bedrock access (cross-region inference enabled for `us-east-1`)
+- Access to the `simmer-sdk` repo (internal)
 
-### Environment Variables
-
-Copy `.env.example` to `.env` (or create `.env`):
-
-```bash
-AWS_ACCESS_KEY=your_key
-AWS_SECRET_KEY=your_secret
-AWS_REGION=us-east-1
-
-# Models (Bedrock cross-region inference profile IDs)
-CLASSIFICATION_MODEL=us.anthropic.claude-sonnet-4-20250514-v1:0
-EXTRACTION_MODEL=us.anthropic.claude-haiku-4-20250514-v1:0
-
-# Thresholds
-GENERAL_SPEC_THRESHOLD=10   # docs before auto-triggering general spec simmer
-DOMAIN_SPEC_THRESHOLD=20    # docs in a domain before auto-triggering domain simmer
-SIMMER_ITERATIONS=5
-CHUNK_SIZE=2000
-WORKER_POLL_INTERVAL=5
-```
-
-### Docker Compose (recommended)
+### Setup
 
 ```bash
+# 1. Clone repos
+git clone <noospheric-orrery-repo>
+git clone <simmer-sdk-repo>
+
+# 2. Copy simmer-sdk into worker build context
+cp -r simmer-sdk/ Noospheric-Orrery/worker/simmer-sdk/
+
+# 3. Configure environment
+cd Noospheric-Orrery
+cp .env.example .env
+# Edit .env with your AWS credentials
+
+# 4. Launch
 docker compose up
 ```
 
 Services start on:
-- Frontend: http://localhost:3100
-- Orchestrator API: http://localhost:8100
-- API docs: http://localhost:8100/docs
+- **Frontend**: http://localhost:3100 (upload, pipeline, entities, galaxy viz)
+- **Orchestrator API**: http://localhost:8100 (REST API + WebSocket)
+- **API docs**: http://localhost:8100/docs (Swagger)
 
 Data persists in the `orrery-data` Docker volume.
 
-### Running Without Docker
+### First Steps
 
-The orchestrator and worker can run outside containers against `~/orrery-data/` directly. An env script is kept at `/tmp/run-orchestrator.sh` with all environment variables pre-set.
+1. Open http://localhost:3100 and upload a text/markdown file
+2. The pipeline automatically: classifies into domains, extracts entities, indexes for search
+3. Go to `/viz` to see the galaxy map — zoom in for sector detail, double-click entities for star view
+4. Use `/pipeline` to monitor jobs, trigger simmering, run normalization
 
-**Orchestrator:**
+### Running Without Docker (Dev Mode)
+
 ```bash
-source /tmp/run-orchestrator.sh
+# Create venvs
+cd orchestrator && python3 -m venv .venv && .venv/bin/pip install -e ".[dev]" && cd ..
+cd worker && python3 -m venv .venv && .venv/bin/pip install -e ".[dev]" && .venv/bin/pip install -e ../simmer-sdk && cd ..
+cd frontend && npm install && cd ..
+
+# Set environment variables
+cp .env.example .env  # edit with your AWS creds
+export $(cat .env | xargs)
+export DB_PATH=$HOME/orrery-data/orrery.db
+export DOCUMENTS_DIR=$HOME/orrery-data/documents
+export SPECS_DIR=$HOME/orrery-data/specs
+
+# Start services (each in its own terminal)
+cd orchestrator && .venv/bin/uvicorn src.main:app --host 0.0.0.0 --port 8100
+cd worker && .venv/bin/python -m src.main
+cd frontend && NEXT_PUBLIC_API_URL=http://localhost:8100 npm run dev -- -p 3100
+```
+
+### MCP Server (for AI agents)
+
+The orchestrator includes an MCP server for Claude Code or other MCP-compatible agents:
+
+```bash
 cd orchestrator
-pip install -e ".[dev]"
-uvicorn src.main:app --reload --port 8000
+source ../.env
+export DB_PATH=$HOME/orrery-data/orrery.db
+.venv/bin/python -m src.mcp_server
 ```
 
-**Worker:**
-```bash
-source /tmp/run-orchestrator.sh
-cd worker
-pip install -e ".[dev]"
-# Install simmer-sdk from local checkout
-pip install -e /path/to/simmer-sdk
-python -m src.main
-```
-
-**Frontend:**
-```bash
-cd frontend
-npm install
-NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
-```
-
-The frontend runs on port 3000 by default.
+Exposes tools: `search_knowledge_graph`, `get_entity`, `get_document`, `list_domains`, `list_entities`. Searches trigger the galaxy viz glow animation via WebSocket when the orchestrator is running.
 
 ## Pipeline Flow
 
@@ -185,7 +191,12 @@ Once a spec exists, all queued documents are extracted via `extract_batch`.
 | `GET` | `/normalize/review` | Ambiguous entity pairs pending manual review |
 | `POST` | `/normalize/review/{id}` | Resolve a review item (`action=merge` or `keep_separate`) |
 | `POST` | `/discover-subdomains` | Run subdomain discovery across all extracted docs |
-| `GET` | `/graph` | Graph data in `cosmic_data_v4` format for the viz |
+| `GET` | `/search` | Hybrid search: query expansion + FAISS semantic + exact match + RRF fusion |
+| `POST` | `/search/rebuild` | Rebuild FAISS indexes from stored embeddings |
+| `POST` | `/reclassify` | Re-run classifier on all documents (additive domains) |
+| `GET` | `/entities/{id}/star-graph` | 2-hop local graph: entity + docs + co-entities with shared doc IDs |
+| `GET` | `/graph` | Graph data (UMAP positions, entities, trade routes) for the viz |
+| `GET` | `/graph/umap` | Same as /graph, forces fresh UMAP recomputation |
 | `GET` | `/health` | Health check |
 
 Full interactive docs at `/docs` (Swagger) and `/redoc`.
@@ -197,7 +208,7 @@ Full interactive docs at `/docs` (Swagger) and `/redoc`.
 | `/` | Upload page — drag-and-drop files or paste a directory path |
 | `/pipeline` | Job status, domain taxonomy tree, spec maturity, "Simmer" buttons |
 | `/entities` | Paginated entity table with type/domain filters |
-| `/viz` | Cosmic galaxy map (iframe + postMessage panel) |
+| `/viz` | Galaxy map — zoom for sector detail, double-click entity for star view, search to navigate |
 | `/simmer/{id}` | Simmer job detail — iteration history, per-criterion scores, phase tabs |
 | `/extraction/{id}` | Batch extraction detail — docs processed, entities extracted, normalization summary, reader view |
 

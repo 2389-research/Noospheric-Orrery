@@ -118,19 +118,20 @@ def get_star_graph(entity_id: str, co_limit: int = 30):
     doc_ids = [r[0] for r in doc_rows]
     documents = [{"id": r[0], "title": r[1]} for r in doc_rows]
 
-    # Get co-occurring entities (from relationships table) with shared doc info
+    # Get co-occurring entities (from relationships table), deduped
     co_rows = conn.execute("""
-        SELECT e.id, e.canonical_name, e.type, r.weight
+        SELECT e.id, e.canonical_name, e.type, SUM(r.weight) as total_weight
         FROM relationships r
         JOIN entities e ON (
             CASE WHEN r.from_entity = ? THEN r.to_entity ELSE r.from_entity END
         ) = e.id
         WHERE (r.from_entity = ? OR r.to_entity = ?) AND r.type = 'co_occurs'
-        ORDER BY r.weight DESC
+        GROUP BY e.id
+        ORDER BY total_weight DESC
         LIMIT ?
     """, (entity_id, entity_id, entity_id, co_limit)).fetchall()
 
-    co_entity_ids = [r[0] for r in co_rows]
+    co_entity_ids = list(dict.fromkeys(r[0] for r in co_rows))  # dedup preserving order
 
     # For each co-entity, find which docs they share with the central entity
     shared_docs = {}
