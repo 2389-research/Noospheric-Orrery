@@ -706,6 +706,10 @@ class FirestoreNormalizationRepository(NormalizationRepository):
     def create_merge_map_entry(self, from_name, to_entity_id):
         self._merge_col.document(from_name).set({"toEntityId": to_entity_id})
 
+    def get_merge_history(self, entity_id):
+        results = self._merge_col.where("toEntityId", "==", entity_id).stream()
+        return [doc.id for doc in results]
+
 
 class FirestoreLayoutRepository(LayoutRepository):
     def __init__(self, db, workspace_id):

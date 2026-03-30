@@ -49,15 +49,7 @@ def get_entity(entity_id: str):
         store.close()
         raise HTTPException(status_code=404, detail="Entity not found")
     sources = store.entity_sources.get_for_entity(entity_id)
-    merges = store.normalization.get_merge_map_entry(entity.canonical_name)
-    # Get all names that merged into this entity
-    # For now use legacy conn access until merge_history is in the interface
-    merge_history = []
-    try:
-        rows = store.conn.execute("SELECT from_name FROM merge_map WHERE to_entity_id = ?", (entity_id,)).fetchall()
-        merge_history = [r[0] for r in rows]
-    except Exception:
-        pass
+    merge_history = store.normalization.get_merge_history(entity_id)
     store.close()
     return {
         "id": entity.id, "canonical_name": entity.canonical_name, "type": entity.type,

@@ -665,6 +665,10 @@ class SQLiteNormalizationRepository(NormalizationRepository):
                             (from_name, to_entity_id))
         self._conn.commit()
 
+    def get_merge_history(self, entity_id):
+        rows = self._conn.execute("SELECT from_name FROM merge_map WHERE to_entity_id = ?", (entity_id,)).fetchall()
+        return [r[0] for r in rows]
+
 
 class SQLiteLayoutRepository(LayoutRepository):
     def __init__(self, conn):
