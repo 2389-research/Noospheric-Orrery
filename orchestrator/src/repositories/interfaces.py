@@ -374,6 +374,9 @@ class NormalizationRepository(ABC):
     @abstractmethod
     def create_merge_map_entry(self, from_name: str, to_entity_id: str) -> None: ...
 
+    @abstractmethod
+    def get_merge_history(self, entity_id: str) -> list[str]: ...
+
 
 class LayoutRepository(ABC):
     @abstractmethod
