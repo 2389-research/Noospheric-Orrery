@@ -13,6 +13,8 @@ dependencies = [
     "faiss-cpu>=1.7.0",
     "mcp>=1.0.0",
     "orrery-relay",
+    "firebase-admin>=6.0.0",
+    "google-cloud-firestore>=2.0.0",
 ]
 
 [project.optional-dependencies]

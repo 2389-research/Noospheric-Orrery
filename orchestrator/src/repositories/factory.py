@@ -39,7 +39,10 @@ def get_store(db_path: str | None = None) -> DataStore:
         return SQLiteDataStore(db_path)
 
     elif backend == "firestore":
-        raise NotImplementedError("Firestore backend not yet implemented. Set DB_BACKEND=sqlite.")
+        from .firestore_store import FirestoreDataStore
+        project_id = os.environ.get("FIREBASE_PROJECT_ID", "noospheric-orrery")
+        workspace_id = os.environ.get("FIREBASE_WORKSPACE_ID", "default")
+        return FirestoreDataStore(project_id=project_id, workspace_id=workspace_id)
 
     else:
         raise ValueError(f"Unknown DB_BACKEND: {backend}. Use 'sqlite' or 'firestore'.")
