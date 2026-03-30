@@ -21,8 +21,12 @@ def set_test_store(store: DataStore | None) -> None:
     _test_store = store
 
 
-def get_store(db_path: str | None = None) -> DataStore:
+def get_store(db_path: str | None = None, workspace_id: str | None = None) -> DataStore:
     """Create a DataStore based on DB_BACKEND env var.
+
+    Args:
+        db_path: SQLite database path (SQLite only)
+        workspace_id: Firestore workspace ID (overrides env var, from auth user)
 
     If a test store is set, returns that instead.
     """
@@ -41,8 +45,8 @@ def get_store(db_path: str | None = None) -> DataStore:
     elif backend == "firestore":
         from .firestore_store import FirestoreDataStore
         project_id = os.environ.get("FIREBASE_PROJECT_ID", "noospheric-orrery")
-        workspace_id = os.environ.get("FIREBASE_WORKSPACE_ID", "default")
-        return FirestoreDataStore(project_id=project_id, workspace_id=workspace_id)
+        ws_id = workspace_id or os.environ.get("FIREBASE_WORKSPACE_ID", "default")
+        return FirestoreDataStore(project_id=project_id, workspace_id=ws_id)
 
     else:
         raise ValueError(f"Unknown DB_BACKEND: {backend}. Use 'sqlite' or 'firestore'.")

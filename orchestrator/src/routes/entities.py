@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
 
 router = APIRouter()

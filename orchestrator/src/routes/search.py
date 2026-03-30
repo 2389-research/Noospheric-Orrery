@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 from ..config import get_settings
+from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
 from ..pipeline.search import search_knowledge_graph, build_indexes, embed_new_entities, embed_new_chunks
 from ..broadcast import broadcast_search

@@ -4,6 +4,7 @@ import asyncio
 from fastapi import APIRouter
 from anthropic import AsyncAnthropicBedrock
 from ..config import get_settings
+from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
 from ..pipeline.excerpt import build_classification_excerpt
 from ..pipeline.classifier import classify_document
