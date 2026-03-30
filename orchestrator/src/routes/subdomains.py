@@ -18,7 +18,7 @@ async def trigger_subdomain_discovery():
     )
     try:
         # Subdomain discovery still needs raw conn for complex queries
-        if hasattr(store, 'conn'):
+        if store.conn is not None:
             results = await run_subdomain_discovery(
                 client=client, model=settings.classification_model, conn=store.conn,
             )

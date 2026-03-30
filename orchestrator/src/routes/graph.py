@@ -165,7 +165,7 @@ def get_graph_data():
     # Domain positions — UMAP-based with persistence
     # Layout still needs raw conn for embedding queries
     from ..pipeline.domain_layout import ensure_layout
-    if hasattr(store, 'conn'):
+    if store.conn is not None:
         domain_positions = ensure_layout(store.conn)
     else:
         domain_positions = store.layout.get_stored_positions()
