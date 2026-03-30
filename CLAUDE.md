@@ -151,10 +151,10 @@ result = await refine(
 )
 ```
 
-simmer-sdk is an internal dependency — clone from the same GitHub org:
-- **Repo**: alongside this repo at `../simmer-sdk/`
-- **Docker**: copy into `worker/simmer-sdk/` before `docker compose build`
-- **Local dev**: `pip install -e ../simmer-sdk/`
+simmer-sdk is an internal dependency:
+- **Repo**: `https://github.com/2389-research/simmer-sdk`
+- **Docker**: clone alongside, then `cp -r simmer-sdk/ worker/simmer-sdk/` before `docker compose build`
+- **Local dev**: `git clone https://github.com/2389-research/simmer-sdk.git && pip install -e simmer-sdk/`
 
 ### SQLite WAL Mode
 
