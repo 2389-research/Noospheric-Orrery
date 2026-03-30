@@ -67,14 +67,14 @@ All three services run via `docker compose up`. Orchestrator and worker share a 
 
 - Docker and Docker Compose
 - AWS account with Bedrock access (cross-region inference enabled for `us-east-1`)
-- Access to the `simmer-sdk` repo (internal)
+- Access to [simmer-sdk](https://github.com/2389-research/simmer-sdk)
 
 ### Setup
 
 ```bash
 # 1. Clone repos
 git clone <noospheric-orrery-repo>
-git clone <simmer-sdk-repo>
+git clone https://github.com/2389-research/simmer-sdk.git
 
 # 2. Copy simmer-sdk into worker build context
 cp -r simmer-sdk/ Noospheric-Orrery/worker/simmer-sdk/
