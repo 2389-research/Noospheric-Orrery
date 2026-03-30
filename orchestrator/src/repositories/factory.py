@@ -3,18 +3,32 @@
 Usage:
     from repositories.factory import get_store
     store = get_store()  # reads DB_BACKEND env var
+
+Testing:
+    from repositories.factory import set_test_store
+    set_test_store(my_test_store)  # all get_store() calls return this
 """
 
 import os
 from .interfaces import DataStore
 
+_test_store: DataStore | None = None
+
+
+def set_test_store(store: DataStore | None) -> None:
+    """Override get_store() for testing. Pass None to reset."""
+    global _test_store
+    _test_store = store
+
 
 def get_store(db_path: str | None = None) -> DataStore:
     """Create a DataStore based on DB_BACKEND env var.
 
-    DB_BACKEND=sqlite (default): uses SQLite at db_path
-    DB_BACKEND=firestore: uses Firestore (requires firebase credentials)
+    If a test store is set, returns that instead.
     """
+    if _test_store is not None:
+        return _test_store
+
     backend = os.environ.get("DB_BACKEND", "sqlite").lower()
 
     if backend == "sqlite":
@@ -25,7 +39,6 @@ def get_store(db_path: str | None = None) -> DataStore:
         return SQLiteDataStore(db_path)
 
     elif backend == "firestore":
-        # TODO: implement FirestoreDataStore
         raise NotImplementedError("Firestore backend not yet implemented. Set DB_BACKEND=sqlite.")
 
     else:
