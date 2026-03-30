@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Firestore implementation of the DataStore repositories.
 
 Uses Firebase Admin SDK to read/write Firestore collections.

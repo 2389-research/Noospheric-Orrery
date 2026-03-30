@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Firebase Auth middleware for FastAPI.
 
 Validates Firebase ID tokens and extracts user context.

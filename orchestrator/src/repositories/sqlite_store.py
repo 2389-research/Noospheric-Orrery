@@ -1,3 +1,4 @@
+from __future__ import annotations
 """SQLite implementation of the DataStore repositories.
 
 Wraps all existing SQL queries behind the repository interfaces.

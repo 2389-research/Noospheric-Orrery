@@ -1,12 +1,8 @@
 FROM python:3.11-slim
 WORKDIR /app
-
-# Install orrery-relay (shared LLM client SDK)
-COPY packages/orrery-relay/ /tmp/orrery-relay/
-RUN pip install --no-cache-dir /tmp/orrery-relay/ && rm -rf /tmp/orrery-relay/
-
-COPY orchestrator/pyproject.toml .
+COPY pyproject.toml .
 RUN pip install --no-cache-dir .
-COPY orchestrator/src/ src/
-EXPOSE 8000
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+COPY src/ src/
+EXPOSE 8080
+# Cloud Run uses PORT env var (defaults to 8080)
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]

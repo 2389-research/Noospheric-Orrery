@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Factory for creating the appropriate DataStore.
 
 Usage:
