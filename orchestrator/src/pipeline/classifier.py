@@ -21,7 +21,7 @@ Rules:
 - You CAN and SHOULD create new domain paths that don't exist in the taxonomy if the document covers a topic not well represented by existing domains
 - Domain paths are hierarchical: region/parent/subdomain (e.g., business/technology/ai, business/legal/contracts)
 - A document can have 1 primary and 0-3 secondary domains
-- Be specific — prefer "business/fundraising/seed_round" over just "business/fundraising" if the content is clearly about seed rounds
+- Be specific — prefer "region/parent/specific_topic" over just "region/parent" (e.g., "business/fundraising/seed_round", "science/biology/genetics", "hobby/miniature_painting/techniques")
 - New domains are automatically added to the taxonomy, so don't hesitate to propose them
 """
 
