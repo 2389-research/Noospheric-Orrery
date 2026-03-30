@@ -145,6 +145,21 @@ CREATE TABLE IF NOT EXISTS simmer_criterion_details (
 );
 
 
+CREATE TABLE IF NOT EXISTS domain_layout (
+    domain_path TEXT PRIMARY KEY,
+    x REAL,
+    y REAL,
+    embedding BLOB,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS layout_model (
+    id TEXT PRIMARY KEY DEFAULT 'umap',
+    model_blob BLOB,
+    domain_count INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS specs (
     id TEXT PRIMARY KEY,
     domain_path TEXT,

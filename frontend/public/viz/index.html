@@ -49,10 +49,36 @@ camera.y = WORLD_H / 2;
 
 // Load data
 const API_URL = window.API_URL || 'http://localhost:8100';
-fetch(`${API_URL}/graph`).then(r => r.json()).then(data => {
+// Use ?layout=umap to test UMAP positions
+const layoutParam = new URLSearchParams(location.search).get('layout');
+const graphUrl = layoutParam === 'umap' ? `${API_URL}/graph/umap` : `${API_URL}/graph`;
+fetch(graphUrl).then(r => r.json()).then(data => {
   state.loadGraphData(data);
   console.log(`Loaded: ${state.domains.size} domains, ${state.entities.size} entities, ${state.clusters.length} clusters`);
   updateHUD();
+
+  // Fit camera to show all domains
+  if (state.domains.size > 0) {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [, d] of state.domains) {
+      minX = Math.min(minX, d.x - d.radius);
+      maxX = Math.max(maxX, d.x + d.radius);
+      minY = Math.min(minY, d.y - d.radius);
+      maxY = Math.max(maxY, d.y + d.radius);
+    }
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const spanX = maxX - minX + 400; // padding
+    const spanY = maxY - minY + 400;
+    const fitZoom = Math.min(
+      window.innerWidth / spanX,
+      window.innerHeight / spanY
+    ) * 0.85; // 85% fill
+    camera.x = cx;
+    camera.y = cy;
+    camera.zoom = fitZoom;
+    camera.targetZoom = fitZoom;
+  }
 });
 
 // Listen for messages from parent
@@ -89,7 +115,18 @@ window.addEventListener('message', e => {
   }
   // Reset to galaxy view
   if (e.data?.type === 'reset_galaxy') {
-    camera.flyTo(WORLD_W / 2, WORLD_H / 2, 0.18, 1200);
+    // Fly back to fit all domains
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [, d] of state.domains) {
+      minX = Math.min(minX, d.x - d.radius);
+      maxX = Math.max(maxX, d.x + d.radius);
+      minY = Math.min(minY, d.y - d.radius);
+      maxY = Math.max(maxY, d.y + d.radius);
+    }
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    const spanX = maxX - minX + 400, spanY = maxY - minY + 400;
+    const fitZoom = Math.min(window.innerWidth / spanX, window.innerHeight / spanY) * 0.85;
+    camera.flyTo(cx, cy, fitZoom, 1200);
     state.pinnedId = null;
   }
 });
