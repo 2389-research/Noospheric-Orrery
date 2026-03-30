@@ -795,4 +795,8 @@ class SQLiteDataStore(DataStore):
         return self._conn
 
     def close(self):
+        # Don't close if this is the test store (shared across requests)
+        from .factory import _test_store
+        if _test_store is self:
+            return
         self._conn.close()
