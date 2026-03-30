@@ -297,6 +297,9 @@ class RelationshipRepository(ABC):
     def get_star_graph(self, entity_id: str, co_limit: int = 30) -> dict: ...
 
     @abstractmethod
+    def get_trade_routes(self) -> list[dict]: ...
+
+    @abstractmethod
     def update_entity_references(self, from_id: str, to_id: str) -> None: ...
 
 

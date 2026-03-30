@@ -397,6 +397,18 @@ class SQLiteRelationshipRepository(RelationshipRepository):
         return [CoEntity(id=r["id"], canonical_name=r["canonical_name"], type=r["type"],
                           weight=r["total_weight"]) for r in rows]
 
+    def get_trade_routes(self):
+        rows = self._conn.execute("""
+            SELECT dd1.domain_path, dd2.domain_path, COUNT(*) as weight
+            FROM entity_sources es1
+            JOIN entity_sources es2 ON es1.entity_id = es2.entity_id AND es1.document_id != es2.document_id
+            JOIN document_domains dd1 ON es1.document_id = dd1.document_id
+            JOIN document_domains dd2 ON es2.document_id = dd2.document_id
+            WHERE dd1.domain_path < dd2.domain_path
+            GROUP BY dd1.domain_path, dd2.domain_path
+        """).fetchall()
+        return [{"source": r[0], "target": r[1], "weight": r[2]} for r in rows]
+
     def get_star_graph(self, entity_id, co_limit=30):
         # Entity info
         entity = self._conn.execute(
