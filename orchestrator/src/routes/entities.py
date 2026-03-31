@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
 
@@ -11,8 +11,9 @@ def list_entities(
     type: str | None = None,
     domain: str | None = None,
     job_id: str | None = None,
+    auth: AuthStore = Depends(get_auth_store),
 ):
-    store = get_store()
+    store = auth.store
     entities = store.entities.list(
         limit=limit, offset=offset,
         type_filter=type, domain_filter=domain, job_id=job_id,
@@ -23,8 +24,8 @@ def list_entities(
 
 
 @router.get("/entities/{entity_id}/cooccurrences")
-def get_cooccurrences(entity_id: str, limit: int = 10):
-    store = get_store()
+def get_cooccurrences(entity_id: str, limit: int = 10, auth: AuthStore = Depends(get_auth_store)):
+    store = auth.store
     coentities = store.relationships.get_cooccurrences(entity_id, limit=limit)
     store.close()
     return [{"id": c.id, "canonical_name": c.canonical_name, "type": c.type,
@@ -32,8 +33,8 @@ def get_cooccurrences(entity_id: str, limit: int = 10):
 
 
 @router.get("/entities/{entity_id}/star-graph")
-def get_star_graph(entity_id: str, co_limit: int = 30):
-    store = get_store()
+def get_star_graph(entity_id: str, co_limit: int = 30, auth: AuthStore = Depends(get_auth_store)):
+    store = auth.store
     result = store.relationships.get_star_graph(entity_id, co_limit=co_limit)
     if not result:
         store.close()
@@ -43,8 +44,8 @@ def get_star_graph(entity_id: str, co_limit: int = 30):
 
 
 @router.get("/entities/{entity_id}")
-def get_entity(entity_id: str):
-    store = get_store()
+def get_entity(entity_id: str, auth: AuthStore = Depends(get_auth_store)):
+    store = auth.store
     entity = store.entities.get(entity_id)
     if not entity:
         store.close()

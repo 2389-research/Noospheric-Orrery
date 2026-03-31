@@ -3,7 +3,7 @@
 import math
 import numpy as np
 from collections import defaultdict
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
@@ -154,9 +154,9 @@ def _layout_domains(domains: list[dict]) -> dict[str, dict]:
 
 
 @router.get("/graph")
-def get_graph_data():
+def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
     """Return graph data in cosmic_data_v4 format."""
-    store = get_store()
+    store = auth.store
 
     # Get all domains with docs
     domain_objs = store.domains.list(min_doc_count=1)
@@ -304,10 +304,10 @@ def _layout_domains_umap(domains: list[dict], conn) -> dict[str, dict]:
 
 
 @router.get("/graph/umap")
-def get_graph_data_umap():
+def get_graph_data_umap(auth: AuthStore = Depends(get_auth_store)):
     """Same as /graph but with UMAP-based domain positions."""
     settings = get_settings()
-    store = get_store()
+    store = auth.store
     conn = store.conn
 
     domains_raw = conn.execute(

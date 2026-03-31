@@ -1,12 +1,12 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
 
 router = APIRouter()
 
 @router.get("/documents")
-def list_documents(limit: int = 50, offset: int = 0):
-    store = get_store()
+def list_documents(limit: int = 50, offset: int = 0, auth: AuthStore = Depends(get_auth_store)):
+    store = auth.store
     docs = store.documents.list(limit=limit, offset=offset)
     result = []
     for d in docs:
@@ -19,8 +19,8 @@ def list_documents(limit: int = 50, offset: int = 0):
     return result
 
 @router.get("/documents/{document_id}")
-def get_document(document_id: str):
-    store = get_store()
+def get_document(document_id: str, auth: AuthStore = Depends(get_auth_store)):
+    store = auth.store
     doc = store.documents.get(document_id)
     if not doc:
         store.close()

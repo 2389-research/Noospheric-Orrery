@@ -350,6 +350,9 @@ class SpecRepository(ABC):
 
 class NormalizationRepository(ABC):
     @abstractmethod
+    def get_review_by_id(self, review_id: str) -> NormalizationReview | None: ...
+
+    @abstractmethod
     def get_existing_review(self, entity_a_id: str, entity_b_id: str) -> NormalizationReview | None: ...
 
     @abstractmethod

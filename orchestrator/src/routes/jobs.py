@@ -1,12 +1,12 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
 
 router = APIRouter()
 
 @router.get("/jobs")
-def list_jobs(status: str | None = None):
-    store = get_store()
+def list_jobs(status: str | None = None, auth: AuthStore = Depends(get_auth_store)):
+    store = auth.store
     jobs = store.jobs.list(status_filter=status)
     store.close()
     return [
@@ -20,8 +20,8 @@ def list_jobs(status: str | None = None):
 
 
 @router.get("/jobs/{job_id}/iterations")
-def get_job_iterations(job_id: str):
-    store = get_store()
+def get_job_iterations(job_id: str, auth: AuthStore = Depends(get_auth_store)):
+    store = auth.store
     result = store.simmer_iterations.get_for_job(job_id)
     if not result:
         store.close()

@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from anthropic import AsyncAnthropicBedrock
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
@@ -9,9 +9,9 @@ router = APIRouter()
 
 
 @router.post("/discover-subdomains")
-async def trigger_subdomain_discovery():
+async def trigger_subdomain_discovery(auth: AuthStore = Depends(get_auth_store)):
     settings = get_settings()
-    store = get_store()
+    store = auth.store
     client = AsyncAnthropicBedrock(
         aws_access_key=settings.aws_access_key,
         aws_secret_key=settings.aws_secret_key,

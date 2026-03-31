@@ -1,6 +1,6 @@
 """Search endpoint — full staged pipeline."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
@@ -11,9 +11,9 @@ router = APIRouter()
 
 
 @router.get("/search")
-async def search_query(q: str, top_k: int = 20, expand: bool = True):
+async def search_query(q: str, top_k: int = 20, expand: bool = True, auth: AuthStore = Depends(get_auth_store)):
     settings = get_settings()
-    store = get_store()
+    store = auth.store
     response = await search_knowledge_graph(
         store.conn, q,  # pipeline still uses raw conn
         expand=expand,
@@ -39,8 +39,8 @@ async def search_query(q: str, top_k: int = 20, expand: bool = True):
 
 
 @router.post("/search/rebuild")
-def rebuild_search_index():
-    store = get_store()
+def rebuild_search_index(auth: AuthStore = Depends(get_auth_store)):
+    store = auth.store
     new_entities = embed_new_entities(store.conn)
     new_chunks = embed_new_chunks(store.conn)
     stats = build_indexes(store.conn)

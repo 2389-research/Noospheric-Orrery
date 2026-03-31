@@ -654,6 +654,18 @@ class FirestoreNormalizationRepository(NormalizationRepository):
         self._log_col = db.collection("workspaces").document(workspace_id).collection("normalizationLog")
         self._merge_col = db.collection("workspaces").document(workspace_id).collection("mergeMap")
 
+    def get_review_by_id(self, review_id):
+        doc = self._review_col.document(review_id).get()
+        if not doc.exists:
+            return None
+        d = doc.to_dict()
+        return NormalizationReview(
+            id=doc.id, entity_a_id=d["entityAId"], entity_a_name=d["entityAName"],
+            entity_b_id=d["entityBId"], entity_b_name=d["entityBName"],
+            similarity=d["similarity"], status=d.get("status", "pending"),
+            resolution=d.get("resolution"),
+        )
+
     def get_existing_review(self, entity_a_id, entity_b_id):
         for doc in self._review_col.where("entityAId", "==", entity_a_id).where("entityBId", "==", entity_b_id).stream():
             d = doc.to_dict()

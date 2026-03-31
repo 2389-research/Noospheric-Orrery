@@ -311,12 +311,21 @@ def get_review_queue(store_or_conn) -> list[dict]:
 
 def resolve_review(store_or_conn, review_id: str, action: str) -> None:
     if _is_store(store_or_conn):
+        store = store_or_conn
         if action == "merge":
-            # Need to look up the review to get entity IDs
-            review = store_or_conn.normalization.get_existing_review("", "")  # TODO: need get_by_id
-            # For now, just resolve without merging on Firestore
-            pass
-        store_or_conn.normalization.resolve_review(review_id, action)
+            review = store.normalization.get_review_by_id(review_id)
+            if review:
+                count_a = store.entity_sources.get_source_count(review.entity_a_id)
+                count_b = store.entity_sources.get_source_count(review.entity_b_id)
+                if count_a >= count_b:
+                    _merge_entities_store(store, from_id=review.entity_b_id, from_name=review.entity_b_name,
+                                          to_id=review.entity_a_id, to_name=review.entity_a_name,
+                                          method="llm_review", similarity=review.similarity)
+                else:
+                    _merge_entities_store(store, from_id=review.entity_a_id, from_name=review.entity_a_name,
+                                          to_id=review.entity_b_id, to_name=review.entity_b_name,
+                                          method="llm_review", similarity=review.similarity)
+        store.normalization.resolve_review(review_id, action)
         return
 
     conn = store_or_conn
