@@ -624,26 +624,29 @@ class FirestoreSpecRepository(SpecRepository):
         })
 
     def get_general(self):
-        results = self._col.where("domainPath", "==", None).order_by("version", direction=firestore.Query.DESCENDING).limit(1).stream()
-        for doc in results:
-            d = doc.to_dict()
-            return Spec(id=doc.id, domain_path=None, version=d["version"],
-                        spec_content=d["specContent"], golden_set=d.get("goldenSet"), score=d.get("score"))
-        return None
+        # Client-side sort to avoid composite index
+        results = list(self._col.where("domainPath", "==", None).stream())
+        if not results:
+            return None
+        results.sort(key=lambda d: d.to_dict().get("version", 0), reverse=True)
+        d = results[0].to_dict()
+        return Spec(id=results[0].id, domain_path=None, version=d["version"],
+                    spec_content=d["specContent"], golden_set=d.get("goldenSet"), score=d.get("score"))
 
     def get_for_domain(self, domain_path):
-        results = self._col.where("domainPath", "==", domain_path).order_by("version", direction=firestore.Query.DESCENDING).limit(1).stream()
-        for doc in results:
-            d = doc.to_dict()
-            return Spec(id=doc.id, domain_path=domain_path, version=d["version"],
-                        spec_content=d["specContent"], golden_set=d.get("goldenSet"), score=d.get("score"))
-        return None
+        results = list(self._col.where("domainPath", "==", domain_path).stream())
+        if not results:
+            return None
+        results.sort(key=lambda d: d.to_dict().get("version", 0), reverse=True)
+        d = results[0].to_dict()
+        return Spec(id=results[0].id, domain_path=domain_path, version=d["version"],
+                    spec_content=d["specContent"], golden_set=d.get("goldenSet"), score=d.get("score"))
 
     def get_latest_version(self, domain_path):
-        results = self._col.where("domainPath", "==", domain_path).order_by("version", direction=firestore.Query.DESCENDING).limit(1).stream()
-        for doc in results:
-            return doc.to_dict()["version"]
-        return 0
+        results = list(self._col.where("domainPath", "==", domain_path).stream())
+        if not results:
+            return 0
+        return max(d.to_dict().get("version", 0) for d in results)
 
 
 class FirestoreNormalizationRepository(NormalizationRepository):

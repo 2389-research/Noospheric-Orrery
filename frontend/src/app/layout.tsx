@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
+import { AuthGate } from "@/components/auth-gate";
 import { UserMenu } from "@/components/user-menu";
 
 export const metadata: Metadata = {
@@ -26,7 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <UserMenu />
             </div>
           </nav>
-          <main className="p-6">{children}</main>
+          <main className="p-6"><AuthGate>{children}</AuthGate></main>
         </AuthProvider>
       </body>
     </html>
