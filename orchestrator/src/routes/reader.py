@@ -1,7 +1,7 @@
 """Document reader endpoint — returns chunks with entity spans computed via string matching."""
 
 import re
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
 
@@ -96,9 +96,9 @@ def _get_snippets(text: str, spans: list[dict], entity_id: str, max_chars: int =
 
 
 @router.get("/documents/{document_id}/reader")
-def get_document_reader(document_id: str):
+def get_document_reader(document_id: str, auth: AuthStore = Depends(get_auth_store)):
     """Return document content with entity spans for the reader view."""
-    store = get_store()
+    store = auth.store
 
     doc = store.documents.get(document_id)
     if not doc:

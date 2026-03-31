@@ -1,13 +1,13 @@
 import uuid
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
 
 router = APIRouter()
 
 @router.post("/simmer/general")
-def trigger_general_simmer():
-    store = get_store()
+def trigger_general_simmer(auth: AuthStore = Depends(get_auth_store)):
+    store = auth.store
     existing = store.jobs.get_existing("simmer_general", "general", ["queued", "running"])
     if existing:
         store.close()
@@ -18,8 +18,8 @@ def trigger_general_simmer():
     return {"job_id": job_id, "status": "queued"}
 
 @router.post("/simmer/{domain_path:path}")
-def trigger_domain_simmer(domain_path: str):
-    store = get_store()
+def trigger_domain_simmer(domain_path: str, auth: AuthStore = Depends(get_auth_store)):
+    store = auth.store
     domain = store.domains.get(domain_path)
     if not domain:
         store.close()

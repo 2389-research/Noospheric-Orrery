@@ -1,7 +1,7 @@
 """Reclassify existing documents with the current classifier prompt."""
 
 import asyncio
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from anthropic import AsyncAnthropicBedrock
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
@@ -14,10 +14,10 @@ router = APIRouter()
 
 
 @router.post("/reclassify")
-async def reclassify_all():
+async def reclassify_all(auth: AuthStore = Depends(get_auth_store)):
     """Re-run classification on all documents. Adds new domains without removing existing ones."""
     settings = get_settings()
-    store = get_store()
+    store = auth.store
     client = AsyncAnthropicBedrock(
         aws_access_key=settings.aws_access_key,
         aws_secret_key=settings.aws_secret_key,

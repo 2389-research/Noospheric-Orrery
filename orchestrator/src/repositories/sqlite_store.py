@@ -590,6 +590,18 @@ class SQLiteNormalizationRepository(NormalizationRepository):
     def __init__(self, conn):
         self._conn = conn
 
+    def get_review_by_id(self, review_id):
+        row = self._conn.execute(
+            "SELECT * FROM normalization_review_queue WHERE id = ?", (review_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return NormalizationReview(
+            id=row["id"], entity_a_id=row["entity_a_id"], entity_a_name=row["entity_a_name"],
+            entity_b_id=row["entity_b_id"], entity_b_name=row["entity_b_name"],
+            similarity=row["similarity"], status=row["status"], resolution=row["resolution"],
+        )
+
     def get_existing_review(self, entity_a_id, entity_b_id):
         row = self._conn.execute(
             "SELECT * FROM normalization_review_queue WHERE "

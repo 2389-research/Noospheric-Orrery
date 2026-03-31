@@ -3,7 +3,7 @@ import os
 import json
 import hashlib
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from anthropic import AsyncAnthropicBedrock
 
 from ..config import get_settings
@@ -22,9 +22,10 @@ from ..pipeline.cooccurrence import compute_cooccurrence_edges
 router = APIRouter()
 
 
-async def _ingest_document(title: str, content: str, source_path: str | None) -> dict:
+async def _ingest_document(title: str, content: str, source_path: str | None, store=None) -> dict:
     settings = get_settings()
-    store = get_store()
+    if store is None:
+        store = get_store()
     client = AsyncAnthropicBedrock(
         aws_access_key=settings.aws_access_key,
         aws_secret_key=settings.aws_secret_key,
@@ -182,7 +183,7 @@ async def _ingest_document(title: str, content: str, source_path: str | None) ->
 
 
 @router.post("/ingest", response_model=IngestResult)
-async def ingest_file(file: UploadFile = File(...)):
+async def ingest_file(file: UploadFile = File(...), auth: AuthStore = Depends(get_auth_store)):
     content = (await file.read()).decode("utf-8")
     title = file.filename or "untitled"
 
@@ -192,11 +193,11 @@ async def ingest_file(file: UploadFile = File(...)):
     with open(doc_path, "w") as f:
         f.write(content)
 
-    return await _ingest_document(title, content, doc_path)
+    return await _ingest_document(title, content, doc_path, store=auth.store)
 
 
 @router.post("/ingest/directory")
-async def ingest_directory(request: DirectoryIngestRequest):
+async def ingest_directory(request: DirectoryIngestRequest, auth: AuthStore = Depends(get_auth_store)):
     dir_path = Path(request.path)
     if not dir_path.is_dir():
         raise HTTPException(status_code=400, detail=f"Not a directory: {request.path}")
@@ -205,7 +206,7 @@ async def ingest_directory(request: DirectoryIngestRequest):
     for file_path in sorted(dir_path.rglob("*")):
         if file_path.is_file() and file_path.suffix in (".txt", ".md", ".json", ".csv"):
             content = file_path.read_text(errors="replace")
-            result = await _ingest_document(file_path.stem, content, str(file_path))
+            result = await _ingest_document(file_path.stem, content, str(file_path), store=auth.store)
             results.append(result)
 
     return {"documents": results, "total": len(results)}
