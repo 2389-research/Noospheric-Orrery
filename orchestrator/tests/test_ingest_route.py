@@ -1,3 +1,6 @@
+# ABOUTME: Integration tests for the ingest route — file upload, chunking, classification, extraction.
+# ABOUTME: LLM calls are mocked via patched Relay and pipeline functions.
+
 import io
 import json
 import pytest
@@ -18,7 +21,6 @@ MOCK_CLASSIFICATION = {
 
 def make_test_settings(tmp_path):
     return Settings(
-        anthropic_api_key="test-key",
         db_path=str(tmp_path / "test.db"),
         documents_dir=str(tmp_path / "documents"),
     )
@@ -58,7 +60,7 @@ async def test_ingest_stores_document(tmp_path):
 
     with patch("src.routes.ingest.get_settings", return_value=settings), \
          patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=mock_classification), \
-         patch("src.routes.ingest.AsyncAnthropic"):
+         patch("src.routes.ingest.Relay"):
         from src.routes.ingest import _ingest_document
         result = await _ingest_document("Test Doc", "Hello world content", None)
 
@@ -83,7 +85,7 @@ async def test_ingest_creates_chunks(tmp_path):
 
     with patch("src.routes.ingest.get_settings", return_value=settings), \
          patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=MOCK_CLASSIFICATION), \
-         patch("src.routes.ingest.AsyncAnthropic"):
+         patch("src.routes.ingest.Relay"):
         from src.routes.ingest import _ingest_document
         result = await _ingest_document("Chunky Doc", long_content, None)
 
@@ -103,7 +105,7 @@ async def test_ingest_assigns_classification(tmp_path):
 
     with patch("src.routes.ingest.get_settings", return_value=settings), \
          patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=MOCK_CLASSIFICATION), \
-         patch("src.routes.ingest.AsyncAnthropic"):
+         patch("src.routes.ingest.Relay"):
         from src.routes.ingest import _ingest_document
         result = await _ingest_document("Classified Doc", "Some content about painting", None)
 
@@ -126,7 +128,7 @@ async def test_ingest_queues_simmer_general_job_when_no_spec(tmp_path):
 
     with patch("src.routes.ingest.get_settings", return_value=settings), \
          patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=MOCK_CLASSIFICATION), \
-         patch("src.routes.ingest.AsyncAnthropic"):
+         patch("src.routes.ingest.Relay"):
         from src.routes.ingest import _ingest_document
         result = await _ingest_document("No Spec Doc", "Some content", None)
 
@@ -149,7 +151,7 @@ async def test_ingest_does_not_duplicate_simmer_general_job(tmp_path):
 
     with patch("src.routes.ingest.get_settings", return_value=settings), \
          patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=MOCK_CLASSIFICATION), \
-         patch("src.routes.ingest.AsyncAnthropic"):
+         patch("src.routes.ingest.Relay"):
         from src.routes.ingest import _ingest_document
         result1 = await _ingest_document("Doc 1", "Content 1", None)
         result2 = await _ingest_document("Doc 2", "Content 2", None)
@@ -170,7 +172,7 @@ async def test_ingest_skips_extraction_when_no_spec(tmp_path):
 
     with patch("src.routes.ingest.get_settings", return_value=settings), \
          patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=MOCK_CLASSIFICATION), \
-         patch("src.routes.ingest.AsyncAnthropic"):
+         patch("src.routes.ingest.Relay"):
         from src.routes.ingest import _ingest_document
         result = await _ingest_document("No Extract Doc", "Content without spec", None)
 
@@ -200,7 +202,7 @@ async def test_ingest_extracts_entities_when_spec_exists(tmp_path):
     with patch("src.routes.ingest.get_settings", return_value=settings), \
          patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=MOCK_CLASSIFICATION), \
          patch("src.routes.ingest.extract_document", new_callable=AsyncMock, return_value=mock_entities), \
-         patch("src.routes.ingest.AsyncAnthropic"):
+         patch("src.routes.ingest.Relay"):
         from src.routes.ingest import _ingest_document
         result = await _ingest_document("Extract Doc", "Content with entities", None)
 
