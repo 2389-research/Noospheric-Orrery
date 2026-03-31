@@ -387,7 +387,7 @@ Duration: 2-10 minutes
 ```
 
 ### Caveats
-- **simmer-sdk file I/O**: Currently reads/writes judgment files to disk. Cloud Run Jobs have a writable filesystem (ephemeral), so this works as-is. Judgment files are lost after job completes — if we want to keep them, write to Firestore or Cloud Storage.
+- **simmer-sdk file I/O**: SOLVED. Intermediate judgment files are temporary (ephemeral disk in Cloud Run is fine). All persistent simmer artifacts (iteration scores, judge comments, criterion details, key changes, ASI, spec content, golden sets) are stored in Firestore via `SimmerIterationRepository` — the same data that powers the simmer detail UI. The `on_iteration` callback writes to Firestore after each iteration.
 - **Worker code migration**: The worker currently uses raw SQLite. Needs migration to repository pattern (like orchestrator) or use orchestrator API endpoints for Firestore access.
 - **Cold start**: ~15-20s for Cloud Run Job to start. Negligible for a 30-50 min job.
 - **Cost**: ~$0.05 per job in Cloud Run compute. Bedrock LLM calls dominate cost.
