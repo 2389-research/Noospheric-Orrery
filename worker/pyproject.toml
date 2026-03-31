@@ -7,6 +7,7 @@ dependencies = [
     "sentence-transformers>=3.0.0",
     # simmer-sdk: install from PyPI or local path (see worker/Dockerfile)
     # "simmer-sdk>=0.2.0",
+    "orrery-relay",
 ]
 
 [project.optional-dependencies]
@@ -14,6 +15,9 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
 ]
+
+[tool.uv.sources]
+orrery-relay = { path = "../packages/orrery-relay" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

@@ -1,3 +1,6 @@
+# ABOUTME: Domain-specific spec simmering job — refines extraction spec for a single domain.
+# ABOUTME: Starts from the general spec and adds domain-specific entity types via simmer-sdk.
+
 import uuid
 import json
 from pathlib import Path
