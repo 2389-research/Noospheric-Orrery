@@ -163,9 +163,22 @@ def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
     domains = [{"id": d.id, "path": d.path, "parent_path": d.parent_path,
                 "doc_count": d.document_count, "spec_version": d.spec_version} for d in domain_objs]
 
-    # Domain positions — UMAP computes once, then reads from stored positions
-    from ..pipeline.domain_layout import ensure_layout
-    domain_positions = ensure_layout(store)
+    # Domain positions — read from stored positions
+    # On SQLite: UMAP computes if needed. On Firestore: positions pre-pushed, just read.
+    if store.conn is not None:
+        from ..pipeline.domain_layout import ensure_layout
+        domain_positions = ensure_layout(store)
+    else:
+        domain_positions = store.layout.get_stored_positions()
+        # Place any domains without positions in a circle
+        import math
+        missing = [d["path"] for d in domains if d["path"] not in domain_positions]
+        for i, path in enumerate(missing):
+            angle = (i / max(len(missing), 1)) * 2 * math.pi
+            x = 0.5 + 0.3 * math.cos(angle)
+            y = 0.5 + 0.3 * math.sin(angle)
+            domain_positions[path] = {"x": x, "y": y}
+            store.layout.store_position(path, x, y)
 
     domain_doc_counts = {d["path"]: d["doc_count"] for d in domains}
     region_colors = _assign_domain_colors(domains)
