@@ -48,7 +48,7 @@ camera.x = WORLD_W / 2;
 camera.y = WORLD_H / 2;
 
 // Load data
-const API_URL = '/api';
+const API_URL = new URLSearchParams(location.search).get('api') || window.API_URL || 'http://localhost:8100';
 // Use ?layout=umap to test UMAP positions
 const layoutParam = new URLSearchParams(location.search).get('layout');
 const graphUrl = layoutParam === 'umap' ? `${API_URL}/graph/umap` : `${API_URL}/graph`;

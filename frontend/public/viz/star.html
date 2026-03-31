@@ -73,7 +73,7 @@ const coEntities = [];
 const pulses = []; // traveling dots along connections
 let hoveredId = null;
 
-const API_URL = '/api';
+const API_URL = new URLSearchParams(location.search).get('api') || window.API_URL || 'http://localhost:8100';
 
 async function loadData() {
   if (!entityId) {
