@@ -39,12 +39,12 @@ export function IterationDetail({
             <h2 className="text-sm text-foreground/90 leading-snug">
               {(iteration.key_change || (iteration.iteration === 0 ? "Seed iteration" : "—")).replace(/^\*+\s*/, "")}
             </h2>
-            {iteration.criterion_details.length > 0 && (
+            {(iteration.criterion_details || []).length > 0 && (
               <p className="text-[10px] text-muted-foreground/85 mt-1.5 leading-relaxed line-clamp-2">
-                {iteration.criterion_details[0].evidence}
+                {(iteration.criterion_details || [])[0]?.evidence}
               </p>
             )}
-            {iteration.iteration === 0 && iteration.criterion_details.length === 0 && (
+            {iteration.iteration === 0 && (iteration.criterion_details || []).length === 0 && (
               <p className="text-[10px] text-muted-foreground/90 mt-1.5">
                 Starting point — judge feedback begins at iteration 1
               </p>
@@ -122,7 +122,7 @@ export function IterationDetail({
       </div>
 
       {/* Criterion Cards */}
-      {iteration.criterion_details.length > 0 && (
+      {(iteration.criterion_details || []).length > 0 && (
         <div className="space-y-2">
           <div className="text-[9px] tracking-[2px] text-muted-foreground/90 uppercase">
             Criterion Details
@@ -142,7 +142,7 @@ export function IterationDetail({
       )}
 
       {/* No detail message */}
-      {iteration.criterion_details.length === 0 && (
+      {(iteration.criterion_details || []).length === 0 && (
         <div className="text-[10px] text-muted-foreground/85 py-4 text-center border border-border/10 rounded">
           No criterion details for this iteration
         </div>
