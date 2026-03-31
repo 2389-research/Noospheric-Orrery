@@ -1,5 +1,8 @@
+# ABOUTME: Classify documents into domains using an LLM.
+# ABOUTME: Takes a Relay instance and returns primary/secondary domain paths.
+
 import json
-from anthropic import AsyncAnthropic
+from orrery_relay import Relay
 
 CLASSIFICATION_PROMPT = """You are a document classifier for a knowledge graph system. Given a document excerpt and existing domain taxonomy, classify the document.
 
@@ -26,7 +29,7 @@ Rules:
 """
 
 async def classify_document(
-    client: AsyncAnthropic,
+    relay: Relay,
     title: str,
     excerpt: str,
     existing_taxonomy: list[str],
@@ -34,13 +37,13 @@ async def classify_document(
 ) -> dict:
     taxonomy_str = "\n".join(f"  - {d}" for d in existing_taxonomy) if existing_taxonomy else "  (empty — propose new domains)"
 
-    response = await client.messages.create(
+    response = await relay.complete(
         model=model,
         max_tokens=1024,
         messages=[{"role": "user", "content": CLASSIFICATION_PROMPT.format(taxonomy=taxonomy_str, excerpt=excerpt)}],
     )
 
-    text = response.content[0].text
+    text = response.text
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0]
     return json.loads(text)
