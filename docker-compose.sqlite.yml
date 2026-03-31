@@ -1,0 +1,38 @@
+# SQLite-only local development — no Firebase, no cloud.
+# Usage: docker compose -f docker-compose.sqlite.yml up
+
+services:
+  orchestrator:
+    build: ./orchestrator
+    ports:
+      - "8100:8080"
+    volumes:
+      - orrery-data:/data
+    env_file: .env
+    environment:
+      - DB_BACKEND=sqlite
+      - DB_PATH=/data/orrery.db
+      - DOCUMENTS_DIR=/data/documents
+      - SPECS_DIR=/data/specs
+
+  worker:
+    build: ./worker
+    volumes:
+      - orrery-data:/data
+    env_file: .env
+    environment:
+      - DB_PATH=/data/orrery.db
+      - DOCUMENTS_DIR=/data/documents
+      - SPECS_DIR=/data/specs
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3100:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8100
+    depends_on:
+      - orchestrator
+
+volumes:
+  orrery-data:
