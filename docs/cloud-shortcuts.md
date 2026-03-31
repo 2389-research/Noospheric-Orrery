@@ -24,18 +24,52 @@ Best path is probably a persistent Cloud Run service that holds indexes in memor
 
 **Files**: `orchestrator/src/pipeline/search/` (6 modules), `orchestrator/src/routes/search.py`
 
-## 2. UMAP Layout (Docker Python version)
+## 2. UMAP Layout + Sentence Transformers in Cloud
 
-**Current shortcut**: Upgraded Docker from Python 3.11 → 3.13 to fix numba/UMAP crash.
-First `/graph` call on cold start will be slow (~15-30s) loading sentence-transformers + computing UMAP.
+**Current shortcut**: Positions pre-pushed from local SQLite to Firestore.
+Cloud Run reads stored positions only — no UMAP, no sentence-transformers.
+New domains get circular fallback placement.
 
-**Proper implementation**:
-- Pre-compute positions locally or in a batch job, push to Firestore
-- Cloud Run only reads stored positions (instant)
-- UMAP computation runs as a separate Cloud Run job (triggered when domain count changes)
-- Or: pre-seeded universal UMAP model shipped with the app (see umap-layout-design.md)
+**Root problem**: Loading sentence-transformers (~90MB model download from HuggingFace)
+on Cloud Run cold start takes >5 minutes → times out. The model needs to either:
+1. Be baked into the Docker image (adds ~500MB to image size)
+2. Be cached in a persistent volume (Cloud Run doesn't have persistent storage)
+3. Run as a separate always-warm service
 
-**Files**: `orchestrator/src/pipeline/domain_layout.py`, `orchestrator/src/routes/graph.py`
+**Proper implementation options**:
+
+### Option A: Dedicated Embedding Service (recommended)
+- Small Cloud Run service with min-instances=1 (always warm)
+- Pre-loads sentence-transformers model on startup
+- Exposes HTTP API: `POST /embed` → returns embeddings
+- Orchestrator calls this service for UMAP layout, search embeddings, normalization
+- Cost: ~$30/mo for a warm f1-micro equivalent
+- Benefit: one place for all embedding operations, fast, reliable
+
+### Option B: Fly.io for Embedding
+- Fly.io supports persistent volumes and fast cold starts
+- Deploy a lightweight embedding service there
+- Lower cold start than Cloud Run for ML models
+- Cross-cloud latency (Fly → GCP Firestore) is minimal
+
+### Option C: Vertex AI Embeddings
+- Google's managed embedding service
+- No model loading, no infrastructure
+- But uses Google's models, not all-MiniLM-L6-v2 (different embedding space)
+- Would need to re-embed everything if switching models
+
+### Option D: Bake model in Docker image
+- `RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"`
+- Adds ~500MB to Docker image but eliminates runtime download
+- Cold start still slow (~30s to load model into memory)
+- Combined with min-instances=1, this works but costs more
+
+### Decision needed:
+- How often do embeddings run? (every ingest? only UMAP re-fit? batch normalization?)
+- Is $30/mo for a warm service acceptable?
+- Do we want to stay on all-MiniLM-L6-v2 or switch to a Google model?
+
+**Files**: `orchestrator/src/pipeline/domain_layout.py`, `orchestrator/src/pipeline/search/retrieval.py`, `orchestrator/src/pipeline/embedding_normalizer.py`
 
 ## 3. Simmer Pipeline (Not deployed)
 
