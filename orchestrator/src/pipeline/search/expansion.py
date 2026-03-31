@@ -1,25 +1,18 @@
-"""Stage 0: Query expansion via Haiku."""
+# ABOUTME: Stage 0: Query expansion via Haiku.
+# ABOUTME: Expands a search query into multiple sub-queries using an LLM.
 
 import json
-from anthropic import AnthropicBedrock
+from orrery_relay import Relay
 
 
 async def expand_query(
+    relay: Relay,
     query: str,
-    aws_access_key: str,
-    aws_secret_key: str,
-    aws_region: str,
     max_sub_queries: int = 5,
 ) -> list[str]:
     """Expand a query into multiple sub-queries using Haiku."""
-    client = AnthropicBedrock(
-        aws_access_key=aws_access_key,
-        aws_secret_key=aws_secret_key,
-        aws_region=aws_region,
-    )
-
-    response = client.messages.create(
-        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    response = await relay.complete(
+        model="claude-haiku-4-5",
         max_tokens=512,
         messages=[{
             "role": "user",
@@ -35,7 +28,7 @@ Return as a JSON array of strings only. No explanation.""",
         }],
     )
 
-    text = response.content[0].text
+    text = response.text
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0]
 

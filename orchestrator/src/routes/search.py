@@ -1,6 +1,8 @@
-"""Search endpoint — full staged pipeline."""
+# ABOUTME: Search route — exposes the staged search pipeline over HTTP.
+# ABOUTME: Supports query expansion via Relay and broadcasts results to viz clients.
 
 from fastapi import APIRouter
+from orrery_relay import Relay
 from ..config import get_settings
 from ..db import get_connection
 from ..pipeline.search import search_knowledge_graph, build_indexes, embed_new_entities, embed_new_chunks
@@ -15,12 +17,11 @@ async def search_query(q: str, top_k: int = 20, expand: bool = True):
     settings = get_settings()
     conn = get_connection(settings.db_path)
 
+    relay = Relay.from_settings(settings)
     response = await search_knowledge_graph(
         conn, q,
         expand=expand,
-        aws_access_key=settings.aws_access_key,
-        aws_secret_key=settings.aws_secret_key,
-        aws_region=settings.aws_region,
+        relay=relay,
         top_k=top_k,
     )
     conn.close()

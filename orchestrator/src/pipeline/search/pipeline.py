@@ -1,6 +1,14 @@
-"""Main search pipeline — 5 stages (expansion → retrieval → entity-boost → fusion → response)."""
+# ABOUTME: Main search pipeline — 5 stages (expansion → retrieval → entity-boost → fusion → response).
+# ABOUTME: Accepts an optional Relay instance for LLM-powered query expansion.
+
+from __future__ import annotations
 
 import sqlite3
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from orrery_relay import Relay
+
 from .config import SearchConfig
 from .models import SubQueryResults, ScoredEntity, ScoredChunk, SearchResponse
 from .retrieval import (
@@ -66,9 +74,7 @@ async def search_knowledge_graph(
     conn: sqlite3.Connection,
     query: str,
     expand: bool = True,
-    aws_access_key: str = "",
-    aws_secret_key: str = "",
-    aws_region: str = "us-east-1",
+    relay: "Relay | None" = None,
     top_k: int = 20,
 ) -> SearchResponse:
     """Full search pipeline. Returns ranked entities + chunks."""
@@ -82,10 +88,11 @@ async def search_knowledge_graph(
         _indexes_ready = True
 
     # Stage 0: Query expansion
-    if expand and aws_access_key:
+    if expand and relay is not None:
         from .expansion import expand_query
         sub_queries = await expand_query(
-            query, aws_access_key, aws_secret_key, aws_region,
+            relay=relay,
+            query=query,
             max_sub_queries=_config.expansion_max_sub_queries,
         )
     else:
