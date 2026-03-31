@@ -163,13 +163,9 @@ def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
     domains = [{"id": d.id, "path": d.path, "parent_path": d.parent_path,
                 "doc_count": d.document_count, "spec_version": d.spec_version} for d in domain_objs]
 
-    # Domain positions — UMAP-based with persistence
-    # Layout still needs raw conn for embedding queries
+    # Domain positions — UMAP computes once, then reads from stored positions
     from ..pipeline.domain_layout import ensure_layout
-    if store.conn is not None:
-        domain_positions = ensure_layout(store.conn)
-    else:
-        domain_positions = store.layout.get_stored_positions()
+    domain_positions = ensure_layout(store)
 
     domain_doc_counts = {d["path"]: d["doc_count"] for d in domains}
     region_colors = _assign_domain_colors(domains)
