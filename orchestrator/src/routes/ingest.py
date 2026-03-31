@@ -163,17 +163,32 @@ async def _ingest_document(title: str, content: str, source_path: str | None, st
     finally:
         store.close()
 
-    # Rebuild search index
+    # Embed new entities/chunks for vector search
     try:
-        from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
-        search_store = get_store()
-        # Search still needs raw conn for FAISS operations
-        if search_store.conn is not None:
-            embed_new_entities(search_store.conn)
-            embed_new_chunks(search_store.conn)
-        search_store.close()
+        from ..services.embedding import embed_texts
+        from google.cloud.firestore_v1.vector import Vector
+        embed_store = get_store()
+
+        if embed_store.conn is not None:
+            # SQLite: use FAISS pipeline
+            from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
+            embed_new_entities(embed_store.conn)
+            embed_new_chunks(embed_store.conn)
+        else:
+            # Firestore: embed via Vertex AI, store as Vector fields
+            # Embed entities that were just created
+            entities_to_embed = embed_store.entities.list(limit=500)
+            names = [e.canonical_name for e in entities_to_embed if e.canonical_name]
+            if names:
+                embeddings = embed_texts(names)
+                for entity, embedding in zip(entities_to_embed, embeddings):
+                    embed_store._entities._col.document(entity.id).update({
+                        "embedding": Vector(embedding)
+                    })
+
+        embed_store.close()
     except Exception as e:
-        print(f"Search index update after ingest: {e}")
+        print(f"Search embedding after ingest: {e}")
 
     return {
         "document_id": doc_id, "title": title,

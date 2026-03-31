@@ -1,4 +1,4 @@
-"""Search endpoint — full staged pipeline on SQLite, simple search on Firestore."""
+"""Search endpoint — FAISS on SQLite, Firestore vector search on Firestore."""
 
 from __future__ import annotations
 from fastapi import APIRouter, Depends
@@ -35,8 +35,8 @@ async def search_query(q: str, top_k: int = 20, expand: bool = True, auth: AuthS
             "total_chunks": response.total_chunks,
         }
     else:
-        # Firestore: simple name-match search
-        result = _simple_search(store, q, top_k)
+        # Firestore: vector search via Vertex AI embeddings
+        result = await _vector_search(store, q, top_k, settings)
         store.close()
 
     entity_names = [e["name"] for e in result.get("entities", [])[:10] if e.get("name")]
@@ -46,17 +46,82 @@ async def search_query(q: str, top_k: int = 20, expand: bool = True, auth: AuthS
     return result
 
 
-def _simple_search(store, query: str, top_k: int = 20) -> dict:
-    """Simple search for Firestore — name matching on entities + doc title matching."""
+async def _vector_search(store, query: str, top_k: int, settings) -> dict:
+    """Firestore vector search using Vertex AI embeddings."""
+    try:
+        from ..services.embedding import embed_text
+        from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
+        from google.cloud.firestore_v1.vector import Vector
+
+        # Embed the query
+        query_embedding = embed_text(query)
+
+        # Search entities
+        entity_col = store._entities._col
+        entity_results = entity_col.find_nearest(
+            vector_field="embedding",
+            query_vector=Vector(query_embedding),
+            distance_measure=DistanceMeasure.COSINE,
+            limit=top_k,
+        ).get()
+
+        entities = []
+        for doc in entity_results:
+            d = doc.to_dict()
+            entities.append({
+                "id": doc.id,
+                "name": d.get("canonicalName", ""),
+                "type": d.get("type", ""),
+                "score": round(d.get("distance", 0), 3),
+                "source_count": d.get("sourceCount", 0),
+                "paths": [],
+                "appearances": [],
+            })
+
+        # Search chunks
+        chunk_col = store._chunks._col
+        chunk_results = chunk_col.find_nearest(
+            vector_field="embedding",
+            query_vector=Vector(query_embedding),
+            distance_measure=DistanceMeasure.COSINE,
+            limit=min(top_k, 10),
+        ).get()
+
+        chunks = []
+        for doc in chunk_results:
+            d = doc.to_dict()
+            chunks.append({
+                "chunk_id": doc.id,
+                "document_id": d.get("documentId", ""),
+                "document_title": "",
+                "text": d.get("text", "")[:300],
+                "score": round(d.get("distance", 0), 3),
+                "entity_overlap": [],
+            })
+
+        return {
+            "query": query,
+            "entities": entities,
+            "chunks": chunks,
+            "sub_queries_used": [query],
+            "total_entities": len(entities),
+            "total_chunks": len(chunks),
+        }
+
+    except Exception as e:
+        print(f"Vector search failed, falling back to keyword: {e}")
+        return _keyword_search(store, query, top_k)
+
+
+def _keyword_search(store, query: str, top_k: int = 20) -> dict:
+    """Fallback keyword search — name matching on entities."""
     query_lower = query.lower().strip()
     terms = query_lower.split()
 
-    # Search entities by name
     all_entities = store.entities.list(limit=2000)
-    matched_entities = []
+    matched = []
     for e in all_entities:
         name_lower = e.canonical_name.lower()
-        # Score: exact match > contains all terms > contains any term
         if name_lower == query_lower:
             score = 1.0
         elif all(t in name_lower for t in terms):
@@ -65,34 +130,17 @@ def _simple_search(store, query: str, top_k: int = 20) -> dict:
             score = 0.5
         else:
             continue
-        matched_entities.append({
+        matched.append({
             "id": e.id, "name": e.canonical_name, "type": e.type,
             "score": round(score, 3), "source_count": e.source_count,
             "paths": [], "appearances": [],
         })
 
-    matched_entities.sort(key=lambda e: (-e["score"], -e["source_count"]))
-    matched_entities = matched_entities[:top_k]
-
-    # Search documents by title
-    all_docs = store.documents.list(limit=500)
-    matched_chunks = []
-    for d in all_docs:
-        title_lower = (d.title or "").lower()
-        if any(t in title_lower for t in terms):
-            matched_chunks.append({
-                "chunk_id": "", "document_id": d.id,
-                "document_title": d.title, "text": d.title,
-                "score": 0.5, "entity_overlap": [],
-            })
-
+    matched.sort(key=lambda e: (-e["score"], -e["source_count"]))
     return {
-        "query": query,
-        "entities": matched_entities,
-        "chunks": matched_chunks[:10],
+        "query": query, "entities": matched[:top_k], "chunks": [],
         "sub_queries_used": [query],
-        "total_entities": len(matched_entities),
-        "total_chunks": len(matched_chunks),
+        "total_entities": len(matched), "total_chunks": 0,
     }
 
 
@@ -108,4 +156,4 @@ def rebuild_search_index(auth: AuthStore = Depends(get_auth_store)):
         return {"status": "rebuilt", "new_entities_embedded": new_entities,
                 "new_chunks_embedded": new_chunks, **stats}
     store.close()
-    return {"status": "ok", "note": "Firestore uses simple search — no index rebuild needed"}
+    return {"status": "ok", "note": "Firestore uses vector search — embeddings stored on ingest"}

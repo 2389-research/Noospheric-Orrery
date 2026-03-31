@@ -7,16 +7,20 @@ from __future__ import annotations
 import pickle
 import sqlite3
 import numpy as np
-from sentence_transformers import SentenceTransformer
 import umap
 
-_model = None
 
-def _get_embed_model():
-    global _model
-    if _model is None:
-        _model = SentenceTransformer("all-MiniLM-L6-v2")
-    return _model
+def _embed_texts(texts: list[str]) -> np.ndarray:
+    """Embed texts — uses Vertex AI if available, falls back to sentence-transformers."""
+    try:
+        from ..services.embedding import embed_texts
+        embeddings = embed_texts(texts)
+        return np.array(embeddings, dtype=np.float32)
+    except Exception:
+        # Fallback to local sentence-transformers (for SQLite/local dev)
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer("all-MiniLM-L6-v2")
+        return model.encode(texts, normalize_embeddings=True)
 
 
 def _is_store(obj):
@@ -136,9 +140,8 @@ def full_fit(store_or_conn):
             _store_position(store_or_conn, path, positions[path]["x"], positions[path]["y"])
         return positions
 
-    model = _get_embed_model()
     texts = [_build_domain_text(store_or_conn, p) for p in paths]
-    embeddings = model.encode(texts, normalize_embeddings=True)
+    embeddings = _embed_texts(texts)
 
     n_neighbors = min(15, len(paths) - 1)
     reducer = umap.UMAP(
@@ -180,9 +183,8 @@ def transform_new_domain(store_or_conn, domain_path):
         stored = _get_stored_positions(store_or_conn)
         return stored.get(domain_path)
 
-    embed_model = _get_embed_model()
     text = _build_domain_text(store_or_conn, domain_path)
-    embedding = embed_model.encode([text], normalize_embeddings=True)
+    embedding = _embed_texts([text])
 
     coords = data["reducer"].transform(embedding)
     x = float(np.clip((coords[0, 0] - data["mins"][0]) / data["ranges"][0], 0, 1))
