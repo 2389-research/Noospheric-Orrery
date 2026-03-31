@@ -1,32 +1,58 @@
+# Local development stack — mirrors production Firebase architecture.
+#
+# Usage:
+#   docker compose up              # start all services
+#   docker compose up orchestrator # just the API
+#
+# The Firebase Emulator Suite runs Firestore + Auth locally.
+# No cloud resources consumed during development.
+#
+# For SQLite-only mode (no Firebase):
+#   docker compose -f docker-compose.sqlite.yml up
+
 services:
-  orchestrator:
-    build:
-      context: .
-      dockerfile: orchestrator/Dockerfile
+  # Firebase Emulator Suite — local Firestore + Auth
+  firebase-emulator:
+    image: node:20-slim
+    working_dir: /app
+    volumes:
+      - .:/app
     ports:
-      - "8100:8000"
-    volumes:
-      - orrery-data:/data
-    env_file: .env
-    depends_on: []
+      - "4000:4000"   # Emulator UI
+      - "8080:8080"   # Firestore
+      - "9099:9099"   # Auth
+      - "9199:9199"   # Storage
+    command: >
+      sh -c "npm install -g firebase-tools &&
+             firebase emulators:start --project noospheric-orrery"
+    environment:
+      - GCLOUD_PROJECT=noospheric-orrery
 
-  worker:
-    build:
-      context: .
-      dockerfile: worker/Dockerfile
-    volumes:
-      - orrery-data:/data
+  # Orchestrator API — same container as Cloud Run
+  orchestrator:
+    build: ./orchestrator
+    ports:
+      - "8100:8080"
     env_file: .env
-    depends_on: []
+    environment:
+      - DB_BACKEND=firestore
+      - FIREBASE_PROJECT_ID=noospheric-orrery
+      - FIREBASE_WORKSPACE_ID=default
+      - AUTH_REQUIRED=false
+      - FIRESTORE_EMULATOR_HOST=firebase-emulator:8080
+      - FIREBASE_AUTH_EMULATOR_HOST=firebase-emulator:9099
+    depends_on:
+      - firebase-emulator
 
+  # Frontend — Next.js dev server
   frontend:
     build: ./frontend
     ports:
       - "3100:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8100
+      - NEXT_PUBLIC_FIREBASE_API_KEY=fake-api-key
+      - NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=localhost
+      - NEXT_PUBLIC_FIREBASE_PROJECT_ID=noospheric-orrery
     depends_on:
       - orchestrator
-
-volumes:
-  orrery-data:
