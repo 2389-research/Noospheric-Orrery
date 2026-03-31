@@ -1,37 +1,24 @@
 /**
- * Firestore-triggered functions for the Noospheric Orrery.
+ * Firestore triggers for the Noospheric Orrery.
  *
- * When a job document is created with status "queued", this function
- * dispatches it to the worker Cloud Run service via HTTP.
- * The worker handles long-running tasks (simmer, extract).
- *
- * Architecture:
- *   Firestore write → this function → HTTP to worker Cloud Run → results to Firestore
+ * When a job document is created with status "queued", dispatches
+ * a Cloud Run Job to execute it.
  */
 
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
-const { defineString } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 
 admin.initializeApp();
 
-// Cloud Run service URLs
-const ORCHESTRATOR_URL = defineString("ORCHESTRATOR_URL", {
-  default: "https://orrery-orchestrator-469580747258.us-central1.run.app",
-});
+const PROJECT_ID = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT || "noospheric-orrery";
+const REGION = "us-central1";
+const JOB_NAME = "simmer-worker";
 
-/**
- * Trigger: new job document created.
- * Marks job as running and dispatches to the appropriate handler.
- *
- * For now, simmer jobs require the worker service.
- * Normalization and search rebuild can run via orchestrator API.
- */
 exports.onJobCreated = onDocumentCreated(
   {
     document: "workspaces/{workspaceId}/jobs/{jobId}",
-    region: "us-central1",
-    timeoutSeconds: 540,
+    region: REGION,
+    timeoutSeconds: 60,
     memory: "256MiB",
   },
   async (event) => {
@@ -44,48 +31,39 @@ exports.onJobCreated = onDocumentCreated(
 
     if (job.status !== "queued") return;
 
-    console.log(`Job created: ${job.type} [${jobId}] workspace=${workspaceId}`);
+    const validTypes = ["simmer_general", "simmer_domain", "extract_batch"];
+    if (!validTypes.includes(job.type)) return;
 
-    const baseUrl = ORCHESTRATOR_URL.value();
+    console.log(`Job ${jobId} (${job.type}) queued in workspace ${workspaceId}`);
 
     try {
-      switch (job.type) {
-        case "simmer_general":
-        case "simmer_domain":
-        case "extract_batch":
-          // These need the Python worker with simmer-sdk.
-          // Log for now — worker Cloud Run service will be deployed next.
-          console.log(`${job.type} job ${jobId}: requires Python worker service`);
-          break;
+      const { GoogleAuth } = require("google-auth-library");
+      const auth = new GoogleAuth();
+      const client = await auth.getClient();
 
-        default:
-          console.log(`Unknown job type: ${job.type}`);
-      }
-    } catch (error) {
-      console.error(`Job ${jobId} error:`, error);
-      await snapshot.ref.update({
-        status: "failed",
-        completedAt: admin.firestore.FieldValue.serverTimestamp(),
-        result: { error: error.message },
+      const jobPath = `projects/${PROJECT_ID}/locations/${REGION}/jobs/${JOB_NAME}`;
+      const url = `https://run.googleapis.com/v2/${jobPath}:run`;
+
+      const response = await client.request({
+        url,
+        method: "POST",
+        data: {
+          overrides: {
+            containerOverrides: [
+              {
+                env: [
+                  { name: "JOB_ID", value: jobId },
+                  { name: "WORKSPACE_ID", value: workspaceId },
+                ],
+              },
+            ],
+          },
+        },
       });
-    }
-  }
-);
 
-/**
- * Trigger: new document ingested.
- * Logs the event. Future: auto-trigger search reindex, normalization.
- */
-exports.onDocumentIngested = onDocumentCreated(
-  {
-    document: "workspaces/{workspaceId}/documents/{docId}",
-    region: "us-central1",
-    timeoutSeconds: 30,
-    memory: "128MiB",
-  },
-  async (event) => {
-    const docId = event.params.docId;
-    const workspaceId = event.params.workspaceId;
-    console.log(`Document ingested: ${docId} in workspace ${workspaceId}`);
+      console.log(`Dispatched Cloud Run Job for ${jobId}:`, response.data?.metadata?.name || "ok");
+    } catch (error) {
+      console.error(`Failed to dispatch job ${jobId}:`, error.message);
+    }
   }
 );

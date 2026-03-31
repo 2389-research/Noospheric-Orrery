@@ -1,0 +1,4 @@
+anthropic[bedrock]
+google-cloud-firestore
+firebase-admin
+google-genai
