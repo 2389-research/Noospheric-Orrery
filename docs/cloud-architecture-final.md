@@ -99,11 +99,20 @@ Total time: 2-20s (dominated by Haiku expansion + potential embedding cold start
 
 ---
 
-## Service 2: Embedding Function (Firebase Function, Python)
+## Service 2: Embedding Function (Firebase Function or lightweight Cloud Run)
 
 ### Role
-Loads sentence-transformers model. Returns embeddings for text.
+Calls Google's embedding API. Returns embeddings for text.
 Also handles UMAP transform for new domain placement.
+
+### Key Decision: Google embeddings everywhere
+Use Google's embedding model (via Vertex AI or Firestore's built-in) for ALL
+embeddings: search, UMAP layout, and normalization. No sentence-transformers,
+no model loading, no cold start issues. One model, one embedding space.
+
+For UMAP: train a universal UMAP model offline on a large diverse set of
+domain embeddings generated via Google's model. Ship as default. All workspaces
+use transform() only — never fit().
 
 ### Implementation
 Firebase Cloud Functions v2, Python runtime.
