@@ -58,8 +58,9 @@ async def run_extract_batch(db: firestore.Client, workspace_id: str, job_id: str
         if not content:
             continue
 
-        # Get chunks for this document
-        chunks = list(chunk_col.where("documentId", "==", doc_id).order_by("chunkIndex").stream())
+        # Get chunks for this document (client-side sort to avoid composite index)
+        chunks = list(chunk_col.where("documentId", "==", doc_id).stream())
+        chunks.sort(key=lambda c: c.to_dict().get("chunkIndex", 0))
         if not chunks:
             continue
 
@@ -80,7 +81,14 @@ async def run_extract_batch(db: firestore.Client, workspace_id: str, job_id: str
                 if text.startswith("```"):
                     text = text.split("\n", 1)[1].rsplit("```", 1)[0]
 
-                entities = json.loads(text) if text.strip().startswith("[") else []
+                text = text.strip()
+                if text.startswith("["):
+                    entities = json.loads(text)
+                elif text.startswith("{"):
+                    # JSONL format: one object per line
+                    entities = [json.loads(line) for line in text.splitlines() if line.strip().startswith("{")]
+                else:
+                    entities = []
             except Exception as e:
                 print(f"  Extraction failed for chunk {chunk_snap.id}: {e}", flush=True)
                 entities = []

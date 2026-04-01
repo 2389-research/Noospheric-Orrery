@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "noospheric-orrery": {
+      "command": "/Users/michaelsugimura/Documents/GitHub/Noospheric-Orrery/orchestrator/.venv/bin/python",
+      "args": ["-m", "src.mcp_server"],
+      "cwd": "/Users/michaelsugimura/Documents/GitHub/Noospheric-Orrery/orchestrator",
+      "env": {
+        "ORCHESTRATOR_URL": "https://orrery-orchestrator-469580747258.us-central1.run.app"
+      }
+    }
+  }
+}
