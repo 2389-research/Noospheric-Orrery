@@ -1,18 +1,17 @@
+# ABOUTME: Batch extraction job runner — processes all docs in scope with a given spec.
+# ABOUTME: Calls the extraction model per chunk and stores entities + co-occurrence edges.
+
 import json
 import uuid
 from itertools import combinations
-from anthropic import AsyncAnthropicBedrock
+from orrery_relay import Relay
 from ..db import get_connection
 from ..config import get_settings
 
 async def run_extract_batch(job: dict, db_path: str) -> None:
     settings = get_settings()
     conn = get_connection(db_path)
-    client = AsyncAnthropicBedrock(
-        aws_access_key=settings.aws_access_key,
-        aws_secret_key=settings.aws_secret_key,
-        aws_region=settings.aws_region,
-    )
+    relay = Relay.from_settings(settings)
 
     job_id = job["id"]
     config = json.loads(job["config"]) if job["config"] else {}
@@ -52,11 +51,11 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
 
         for chunk in chunks:
             chunk_id, chunk_text = chunk[0], chunk[1]
-            response = await client.messages.create(
+            response = await relay.complete(
                 model=settings.extraction_model, max_tokens=4096,
                 messages=[{"role": "user", "content": f"{spec}\n\nTEXT:\n{chunk_text}\n\nRespond with JSON only: {{\"entities\": [{{\"name\": \"...\", \"type\": \"...\"}}]}}"}],
             )
-            text = response.content[0].text
+            text = response.text
             if text.startswith("```"):
                 text = text.split("\n", 1)[1].rsplit("```", 1)[0]
             try:

@@ -5,8 +5,6 @@ import { GalaxyPanel } from "@/components/galaxy/galaxy-panel";
 import { ReaderPane } from "@/components/reader/reader-pane";
 import { api } from "@/lib/api";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8100";
-
 interface SelectedNode {
   nodeType: string;
   data: Record<string, unknown>;
@@ -122,7 +120,7 @@ export default function VizPage() {
 
   // WebSocket for real-time search broadcasts
   useEffect(() => {
-    const wsUrl = API_URL.replace("http", "ws") + "/ws";
+    const wsUrl = (window.location.protocol === "https:" ? "wss:" : "ws:") + "//" + window.location.host + "/api/ws";
     let ws: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout>;
     function connect() {
@@ -163,7 +161,7 @@ export default function VizPage() {
     setSelectedNode(null);
     setSelectedDocId(null);
     try {
-      const resp = await fetch(`${API_URL}/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20`);
+      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20`);
       const results: SearchResult = await resp.json();
       setSearchResults(results);
 

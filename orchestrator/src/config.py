@@ -1,13 +1,20 @@
+# ABOUTME: Application settings loaded from environment variables.
+# ABOUTME: Supports both gateway and bedrock backends via ANTHROPIC_BACKEND env var.
+
 import os
 from dataclasses import dataclass
 
+
 @dataclass(frozen=True)
 class Settings:
-    aws_access_key: str
-    aws_secret_key: str
+    anthropic_backend: str = "gateway"
+    gateway_url: str = ""
+    gateway_api_key: str = ""
+    aws_access_key: str = ""
+    aws_secret_key: str = ""
     aws_region: str = "us-east-1"
-    classification_model: str = "us.anthropic.claude-sonnet-4-20250514-v1:0"
-    extraction_model: str = "us.anthropic.claude-haiku-4-20250514-v1:0"
+    classification_model: str = "claude-sonnet-4-6"
+    extraction_model: str = "claude-haiku-4-5"
     general_spec_threshold: int = 10
     domain_spec_threshold: int = 20
     simmer_iterations: int = 5
@@ -17,13 +24,17 @@ class Settings:
     documents_dir: str = "/data/documents"
     specs_dir: str = "/data/specs"
 
+
 def get_settings() -> Settings:
     return Settings(
-        aws_access_key=os.environ["AWS_ACCESS_KEY"],
-        aws_secret_key=os.environ["AWS_SECRET_KEY"],
+        anthropic_backend=os.environ.get("ANTHROPIC_BACKEND", "gateway"),
+        gateway_url=os.environ.get("GATEWAY_URL", ""),
+        gateway_api_key=os.environ.get("GATEWAY_API_KEY", ""),
+        aws_access_key=os.environ.get("AWS_ACCESS_KEY", ""),
+        aws_secret_key=os.environ.get("AWS_SECRET_KEY", ""),
         aws_region=os.environ.get("AWS_REGION", "us-east-1"),
-        classification_model=os.environ.get("CLASSIFICATION_MODEL", "us.anthropic.claude-sonnet-4-20250514-v1:0"),
-        extraction_model=os.environ.get("EXTRACTION_MODEL", "us.anthropic.claude-haiku-4-20250514-v1:0"),
+        classification_model=os.environ.get("CLASSIFICATION_MODEL", "claude-sonnet-4-6"),
+        extraction_model=os.environ.get("EXTRACTION_MODEL", "claude-haiku-4-5"),
         general_spec_threshold=int(os.environ.get("GENERAL_SPEC_THRESHOLD", "10")),
         domain_spec_threshold=int(os.environ.get("DOMAIN_SPEC_THRESHOLD", "20")),
         simmer_iterations=int(os.environ.get("SIMMER_ITERATIONS", "5")),

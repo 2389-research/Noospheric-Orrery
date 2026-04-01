@@ -137,7 +137,7 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity, onNavi
   useEffect(() => {
     (async () => {
       try {
-        const graphResp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8100"}/graph`);
+        const graphResp = await fetch(`/api/graph`);
         const graph = await graphResp.json();
         const routes = (graph.trade_routes || []).filter(
           (r: { source: string; target: string }) => r.source === data.path || r.target === data.path

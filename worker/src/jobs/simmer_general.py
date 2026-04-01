@@ -1,7 +1,11 @@
+# ABOUTME: General spec simmering job — iteratively refines golden set and extraction spec.
+# ABOUTME: Uses simmer-sdk for multi-phase refinement with board-mode judging.
+
 import uuid
 import json
 from pathlib import Path
 from simmer_sdk import refine
+from orrery_relay import Relay
 from ..db import get_connection
 from ..config import get_settings
 
@@ -25,13 +29,7 @@ Rules:
 
 async def _parse_judgment_file(judgment_text: str, seed_scores: dict[str, int], settings) -> list[dict]:
     """Use Haiku to extract per-criterion details from a judgment file."""
-    from anthropic import AsyncAnthropicBedrock
-
-    client = AsyncAnthropicBedrock(
-        aws_access_key=settings.aws_access_key,
-        aws_secret_key=settings.aws_secret_key,
-        aws_region=settings.aws_region,
-    )
+    relay = Relay.from_settings(settings)
 
     prompt = f"""Extract per-criterion details from this judge output as JSON.
 
@@ -54,12 +52,12 @@ Return a JSON array only:
 If you can't parse a criterion, skip it. Return [] if unparseable."""
 
     try:
-        response = await client.messages.create(
+        response = await relay.complete(
             model=settings.extraction_model,
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = response.content[0].text
+        text = response.text
         if text.startswith("```"):
             text = text.split("\n", 1)[1].rsplit("```", 1)[0]
         return json.loads(text)

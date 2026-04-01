@@ -1,6 +1,8 @@
 services:
   orchestrator:
-    build: ./orchestrator
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
     ports:
       - "8100:8000"
     volumes:
@@ -9,7 +11,9 @@ services:
     depends_on: []
 
   worker:
-    build: ./worker
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
     volumes:
       - orrery-data:/data
     env_file: .env

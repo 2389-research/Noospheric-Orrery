@@ -1,5 +1,8 @@
+# ABOUTME: Subdomain discovery route — triggers additive subdomain tagging for all extracted docs.
+# ABOUTME: Delegates to the subdomain_discovery pipeline with a Relay instance.
+
 from fastapi import APIRouter
-from anthropic import AsyncAnthropicBedrock
+from orrery_relay import Relay
 from ..config import get_settings
 from ..db import get_connection
 from ..pipeline.subdomain_discovery import run_subdomain_discovery
@@ -12,14 +15,10 @@ async def trigger_subdomain_discovery():
     """Run subdomain discovery on all extracted docs."""
     settings = get_settings()
     conn = get_connection(settings.db_path)
-    client = AsyncAnthropicBedrock(
-        aws_access_key=settings.aws_access_key,
-        aws_secret_key=settings.aws_secret_key,
-        aws_region=settings.aws_region,
-    )
+    relay = Relay.from_settings(settings)
     try:
         results = await run_subdomain_discovery(
-            client=client,
+            relay=relay,
             model=settings.classification_model,
             conn=conn,
         )

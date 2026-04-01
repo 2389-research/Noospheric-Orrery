@@ -72,7 +72,7 @@ let hoveredRouteIdx = -1;
 let hoveredEntityId = null;
 
 // Load data
-const API_URL = window.API_URL || 'http://localhost:8100';
+const API_URL = '/api';
 fetch(`${API_URL}/graph`).then(r => r.json()).then(data => {
   buildSectorView(data);
 });

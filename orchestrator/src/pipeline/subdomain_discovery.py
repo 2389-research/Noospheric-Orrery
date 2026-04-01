@@ -1,15 +1,9 @@
-"""Lightweight subdomain discovery.
-
-After extraction enriches entity profiles, ask the classifier if docs
-belong to more specific subdomains. Additive — docs gain subdomains,
-never lose existing domains.
-
-One Sonnet call per doc. Cheap and fast.
-"""
+# ABOUTME: Lightweight subdomain discovery from extracted entities.
+# ABOUTME: Additive — docs gain subdomains, never lose existing domains.
 
 import json
 import sqlite3
-from anthropic import AsyncAnthropicBedrock
+from orrery_relay import Relay
 
 SUBDOMAIN_PROMPT = """You are refining the domain taxonomy for a knowledge graph. A document has already been classified into these domains:
 
@@ -37,7 +31,7 @@ Respond with JSON only:
 
 
 async def discover_subdomains_for_document(
-    client: AsyncAnthropicBedrock,
+    relay: Relay,
     model: str,
     conn: sqlite3.Connection,
     document_id: str,
@@ -71,7 +65,7 @@ async def discover_subdomains_for_document(
     taxonomy = conn.execute("SELECT path FROM domains ORDER BY path").fetchall()
     taxonomy_str = "\n".join(f"- {t[0]}" for t in taxonomy)
 
-    response = await client.messages.create(
+    response = await relay.complete(
         model=model,
         max_tokens=512,
         messages=[{
@@ -84,7 +78,7 @@ async def discover_subdomains_for_document(
         }],
     )
 
-    text = response.content[0].text
+    text = response.text
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0]
 
@@ -96,7 +90,7 @@ async def discover_subdomains_for_document(
 
 
 async def run_subdomain_discovery(
-    client: AsyncAnthropicBedrock,
+    relay: Relay,
     model: str,
     conn: sqlite3.Connection,
     document_ids: list[str] | None = None,
@@ -119,7 +113,7 @@ async def run_subdomain_discovery(
     for doc_id in document_ids:
         if results["docs_checked"] > 0:
             await asyncio.sleep(1)  # Rate limit protection
-        new_subs = await discover_subdomains_for_document(client, model, conn, doc_id)
+        new_subs = await discover_subdomains_for_document(relay, model, conn, doc_id)
         results["docs_checked"] += 1
 
         for sub_path in new_subs:

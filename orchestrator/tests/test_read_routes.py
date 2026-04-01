@@ -1,5 +1,5 @@
-import os
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
+# ABOUTME: Integration tests for read-only routes (stats, documents, domains, entities, jobs, simmer).
+# ABOUTME: Uses patched Settings to isolate each test with a temporary SQLite database.
 
 import uuid
 import pytest
@@ -12,7 +12,6 @@ from src.config import Settings
 
 def make_settings(tmp_path):
     return Settings(
-        anthropic_api_key="test-key",
         db_path=str(tmp_path / "test.db"),
         documents_dir=str(tmp_path / "documents"),
     )
@@ -46,7 +45,7 @@ def test_stats_returns_counts(tmp_path):
     conn = get_connection(settings.db_path)
     conn.execute("INSERT INTO documents (id, title, status) VALUES ('d1', 'Doc 1', 'extracted')")
     conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('e1', 'test', 'Thing')")
-    conn.execute("INSERT INTO domains (id, path) VALUES ('dm1', 'techniques')")
+    conn.execute("INSERT INTO domains (id, path, document_count) VALUES ('dm1', 'techniques', 1)")
     conn.execute("INSERT INTO jobs (id, type, target, status) VALUES ('j1', 'simmer_general', 'general', 'queued')")
     conn.commit()
     conn.close()
