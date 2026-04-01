@@ -95,9 +95,34 @@ export default function PipelinePage() {
 
   useEffect(() => { refresh(); const interval = setInterval(refresh, 5000); return () => clearInterval(interval); }, []);
 
+  const hasGeneralSimmerRunning = jobs.some(
+    (j) => j.type === "simmer_general" && (j.status === "running" || j.status === "queued")
+  );
+
+  const [simmerTriggered, setSimmerTriggered] = useState(false);
+
+  const triggerGeneralSimmer = async () => {
+    try {
+      await api.triggerGeneralSimmer();
+      setSimmerTriggered(true);
+      setTimeout(refresh, 2000);
+    } catch (e) {
+      console.error("Failed to trigger simmer:", e);
+    }
+  };
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      <h1 className="text-sm tracking-[4px] text-muted-foreground uppercase">Pipeline</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-sm tracking-[4px] text-muted-foreground uppercase">Pipeline</h1>
+        <button
+          onClick={triggerGeneralSimmer}
+          disabled={hasGeneralSimmerRunning || simmerTriggered}
+          className="px-3 py-1.5 text-[10px] tracking-wider border border-purple-500/30 text-purple-400 rounded hover:bg-purple-500/10 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        >
+          {hasGeneralSimmerRunning ? "simmering..." : simmerTriggered ? "queued" : "simmer general spec"}
+        </button>
+      </div>
       <StatsBar stats={stats} />
       <ActiveJobs jobs={jobs} noosphereId={noosphereId} />
       <div className="grid grid-cols-2 gap-6">
