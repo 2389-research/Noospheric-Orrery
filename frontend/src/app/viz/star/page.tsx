@@ -4,8 +4,6 @@ import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { ReaderPane } from "@/components/reader/reader-pane";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8100";
-
 export default function StarPage() {
   return (
     <Suspense fallback={<div style={{ background: "#01040a", height: "100vh" }} />}>
@@ -41,7 +39,7 @@ function StarPageInner() {
 
   // WebSocket
   useEffect(() => {
-    const wsUrl = API_URL.replace("http", "ws") + "/ws";
+    const wsUrl = (window.location.protocol === "https:" ? "wss:" : "ws:") + "//" + window.location.host + "/api/ws";
     let ws: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout>;
     function connect() {
@@ -66,7 +64,7 @@ function StarPageInner() {
     if (!searchQuery.trim()) return;
     setSearching(true);
     try {
-      const resp = await fetch(`${API_URL}/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20`);
+      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20`);
       const results = await resp.json();
       // Forward entity names + doc IDs from chunks to the viz
       const entityNames = (results.entities || []).slice(0, 10).map((e: { name: string }) => e.name);

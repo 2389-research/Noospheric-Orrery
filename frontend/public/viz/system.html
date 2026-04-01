@@ -65,7 +65,7 @@ const ghostDomains = [];  // neighboring domains as gravitational ghosts
 let hoveredEntityId = null;
 let labelThreshold = 0;
 
-const API_URL = window.API_URL || 'http://localhost:8100';
+const API_URL = '/api';
 console.log('System view: fetching', `${API_URL}/graph`, 'domain:', focusDomainPath);
 fetch(`${API_URL}/graph`).then(r => {
   console.log('System view: got response', r.status);
