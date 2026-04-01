@@ -4,13 +4,18 @@
 - Transform: embed new domain, use saved UMAP model to place it, store position
 - Positions are stable — existing domains don't move when new ones are added
 - Periodic re-fit when domain count doubles (resets all positions)
+- Falls back to hash-based positioning if UMAP/numba fails at runtime
 """
 
+import hashlib
+import logging
 import pickle
 import sqlite3
 import numpy as np
 from sentence_transformers import SentenceTransformer
 import umap
+
+logger = logging.getLogger(__name__)
 
 _model = None
 
@@ -44,6 +49,23 @@ def _build_domain_text(conn: sqlite3.Connection, domain_path: str) -> str:
     return f"{domain_path.replace('/', ' ')}. {' '.join(titles[:6])}. {' '.join(entities[:12])}"
 
 
+def _fallback_position(domain_path: str, stored: dict[str, dict] | None = None) -> dict:
+    """Deterministic fallback position from domain path hash, near parent if possible."""
+    # Try to place near parent domain
+    parent = "/".join(domain_path.split("/")[:-1])
+    if stored and parent in stored:
+        h = hashlib.md5(domain_path.encode()).digest()
+        dx = (h[0] / 255 - 0.5) * 0.15
+        dy = (h[1] / 255 - 0.5) * 0.15
+        return {
+            "x": max(0, min(1, stored[parent]["x"] + dx)),
+            "y": max(0, min(1, stored[parent]["y"] + dy)),
+        }
+    # No parent — hash to full unit square
+    h = hashlib.md5(domain_path.encode()).digest()
+    return {"x": h[0] / 255 * 0.8 + 0.1, "y": h[1] / 255 * 0.8 + 0.1}
+
+
 def get_stored_positions(conn: sqlite3.Connection) -> dict[str, dict]:
     """Get all stored domain positions."""
     rows = conn.execute("SELECT domain_path, x, y FROM domain_layout").fetchall()
@@ -70,17 +92,37 @@ def full_fit(conn: sqlite3.Connection) -> dict[str, dict]:
     texts = [_build_domain_text(conn, p) for p in paths]
     embeddings = model.encode(texts, normalize_embeddings=True)
 
-    # UMAP fit
-    n_neighbors = min(15, len(paths) - 1)
-    reducer = umap.UMAP(
-        n_components=2,
-        n_neighbors=n_neighbors,
-        min_dist=0.15,
-        spread=2.5,
-        metric="cosine",
-        random_state=42,
-    )
-    coords = reducer.fit_transform(embeddings)
+    # UMAP fit — with fallback if numba/UMAP fails at runtime
+    try:
+        n_neighbors = min(15, len(paths) - 1)
+        reducer = umap.UMAP(
+            n_components=2,
+            n_neighbors=n_neighbors,
+            min_dist=0.15,
+            spread=2.5,
+            metric="cosine",
+            random_state=42,
+        )
+        coords = reducer.fit_transform(embeddings)
+    except Exception as e:
+        logger.warning("UMAP fit failed (%s), using fallback positions", e)
+        positions = {}
+        for path in paths:
+            positions[path] = _fallback_position(path, positions)
+        _store_positions(conn, positions)
+        # Store a sentinel model record so transform_new_domain finds a row
+        # and falls back gracefully instead of returning None
+        fallback_model_data = {
+            "reducer": None,
+            "mins": np.array([0.0, 0.0]),
+            "ranges": np.array([1.0, 1.0]),
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO layout_model (id, model_blob, domain_count) VALUES (?, ?, ?)",
+            ("umap", pickle.dumps(fallback_model_data), len(paths))
+        )
+        conn.commit()
+        return positions
 
     # Normalize to 0-1
     mins = coords.min(axis=0)
@@ -131,6 +173,17 @@ def transform_new_domain(conn: sqlite3.Connection, domain_path: str) -> dict | N
     ranges = model_data["ranges"]
     saved_count = row[1] or 0
 
+    # Sentinel record from failed full_fit — use fallback directly
+    if reducer is None:
+        stored = get_stored_positions(conn)
+        fallback = _fallback_position(domain_path, stored)
+        conn.execute(
+            "INSERT OR REPLACE INTO domain_layout (domain_path, x, y) VALUES (?, ?, ?)",
+            (domain_path, fallback["x"], fallback["y"])
+        )
+        conn.commit()
+        return fallback
+
     # Check if we should re-fit (domain count doubled)
     current_count = conn.execute(
         "SELECT COUNT(*) FROM domains WHERE document_count > 0"
@@ -148,12 +201,16 @@ def transform_new_domain(conn: sqlite3.Connection, domain_path: str) -> dict | N
     text = _build_domain_text(conn, domain_path)
     embedding = embed_model.encode([text], normalize_embeddings=True)
 
-    # Transform with saved UMAP
-    coords = reducer.transform(embedding)
-
-    # Normalize using saved params
-    x = float(np.clip((coords[0, 0] - mins[0]) / ranges[0], 0, 1))
-    y = float(np.clip((coords[0, 1] - mins[1]) / ranges[1], 0, 1))
+    # Transform with saved UMAP — fallback if numba/UMAP fails
+    try:
+        coords = reducer.transform(embedding)
+        x = float(np.clip((coords[0, 0] - mins[0]) / ranges[0], 0, 1))
+        y = float(np.clip((coords[0, 1] - mins[1]) / ranges[1], 0, 1))
+    except Exception as e:
+        logger.warning("UMAP transform failed for %s (%s), using fallback", domain_path, e)
+        stored = get_stored_positions(conn)
+        fallback = _fallback_position(domain_path, stored)
+        x, y = fallback["x"], fallback["y"]
 
     # Store
     conn.execute(

@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { SimmerJobDetail } from "@/lib/types";
 
-function timeSince(dateStr: string): string {
+function timeSince(dateStr: string | undefined): string {
+  if (!dateStr) return "unknown";
   // Ensure UTC parsing — timestamps from SQLite lack timezone suffix
   const utcStr = dateStr.includes("Z") || dateStr.includes("+") ? dateStr : dateStr + "Z";
   const seconds = Math.floor((Date.now() - new Date(utcStr).getTime()) / 1000);
