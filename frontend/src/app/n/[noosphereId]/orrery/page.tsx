@@ -289,7 +289,7 @@ export default function VizPage() {
       {/* Galaxy/Sector iframe (always mounted, hidden when in star mode) */}
       <iframe
         ref={galaxyRef}
-        src={`/viz/index.html?api=${encodeURIComponent(API_URL)}`}
+        src={`/viz/index.html?api=${encodeURIComponent("/api")}`}
         style={{
           width: "100%", height: "100%", border: "none",
           position: "absolute", top: 0, left: 0,
@@ -302,7 +302,7 @@ export default function VizPage() {
       {viewMode === "star" && starEntityId && (
         <iframe
           ref={starRef}
-          src={`/viz/star.html?entity=${encodeURIComponent(starEntityId)}&api=${encodeURIComponent(API_URL)}`}
+          src={`/viz/star.html?entity=${encodeURIComponent(starEntityId)}&api=${encodeURIComponent("/api")}`}
           style={{
             width: "100%", height: "100%", border: "none",
             position: "absolute", top: 0, left: 0,
