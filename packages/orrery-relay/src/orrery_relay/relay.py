@@ -52,11 +52,23 @@ class Relay:
     def from_env(cls, **overrides: Any) -> Relay:
         log_level = os.environ.get("RELAY_LOG_LEVEL", "INFO")
         logging.getLogger("orrery_relay").setLevel(getattr(logging, log_level.upper(), logging.INFO))
+        # Auto-detect backend: if ANTHROPIC_BACKEND isn't set, infer from available credentials
+        explicit_backend = os.environ.get("ANTHROPIC_BACKEND", "")
+        aws_key = os.environ.get("AWS_ACCESS_KEY", "")
+        gateway_url = os.environ.get("GATEWAY_URL", "")
+        if explicit_backend:
+            backend = explicit_backend
+        elif aws_key:
+            backend = "bedrock"
+        elif gateway_url:
+            backend = "gateway"
+        else:
+            backend = "gateway"
         kwargs: dict[str, Any] = {
-            "backend": os.environ.get("ANTHROPIC_BACKEND", "gateway"),
-            "gateway_url": os.environ.get("GATEWAY_URL", ""),
+            "backend": backend,
+            "gateway_url": gateway_url,
             "gateway_api_key": os.environ.get("GATEWAY_API_KEY", ""),
-            "aws_access_key": os.environ.get("AWS_ACCESS_KEY", ""),
+            "aws_access_key": aws_key,
             "aws_secret_key": os.environ.get("AWS_SECRET_KEY", ""),
             "aws_region": os.environ.get("AWS_REGION", "us-east-1"),
             "max_retries": int(os.environ.get("RELAY_MAX_RETRIES", "3")),
