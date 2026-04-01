@@ -6,14 +6,22 @@ import { UserMenu } from "./user-menu";
 import { NoosphereSwitcher } from "./noosphere-switcher";
 
 const TABS = [
-  { label: "Upload", href: "upload" },
-  { label: "Pipeline", href: "pipeline" },
-  { label: "Entities", href: "entities" },
-  { label: "Orrery", href: "orrery" },
+  { label: "Upload", href: "upload", writeOnly: true },
+  { label: "Pipeline", href: "pipeline", writeOnly: true },
+  { label: "Entities", href: "entities", writeOnly: false },
+  { label: "Orrery", href: "orrery", writeOnly: false },
 ];
 
-export function NavBar({ currentNoosphereId }: { currentNoosphereId: string }) {
+export function NavBar({
+  currentNoosphereId,
+  isDemo = false,
+}: {
+  currentNoosphereId: string;
+  isDemo?: boolean;
+}) {
   const pathname = usePathname();
+
+  const visibleTabs = isDemo ? TABS.filter((t) => !t.writeOnly) : TABS;
 
   return (
     <nav className="flex items-center gap-6 px-6 h-12 border-b border-border/50 bg-card/50">
@@ -24,7 +32,7 @@ export function NavBar({ currentNoosphereId }: { currentNoosphereId: string }) {
       <NoosphereSwitcher currentId={currentNoosphereId} />
 
       <div className="flex items-center gap-1 ml-2">
-        {TABS.map((tab) => (
+        {visibleTabs.map((tab) => (
           <Link
             key={tab.href}
             href={`/n/${currentNoosphereId}/${tab.href}`}

@@ -5,6 +5,9 @@ import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { setApiWorkspaceId } from "@/lib/api";
 import { NavBar } from "@/components/nav-bar";
+import { DemoModeContext } from "@/lib/hooks/use-demo-mode";
+
+const MAGOS_ID = process.env.NEXT_PUBLIC_MAGOS_WORKSPACE_ID;
 
 export default function NoosphereLayout({
   children,
@@ -16,14 +19,14 @@ export default function NoosphereLayout({
   const router = useRouter();
   const [ready, setReady] = useState(false);
 
+  const isDemo = noosphereId === MAGOS_ID;
+
   useEffect(() => {
     if (!noosphereId || !session) return;
 
-    // Validate this workspace belongs to the user's org (or is the demo workspace)
-    const magosId = process.env.NEXT_PUBLIC_MAGOS_WORKSPACE_ID;
     const isValid =
       session.workspaces.some((w) => w.id === noosphereId) ||
-      noosphereId === magosId;
+      isDemo;
 
     if (!isValid) {
       const fallback = session.workspaces[0]?.id;
@@ -31,12 +34,11 @@ export default function NoosphereLayout({
       return;
     }
 
-    // Sync URL → context and API client
     setWorkspaceId(noosphereId);
     setApiWorkspaceId(noosphereId);
     localStorage.setItem("lastWorkspaceId", noosphereId);
     setReady(true);
-  }, [noosphereId, session, setWorkspaceId, router]);
+  }, [noosphereId, session, setWorkspaceId, router, isDemo]);
 
   if (!ready) {
     return (
@@ -47,9 +49,16 @@ export default function NoosphereLayout({
   }
 
   return (
-    <>
-      <NavBar currentNoosphereId={noosphereId} />
+    <DemoModeContext.Provider value={isDemo}>
+      <NavBar currentNoosphereId={noosphereId} isDemo={isDemo} />
+      {isDemo && (
+        <div className="px-6 py-1.5 bg-amber-500/5 border-b border-amber-500/10">
+          <span className="text-[10px] text-amber-400/60 font-mono">
+            ✦ This is a shared, read-only Noosphere · Your data is in your own workspaces
+          </span>
+        </div>
+      )}
       <main className="p-6">{children}</main>
-    </>
+    </DemoModeContext.Provider>
   );
 }
