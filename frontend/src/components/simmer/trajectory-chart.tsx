@@ -44,6 +44,7 @@ export function TrajectoryChart({ iterations, selectedIndex }: TrajectoryChartPr
     backgroundColor: "transparent",
     borderDash: [4, 3],
     borderWidth: 1.5,
+    spanGaps: true,
     pointRadius: iterations.map((_, idx) => (idx === selectedIndex ? 5 : 2)),
     pointBackgroundColor: iterations.map((_, idx) =>
       idx === selectedIndex

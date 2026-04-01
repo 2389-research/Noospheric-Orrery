@@ -829,7 +829,7 @@ class FirestoreSimmerIterationRepository(SimmerIterationRepository):
                 "key_change": d.get("keyChange"), "asi": d.get("asi"),
                 "judge_mode": d.get("judgeMode"), "regressed": d.get("regressed", False),
                 "candidate_preview": d.get("candidatePreview"),
-                "criteria": criteria,
+                "criterion_details": criteria,
             })
 
         return {
