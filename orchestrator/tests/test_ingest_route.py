@@ -71,9 +71,9 @@ async def test_ingest_stores_document(tmp_path):
 
     with patch("src.routes.ingest.get_settings", return_value=settings), \
          patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=MOCK_CLASSIFICATION), \
-         patch("src.routes.ingest.AsyncAnthropicBedrock"):
+         patch("src.routes.ingest.Relay"):
         from src.routes.ingest import _ingest_document
-        result = await _ingest_document("Test Doc", "Hello world content", None)
+        result = await _ingest_document(store, "Test Doc", "Hello world content", None)
 
     assert "document_id" in result
     assert result["title"] == "Test Doc"
@@ -95,9 +95,9 @@ async def test_ingest_creates_chunks(tmp_path):
 
     with patch("src.routes.ingest.get_settings", return_value=settings), \
          patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=MOCK_CLASSIFICATION), \
-         patch("src.routes.ingest.AsyncAnthropicBedrock"):
+         patch("src.routes.ingest.Relay"):
         from src.routes.ingest import _ingest_document
-        result = await _ingest_document("Chunky Doc", long_content, None)
+        result = await _ingest_document(store, "Chunky Doc", long_content, None)
 
     conn = store.conn
     chunks = conn.execute(
@@ -114,9 +114,9 @@ async def test_ingest_assigns_classification(tmp_path):
 
     with patch("src.routes.ingest.get_settings", return_value=settings), \
          patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=MOCK_CLASSIFICATION), \
-         patch("src.routes.ingest.AsyncAnthropicBedrock"):
+         patch("src.routes.ingest.Relay"):
         from src.routes.ingest import _ingest_document
-        result = await _ingest_document("Classified Doc", "Some content about painting", None)
+        result = await _ingest_document(store, "Classified Doc", "Some content about painting", None)
 
     assert "techniques/wet-blending" in result["domains"]
 
@@ -136,9 +136,9 @@ async def test_ingest_queues_simmer_general_job_when_no_spec(tmp_path):
 
     with patch("src.routes.ingest.get_settings", return_value=settings), \
          patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=MOCK_CLASSIFICATION), \
-         patch("src.routes.ingest.AsyncAnthropicBedrock"):
+         patch("src.routes.ingest.Relay"):
         from src.routes.ingest import _ingest_document
-        result = await _ingest_document("No Spec Doc", "Some content", None)
+        result = await _ingest_document(store, "No Spec Doc", "Some content", None)
 
     assert len(result["jobs_queued"]) > 0
 
@@ -158,10 +158,10 @@ async def test_ingest_does_not_duplicate_simmer_general_job(tmp_path):
 
     with patch("src.routes.ingest.get_settings", return_value=settings), \
          patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=MOCK_CLASSIFICATION), \
-         patch("src.routes.ingest.AsyncAnthropicBedrock"):
+         patch("src.routes.ingest.Relay"):
         from src.routes.ingest import _ingest_document
-        result1 = await _ingest_document("Doc 1", "Content 1", None)
-        result2 = await _ingest_document("Doc 2", "Content 2", None)
+        result1 = await _ingest_document(store, "Doc 1", "Content 1", None)
+        result2 = await _ingest_document(store, "Doc 2", "Content 2", None)
 
     conn = store.conn
     jobs = conn.execute(
@@ -178,9 +178,9 @@ async def test_ingest_skips_extraction_when_no_spec(tmp_path):
 
     with patch("src.routes.ingest.get_settings", return_value=settings), \
          patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=MOCK_CLASSIFICATION), \
-         patch("src.routes.ingest.AsyncAnthropicBedrock"):
+         patch("src.routes.ingest.Relay"):
         from src.routes.ingest import _ingest_document
-        result = await _ingest_document("No Extract Doc", "Content without spec", None)
+        result = await _ingest_document(store, "No Extract Doc", "Content without spec", None)
 
     assert result["entity_count"] == 0
 
@@ -206,9 +206,9 @@ async def test_ingest_extracts_entities_when_spec_exists(tmp_path):
     with patch("src.routes.ingest.get_settings", return_value=settings), \
          patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=MOCK_CLASSIFICATION), \
          patch("src.routes.ingest.extract_document", new_callable=AsyncMock, return_value=mock_entities), \
-         patch("src.routes.ingest.AsyncAnthropicBedrock"):
+         patch("src.routes.ingest.Relay"):
         from src.routes.ingest import _ingest_document
-        result = await _ingest_document("Extract Doc", "Content with entities", None)
+        result = await _ingest_document(store, "Extract Doc", "Content with entities", None)
 
     assert result["entity_count"] == 2
 

@@ -1,15 +1,16 @@
+# ABOUTME: Ingest route — accepts file uploads and directory paths, runs the full pipeline.
+# ABOUTME: Handles dedup, chunking, classification, extraction, and job queuing.
+
 import uuid
 import os
 import json
 import hashlib
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
-from anthropic import AsyncAnthropicBedrock
+from orrery_relay import Relay
 
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
-from ..repositories.factory import get_store
-from ..repositories.interfaces import Chunk
 from ..models import IngestResult, DirectoryIngestRequest
 from ..pipeline.chunker import chunk_document
 from ..pipeline.excerpt import build_classification_excerpt
@@ -22,177 +23,169 @@ from ..pipeline.cooccurrence import compute_cooccurrence_edges
 router = APIRouter()
 
 
-async def _ingest_document(title: str, content: str, source_path: str | None, store=None) -> dict:
+async def _ingest_document(store, title: str, content: str, source_path: str | None) -> dict:
     settings = get_settings()
-    if store is None:
-        store = get_store()
-    client = AsyncAnthropicBedrock(
-        aws_access_key=settings.aws_access_key,
-        aws_secret_key=settings.aws_secret_key,
-        aws_region=settings.aws_region,
+    relay = Relay.from_settings(settings)
+
+    # Dedup: skip if document with same content hash already exists
+    content_hash = hashlib.sha256(content.encode()).hexdigest()
+    existing = store.documents.get_by_hash(content_hash)
+    if existing:
+        domains = [d.domain_path for d in store.domains.get_domains_for_document(existing.id)]
+        return {
+            "document_id": existing.id,
+            "title": title,
+            "domains": domains,
+            "entity_count": 0,
+            "jobs_queued": [],
+        }
+
+    doc_id = str(uuid.uuid4())
+
+    # 1. Store document
+    store.documents.create(doc_id, title, content, content_hash, source_path)
+
+    # 1b. Chunk and store
+    chunks = chunk_document(content, chunk_size=settings.chunk_size)
+    from ..repositories.interfaces import Chunk
+    chunk_objs = []
+    for chunk in chunks:
+        chunk["id"] = str(uuid.uuid4())
+        chunk_objs.append(Chunk(
+            id=chunk["id"],
+            document_id=doc_id,
+            chunk_index=chunk["chunk_index"],
+            text=chunk["text"],
+            offset=chunk["offset"],
+            length=chunk["length"],
+        ))
+    store.chunks.create_batch(chunk_objs)
+
+    # 2. Classify
+    excerpt = build_classification_excerpt(title, content)
+    taxonomy = store.domains.get_all_paths()
+
+    classification = await classify_document(
+        relay=relay, title=title, excerpt=excerpt,
+        existing_taxonomy=taxonomy, model=settings.classification_model,
     )
 
-    try:
-        # Dedup
-        content_hash = hashlib.sha256(content.encode()).hexdigest()
-        existing = store.documents.get_by_hash(content_hash)
-        if existing:
-            domains = [d.domain_path for d in store.domains.get_domains_for_document(existing.id)]
-            store.close()
-            return {
-                "document_id": existing.id, "title": title,
-                "domains": domains, "entity_count": 0, "jobs_queued": [],
-            }
+    domains = assign_document_domains(store, doc_id, classification)
+    store.documents.update_status(doc_id, "classified")
 
-        doc_id = str(uuid.uuid4())
+    # 3. Extract if general spec exists
+    entity_count = 0
+    chunk_entities: dict[str, list[str]] = {}
+    spec = store.specs.get_general()
 
-        # 1. Store document
-        store.documents.create(doc_id, title, content, content_hash, source_path)
-
-        # 1b. Chunk and store
-        raw_chunks = chunk_document(content, chunk_size=settings.chunk_size)
-        chunk_objs = []
-        for c in raw_chunks:
-            c["id"] = str(uuid.uuid4())
-            chunk_objs.append(Chunk(
-                id=c["id"], document_id=doc_id, chunk_index=c["chunk_index"],
-                text=c["text"], offset=c["offset"], length=c["length"],
-            ))
-        store.chunks.create_batch(chunk_objs)
-
-        # 2. Classify
-        excerpt = build_classification_excerpt(title, content)
-        taxonomy = store.domains.get_all_paths()
-
-        classification = await classify_document(
-            client=client, title=title, excerpt=excerpt,
-            existing_taxonomy=taxonomy, model=settings.classification_model,
+    if spec:
+        spec_content = spec.spec_content
+        spec_version = spec.version
+        entities = await extract_document(
+            relay=relay, chunks=chunks, spec=spec_content, model=settings.extraction_model,
         )
-
-        domains = assign_document_domains(store, doc_id, classification)
-        store.documents.update_status(doc_id, "classified")
-
-        # 3. Extract if general spec exists
-        entity_count = 0
-        chunk_entities: dict[str, list[str]] = {}
-        general_spec = store.specs.get_general()
-
-        if general_spec:
-            entities = await extract_document(
-                client=client, chunks=raw_chunks,
-                spec=general_spec.spec_content, model=settings.extraction_model,
+        for entity in entities:
+            entity_id = normalize_entity(store, entity["name"], entity["type"])
+            store.entity_sources.create(
+                entity_id=entity_id,
+                document_id=doc_id,
+                chunk_id=entity.get("chunk_id"),
+                extraction_pass="general",
+                spec_version=spec_version,
             )
-            for entity in entities:
-                entity_id = normalize_entity(store, entity["name"], entity["type"])
-                store.entity_sources.create(
-                    entity_id, doc_id, entity.get("chunk_id"),
-                    "general", general_spec.version,
-                )
-                chunk_id = entity.get("chunk_id")
-                if chunk_id:
-                    chunk_entities.setdefault(chunk_id, []).append(entity_id)
+            chunk_id = entity.get("chunk_id")
+            if chunk_id:
+                chunk_entities.setdefault(chunk_id, []).append(entity_id)
 
+        edges = compute_cooccurrence_edges(chunk_entities)
+        for edge in edges:
+            store.relationships.upsert_cooccurrence(
+                edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
+            )
+
+        entity_count = len(entities)
+        store.documents.update_status(doc_id, "extracted")
+
+    # 4. Cascade through domain specs
+    #    For each domain this doc belongs to, walk up the tree and
+    #    run any domain-specific specs that exist.
+    #    e.g., doc in business/product_development/strategy/ecommerce
+    #    checks: ecommerce spec, strategy spec, product_development spec
+    domain_entity_count = 0
+    seen_specs = set()
+
+    for domain_path in domains:
+        # Walk up the domain tree: a/b/c → [a/b/c, a/b, a]
+        parts = domain_path.split("/")
+        ancestor_paths = ["/".join(parts[:i+1]) for i in range(len(parts))]
+
+        for ancestor in reversed(ancestor_paths):  # deepest first
+            domain_spec = store.specs.get_for_domain(ancestor)
+
+            if domain_spec and domain_spec.id not in seen_specs:
+                seen_specs.add(domain_spec.id)
+                d_entities = await extract_document(
+                    relay=relay, chunks=chunks,
+                    spec=domain_spec.spec_content, model=settings.extraction_model,
+                )
+                for entity in d_entities:
+                    entity_id = normalize_entity(store, entity["name"], entity["type"])
+                    store.entity_sources.create(
+                        entity_id=entity_id,
+                        document_id=doc_id,
+                        chunk_id=entity.get("chunk_id"),
+                        extraction_pass="domain-specific",
+                        spec_version=domain_spec.version,
+                    )
+                    chunk_id = entity.get("chunk_id")
+                    if chunk_id:
+                        chunk_entities.setdefault(chunk_id, []).append(entity_id)
+                domain_entity_count += len(d_entities)
+
+        # Recompute co-occurrence with domain entities included
+        if domain_entity_count > 0:
             edges = compute_cooccurrence_edges(chunk_entities)
             for edge in edges:
                 store.relationships.upsert_cooccurrence(
-                    edge["id"], edge["from"], edge["to"],
-                    edge["weight"], edge["source_chunk"],
+                    edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
                 )
 
-            entity_count = len(entities)
-            store.documents.update_status(doc_id, "extracted")
+    if domain_entity_count > 0:
+        entity_count += domain_entity_count
+        store.documents.update_status(doc_id, "enriched")
 
-        # 4. Cascade through domain specs
-        domain_entity_count = 0
-        seen_specs = set()
+    # 5. Check thresholds + queue simmers
+    jobs_queued = []
 
-        for domain_path in domains:
-            parts = domain_path.split("/")
-            ancestor_paths = ["/".join(parts[:i+1]) for i in range(len(parts))]
+    if not spec:
+        existing_general_job = store.jobs.get_existing("simmer_general", "general", ["queued", "running"])
+        if not existing_general_job:
+            job_id = str(uuid.uuid4())
+            store.jobs.create(job_id, "simmer_general", "general")
+            jobs_queued.append(job_id)
 
-            for ancestor in reversed(ancestor_paths):
-                domain_spec = store.specs.get_for_domain(ancestor)
-                if domain_spec and domain_spec.id not in seen_specs:
-                    seen_specs.add(domain_spec.id)
-                    d_entities = await extract_document(
-                        client=client, chunks=raw_chunks,
-                        spec=domain_spec.spec_content, model=settings.extraction_model,
-                    )
-                    for entity in d_entities:
-                        entity_id = normalize_entity(store, entity["name"], entity["type"])
-                        store.entity_sources.create(
-                            entity_id, doc_id, entity.get("chunk_id"),
-                            "domain-specific", domain_spec.version,
-                        )
-                        chunk_id = entity.get("chunk_id")
-                        if chunk_id:
-                            chunk_entities.setdefault(chunk_id, []).append(entity_id)
-                    domain_entity_count += len(d_entities)
-
-            if domain_entity_count > 0:
-                edges = compute_cooccurrence_edges(chunk_entities)
-                for edge in edges:
-                    store.relationships.upsert_cooccurrence(
-                        edge["id"], edge["from"], edge["to"],
-                        edge["weight"], edge["source_chunk"],
-                    )
-
-        if domain_entity_count > 0:
-            entity_count += domain_entity_count
-            store.documents.update_status(doc_id, "enriched")
-
-        # 5. Check thresholds + queue simmers
-        jobs_queued = []
-
-        if not general_spec:
-            existing_job = store.jobs.get_existing("simmer_general", "general", ["queued", "running"])
+    for domain_path in domains:
+        domain = store.domains.get(domain_path)
+        if domain and domain.document_count >= settings.domain_spec_threshold and domain.spec_version is None:
+            existing_job = store.jobs.get_existing("simmer_domain", domain_path, ["queued", "running"])
             if not existing_job:
                 job_id = str(uuid.uuid4())
-                store.jobs.create(job_id, "simmer_general", "general")
+                store.jobs.create(job_id, "simmer_domain", domain_path, {"domain": domain_path})
                 jobs_queued.append(job_id)
 
-        for domain_path in domains:
-            domain = store.domains.get(domain_path)
-            if domain and domain.document_count >= settings.domain_spec_threshold and domain.spec_version is None:
-                existing_job = store.jobs.get_existing("simmer_domain", domain_path, ["queued", "running"])
-                if not existing_job:
-                    job_id = str(uuid.uuid4())
-                    store.jobs.create(job_id, "simmer_domain", domain_path, config={"domain": domain_path})
-                    jobs_queued.append(job_id)
-
-    finally:
-        store.close()
-
-    # Embed new entities/chunks for vector search
+    # Rebuild search index to include new entities/chunks
     try:
-        from ..services.embedding import embed_texts
-        from google.cloud.firestore_v1.vector import Vector
-        embed_store = get_store()
-
-        if embed_store.conn is not None:
-            # SQLite: use FAISS pipeline
-            from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
-            embed_new_entities(embed_store.conn)
-            embed_new_chunks(embed_store.conn)
-        else:
-            # Firestore: embed via Vertex AI, store as Vector fields
-            # Embed entities that were just created
-            entities_to_embed = embed_store.entities.list(limit=500)
-            names = [e.canonical_name for e in entities_to_embed if e.canonical_name]
-            if names:
-                embeddings = embed_texts(names)
-                for entity, embedding in zip(entities_to_embed, embeddings):
-                    embed_store._entities._col.document(entity.id).update({
-                        "embedding": Vector(embedding)
-                    })
-
-        embed_store.close()
+        from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
+        embed_new_entities(store.conn)
+        embed_new_chunks(store.conn)
     except Exception as e:
-        print(f"Search embedding after ingest: {e}")
+        print(f"Search index update after ingest: {e}")
 
     return {
-        "document_id": doc_id, "title": title,
-        "domains": domains, "entity_count": entity_count,
+        "document_id": doc_id,
+        "title": title,
+        "domains": domains,
+        "entity_count": entity_count,
         "jobs_queued": jobs_queued,
     }
 
@@ -208,7 +201,12 @@ async def ingest_file(file: UploadFile = File(...), auth: AuthStore = Depends(ge
     with open(doc_path, "w") as f:
         f.write(content)
 
-    return await _ingest_document(title, content, doc_path, store=auth.store)
+    store = auth.store
+    try:
+        result = await _ingest_document(store, title, content, doc_path)
+    finally:
+        store.close()
+    return result
 
 
 @router.post("/ingest/directory")
@@ -217,11 +215,15 @@ async def ingest_directory(request: DirectoryIngestRequest, auth: AuthStore = De
     if not dir_path.is_dir():
         raise HTTPException(status_code=400, detail=f"Not a directory: {request.path}")
 
+    store = auth.store
     results = []
-    for file_path in sorted(dir_path.rglob("*")):
-        if file_path.is_file() and file_path.suffix in (".txt", ".md", ".json", ".csv"):
-            content = file_path.read_text(errors="replace")
-            result = await _ingest_document(file_path.stem, content, str(file_path), store=auth.store)
-            results.append(result)
+    try:
+        for file_path in sorted(dir_path.rglob("*")):
+            if file_path.is_file() and file_path.suffix in (".txt", ".md", ".json", ".csv"):
+                content = file_path.read_text(errors="replace")
+                result = await _ingest_document(store, file_path.stem, content, str(file_path))
+                results.append(result)
+    finally:
+        store.close()
 
     return {"documents": results, "total": len(results)}
