@@ -21,8 +21,6 @@ type NormSummary = {
   recent_merges: { from: string; to: string; method: string; similarity: number; date: string }[];
 };
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
 export default function ExtractionPage() {
   const params = useParams();
   const jobId = params.id as string;
@@ -75,7 +73,7 @@ export default function ExtractionPage() {
       setDocEntityIds(null);
       return;
     }
-    fetch(`${API_URL}/documents/${selectedDocId}`)
+    fetch(`/api/documents/${selectedDocId}`)
       .then((r) => r.json())
       .then((doc) => {
         const ids = new Set<string>(doc.entities?.map((e: { id: string }) => e.id) || []);

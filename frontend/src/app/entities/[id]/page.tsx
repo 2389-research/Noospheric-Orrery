@@ -4,8 +4,6 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8100";
-
 const TYPE_COLORS: Record<string, string> = {
   Person: "#378ADD",
   Organization: "#7F77DD",
@@ -47,7 +45,7 @@ export default function EntityDetailPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`${API_URL}/entities/${id}`)
+    fetch(`/api/entities/${id}`)
       .then((r) => {
         if (!r.ok) throw new Error(`${r.status}`);
         return r.json();
@@ -58,7 +56,7 @@ export default function EntityDetailPage() {
         const docMap: Record<string, DocumentInfo> = {};
         for (const docId of docIds) {
           try {
-            const doc = await fetch(`${API_URL}/documents/${docId}`).then((r) => r.json());
+            const doc = await fetch(`/api/documents/${docId}`).then((r) => r.json());
             docMap[docId as string] = doc;
           } catch {
             // skip
@@ -80,7 +78,7 @@ export default function EntityDetailPage() {
     if (!docSnippets[docId]) {
       setDocSnippets((prev) => ({ ...prev, [docId]: { snippets: [], loading: true } }));
       try {
-        const reader = await fetch(`${API_URL}/documents/${docId}/reader`).then((r) => r.json());
+        const reader = await fetch(`/api/documents/${docId}/reader`).then((r) => r.json());
         // Find this entity's snippets from the reader data
         const entityData = reader.entities?.find(
           (e: { id: string; canonical_name: string }) =>
