@@ -1,9 +1,149 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Dev rules — open access. Tighten for production.
-    match /{document=**} {
-      allow read, write: if true;
+
+    // ── Helper functions ──────────────────────────────────────────────────
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userOrg() {
+      return request.auth.token.get('orgId', null);
+    }
+
+    function userRole() {
+      return request.auth.token.get('role', 'viewer');
+    }
+
+    function isAdmin() {
+      return signedIn() && userRole() == 'admin';
+    }
+
+    function isEditor() {
+      return signedIn() && userRole() in ['admin', 'editor'];
+    }
+
+    function isViewer() {
+      return signedIn() && userRole() in ['admin', 'editor', 'viewer'];
+    }
+
+    function ownsOrg(orgId) {
+      return signedIn() && userOrg() == orgId;
+    }
+
+    function ownsWorkspace(workspaceId) {
+      return signedIn() &&
+        get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.orgId == userOrg();
+    }
+
+    // ── Organizations ─────────────────────────────────────────────────────
+
+    match /organizations/{orgId} {
+      allow read: if ownsOrg(orgId) && isViewer();
+      allow write: if ownsOrg(orgId) && isAdmin();
+
+      match /members/{userId} {
+        allow read: if ownsOrg(orgId) && isViewer();
+        allow write: if ownsOrg(orgId) && isAdmin();
+      }
+    }
+
+    // ── Workspaces ────────────────────────────────────────────────────────
+
+    match /workspaces/{workspaceId} {
+      allow read: if signedIn() &&
+        resource.data.orgId == userOrg() &&
+        isViewer();
+
+      allow create: if signedIn() &&
+        request.resource.data.orgId == userOrg() &&
+        isEditor();
+
+      allow update: if signedIn() &&
+        resource.data.orgId == userOrg() &&
+        isAdmin();
+
+      allow delete: if false;
+
+      // ── Workspace subcollections ───────────────────────────────────────
+
+      match /documents/{docId} {
+        allow read: if ownsWorkspace(workspaceId) && isViewer();
+        allow create, update: if ownsWorkspace(workspaceId) && isEditor();
+        allow delete: if false;
+
+        match /chunks/{chunkId} {
+          allow read: if ownsWorkspace(workspaceId) && isViewer();
+          allow write: if ownsWorkspace(workspaceId) && isEditor();
+        }
+
+        match /domains/{domainPath} {
+          allow read: if ownsWorkspace(workspaceId) && isViewer();
+          allow write: if ownsWorkspace(workspaceId) && isEditor();
+        }
+      }
+
+      match /entities/{entityId} {
+        allow read: if ownsWorkspace(workspaceId) && isViewer();
+        allow create, update: if ownsWorkspace(workspaceId) && isEditor();
+        allow delete: if false;
+
+        match /sources/{sourceId} {
+          allow read: if ownsWorkspace(workspaceId) && isViewer();
+          allow write: if ownsWorkspace(workspaceId) && isEditor();
+        }
+      }
+
+      match /domains/{domainId} {
+        allow read: if ownsWorkspace(workspaceId) && isViewer();
+        allow write: if ownsWorkspace(workspaceId) && isEditor();
+      }
+
+      match /jobs/{jobId} {
+        allow read: if ownsWorkspace(workspaceId) && isViewer();
+        allow create: if ownsWorkspace(workspaceId) && isEditor();
+        allow update: if false;
+        allow delete: if false;
+
+        match /iterations/{iterationId} {
+          allow read: if ownsWorkspace(workspaceId) && isViewer();
+          allow write: if false;
+        }
+      }
+
+      match /specs/{specId} {
+        allow read: if ownsWorkspace(workspaceId) && isViewer();
+        allow write: if false;
+      }
+
+      match /relationships/{relId} {
+        allow read: if ownsWorkspace(workspaceId) && isViewer();
+        allow write: if false;
+      }
+
+      match /normalizationQueue/{reviewId} {
+        allow read: if ownsWorkspace(workspaceId) && isViewer();
+        allow update: if ownsWorkspace(workspaceId) && isEditor();
+        allow create, delete: if false;
+      }
+    }
+
+    // ── Invites ───────────────────────────────────────────────────────────
+
+    match /invites/{inviteId} {
+      allow read: if signedIn() && (
+        resource.data.orgId == userOrg() ||
+        resource.data.email == request.auth.token.email
+      );
+      allow write: if false;
+    }
+
+    // ── User sentinel docs (token refresh signal) ─────────────────────────
+
+    match /users/{userId} {
+      allow read: if request.auth.uid == userId;
+      allow write: if false;
     }
   }
 }

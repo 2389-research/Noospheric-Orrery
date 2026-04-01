@@ -1,7 +1,7 @@
 """Three-tier entity normalization cascade.
 
 Tier 1: String rules (lowercase, strip, plural collapse) — runs inline during extraction
-Tier 2: Embedding similarity (all-MiniLM-L6-v2, cosine) — runs after batch extraction
+Tier 2: Embedding similarity (Vertex AI text-embedding-004, cosine) — runs after batch extraction
 Tier 3: LLM review for ambiguous clusters — manual trigger, reviews queued pairs
 
 Validated from warhammer pipeline: 14,033 → 12,159 entities (13.4% reduction).
@@ -12,21 +12,25 @@ import sqlite3
 import numpy as np
 from collections import defaultdict
 
-# Lazy-load the model (heavy import)
-_model = None
-
-def _get_model():
-    global _model
-    if _model is None:
-        from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer("all-MiniLM-L6-v2")
-    return _model
-
 
 def embed_entities(names: list[str]) -> np.ndarray:
-    """Embed a list of entity names. Returns (N, 384) array."""
-    model = _get_model()
-    return model.encode(names, normalize_embeddings=True)
+    """Embed a list of entity names. Returns (N, dim) array.
+
+    Uses Vertex AI (768-dim) with sentence-transformers fallback (384-dim).
+    """
+    try:
+        from ..services.embedding import embed_texts
+        vectors = embed_texts(names)
+        arr = np.array(vectors, dtype=np.float32)
+        # Normalize for cosine similarity via dot product
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        return arr / norms
+    except Exception:
+        # Fallback to sentence-transformers for local/SQLite mode
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer("all-MiniLM-L6-v2")
+        return model.encode(names, normalize_embeddings=True)
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:

@@ -47,6 +47,7 @@ class AuthUser:
     name: str | None = None
     workspace_id: str = "default"
     role: str = "editor"  # admin | editor | viewer
+    org_id: str = ""
 
 
 # Dev user for unauthenticated local mode
@@ -89,20 +90,31 @@ async def get_current_user(
     name = decoded.get("name")
     workspace_id = decoded.get("workspace_id", os.environ.get("FIREBASE_WORKSPACE_ID", "default"))
     role = decoded.get("role", "editor")
+    org_id = decoded.get("orgId", "")
 
-    return AuthUser(uid=uid, email=email, name=name, workspace_id=workspace_id, role=role)
+    return AuthUser(uid=uid, email=email, name=name, workspace_id=workspace_id, role=role, org_id=org_id)
+
+
+ROLE_HIERARCHY = {"admin": 3, "editor": 2, "viewer": 1}
 
 
 def require_role(*roles: str):
-    """Dependency that checks user has one of the specified roles.
+    """Dependency that checks user has at least one of the specified roles.
+
+    Uses role hierarchy: admin > editor > viewer.
+    require_role("viewer") allows admin and editor too.
+    require_role("admin") only allows admin.
 
     Usage:
         @router.post("/admin-only")
         def admin_route(user: AuthUser = Depends(require_role("admin"))):
             ...
     """
+    min_level = min(ROLE_HIERARCHY.get(r, 0) for r in roles)
+
     async def check_role(user: AuthUser = Depends(get_current_user)):
-        if user.role not in roles:
+        user_level = ROLE_HIERARCHY.get(user.role, 0)
+        if user_level < min_level:
             raise HTTPException(status_code=403, detail=f"Requires role: {', '.join(roles)}")
         return user
     return check_role
