@@ -5,7 +5,7 @@ import { type User } from "firebase/auth";
 import { onAuthChange, signInWithGoogle, signOutUser, setupSession, type SessionInfo } from "./firebase";
 import { setApiWorkspaceId } from "./api";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8100";
+const API_URL = "/api";
 
 interface AuthContextType {
   user: User | null;
