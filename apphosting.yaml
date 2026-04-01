@@ -12,6 +12,8 @@ runConfig:
   concurrency: 80
 
 env:
+  - variable: BACKEND_URL
+    value: https://orrery-orchestrator-469580747258.us-central1.run.app
   - variable: NEXT_PUBLIC_API_URL
     value: https://orrery-orchestrator-469580747258.us-central1.run.app
   - variable: NEXT_PUBLIC_FIREBASE_API_KEY
