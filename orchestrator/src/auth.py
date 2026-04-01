@@ -51,7 +51,7 @@ class AuthUser:
 
 
 # Dev user for unauthenticated local mode
-DEV_USER = AuthUser(uid="dev-user", email="dev@localhost", name="Dev User")
+DEV_USER = AuthUser(uid="dev-user", email="dev@localhost", name="Dev User", role="admin")
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
