@@ -110,6 +110,18 @@ def full_fit(conn: sqlite3.Connection) -> dict[str, dict]:
         for path in paths:
             positions[path] = _fallback_position(path, positions)
         _store_positions(conn, positions)
+        # Store a sentinel model record so transform_new_domain finds a row
+        # and falls back gracefully instead of returning None
+        fallback_model_data = {
+            "reducer": None,
+            "mins": np.array([0.0, 0.0]),
+            "ranges": np.array([1.0, 1.0]),
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO layout_model (id, model_blob, domain_count) VALUES (?, ?, ?)",
+            ("umap", pickle.dumps(fallback_model_data), len(paths))
+        )
+        conn.commit()
         return positions
 
     # Normalize to 0-1
@@ -160,6 +172,17 @@ def transform_new_domain(conn: sqlite3.Connection, domain_path: str) -> dict | N
     mins = model_data["mins"]
     ranges = model_data["ranges"]
     saved_count = row[1] or 0
+
+    # Sentinel record from failed full_fit — use fallback directly
+    if reducer is None:
+        stored = get_stored_positions(conn)
+        fallback = _fallback_position(domain_path, stored)
+        conn.execute(
+            "INSERT OR REPLACE INTO domain_layout (domain_path, x, y) VALUES (?, ?, ?)",
+            (domain_path, fallback["x"], fallback["y"])
+        )
+        conn.commit()
+        return fallback
 
     # Check if we should re-fit (domain count doubled)
     current_count = conn.execute(
