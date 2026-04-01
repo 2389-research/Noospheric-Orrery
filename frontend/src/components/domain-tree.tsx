@@ -6,17 +6,19 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { DomainInfo, JobInfo } from "@/lib/types";
 import { api } from "@/lib/api";
+import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 
 const PAGE_SIZE = 12;
 
 type SortKey = "size" | "name" | "spec";
 
 function SimmerAction({ domain: d, jobs, onSimmer }: { domain: DomainInfo; jobs: JobInfo[]; onSimmer: (path: string) => void }) {
+  const noosphereId = useNoosphereId();
   if (d.spec_version) {
     const simmerJob = jobs.find(j => j.type.startsWith("simmer") && j.target === d.path);
     if (simmerJob) {
       return (
-        <Link href={`/simmer/${simmerJob.id}`} className="text-[10px] text-purple-400/70 hover:text-purple-400 transition-colors">
+        <Link href={`/n/${noosphereId}/simmer/${simmerJob.id}`} className="text-[10px] text-purple-400/70 hover:text-purple-400 transition-colors">
           view run
         </Link>
       );

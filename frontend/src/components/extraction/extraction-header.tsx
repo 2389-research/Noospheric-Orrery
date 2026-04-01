@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { JobInfo, BatchResults } from "@/lib/types";
+import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 
 function formatDuration(started: string | null, completed: string | null): string {
   if (!started) return "—";
@@ -21,6 +22,7 @@ interface ExtractionHeaderProps {
 }
 
 export function ExtractionHeader({ job }: ExtractionHeaderProps) {
+  const noosphereId = useNoosphereId();
   if (!job) return null;
 
   const shortId = job.id.slice(0, 8);
@@ -32,7 +34,7 @@ export function ExtractionHeader({ job }: ExtractionHeaderProps) {
     <div className="flex items-start justify-between">
       <div className="space-y-1">
         <div className="text-[10px] tracking-[2px] text-muted-foreground/85 uppercase">
-          <Link href="/pipeline" className="hover:text-muted-foreground transition-colors">
+          <Link href={`/n/${noosphereId}/pipeline`} className="hover:text-muted-foreground transition-colors">
             jobs
           </Link>
           <span className="mx-1">/</span>

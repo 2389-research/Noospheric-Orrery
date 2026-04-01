@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
+import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 
 const TYPE_COLORS: Record<string, string> = {
   Person: "#378ADD",
@@ -37,6 +38,7 @@ interface DocSnippets {
 export default function EntityDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const noosphereId = useNoosphereId();
   const id = params.id as string;
   const [entity, setEntity] = useState<EntityDetail | null>(null);
   const [docs, setDocs] = useState<Record<string, DocumentInfo>>({});
@@ -74,25 +76,21 @@ export default function EntityDetailPage() {
     }
     setExpandedDoc(docId);
 
-    // Fetch snippets if not already loaded
     if (!docSnippets[docId]) {
       setDocSnippets((prev) => ({ ...prev, [docId]: { snippets: [], loading: true } }));
       try {
         const reader = await fetch(`/api/documents/${docId}/reader`).then((r) => r.json());
-        // Find this entity's snippets from the reader data
         const entityData = reader.entities?.find(
           (e: { id: string; canonical_name: string }) =>
             e.id === id || e.canonical_name === entity?.canonical_name
         );
         const snippets = entityData?.snippets || [];
 
-        // If no snippets from the reader entity data, try to find from segments
         if (snippets.length === 0 && reader.segments) {
           const foundSnippets: string[] = [];
           const segments = reader.segments as { type: string; text: string; entity_id?: string }[];
           for (let i = 0; i < segments.length; i++) {
             if (segments[i].entity_id === id || segments[i].entity_id === entity?.canonical_name) {
-              // Grab surrounding context
               const before = segments.slice(Math.max(0, i - 2), i).map((s) => s.text).join("");
               const match = segments[i].text;
               const after = segments.slice(i + 1, Math.min(segments.length, i + 3)).map((s) => s.text).join("");
@@ -119,18 +117,14 @@ export default function EntityDetailPage() {
     <div className="max-w-3xl mx-auto space-y-6">
       <div>
         <button
-          onClick={() => router.push("/entities")}
+          onClick={() => router.push(`/n/${noosphereId}/entities`)}
           className="text-[10px] text-muted-foreground/80 hover:text-foreground/90 transition-colors mb-2"
         >
           ← back
         </button>
         <h1 className="text-xl font-semibold text-foreground/90">{entity.canonical_name}</h1>
         <div className="flex items-center gap-3 mt-2">
-          <Badge
-            variant="outline"
-            className="text-[10px]"
-            style={{ borderColor: `${typeColor}60`, color: typeColor }}
-          >
+          <Badge variant="outline" className="text-[10px]" style={{ borderColor: `${typeColor}60`, color: typeColor }}>
             {entity.type}
           </Badge>
           <span className="text-xs text-muted-foreground/80">
@@ -170,22 +164,15 @@ export default function EntityDetailPage() {
                   onClick={() => handleToggleDoc(docId)}
                   className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-card/50 transition-colors text-left"
                 >
-                  <span
-                    className="w-1 h-6 rounded-full shrink-0"
-                    style={{ backgroundColor: isExpanded ? typeColor : "transparent" }}
-                  />
-                  <span className="text-xs text-foreground/90 flex-1 truncate">
-                    {doc?.title || docId}
-                  </span>
+                  <span className="w-1 h-6 rounded-full shrink-0" style={{ backgroundColor: isExpanded ? typeColor : "transparent" }} />
+                  <span className="text-xs text-foreground/90 flex-1 truncate">{doc?.title || docId}</span>
                   <Badge variant="outline" className="text-[9px] border-border/30 text-muted-foreground/80">
                     {sourcesInDoc[0]?.extraction_pass || "unknown"}
                   </Badge>
                   <span className="text-[10px] text-muted-foreground/80 w-16 text-right">
                     {sourcesInDoc.length} mention{sourcesInDoc.length !== 1 ? "s" : ""}
                   </span>
-                  <span className="text-muted-foreground/80 text-xs">
-                    {isExpanded ? "▲" : "▼"}
-                  </span>
+                  <span className="text-muted-foreground/80 text-xs">{isExpanded ? "▲" : "▼"}</span>
                 </button>
 
                 {isExpanded && (
@@ -197,16 +184,8 @@ export default function EntityDetailPage() {
                       <div className="text-[10px] text-muted-foreground/80 py-3">No context snippets available</div>
                     )}
                     {snippetData && !snippetData.loading && snippetData.snippets.map((snippet, i) => (
-                      <div
-                        key={i}
-                        className="py-2 border-b border-border/10 last:border-0"
-                      >
-                        <HighlightedSnippet
-                          text={snippet}
-                          entityName={entity.canonical_name}
-                          mergeHistory={entity.merge_history}
-                          color={typeColor}
-                        />
+                      <div key={i} className="py-2 border-b border-border/10 last:border-0">
+                        <HighlightedSnippet text={snippet} entityName={entity.canonical_name} mergeHistory={entity.merge_history} color={typeColor} />
                       </div>
                     ))}
                   </div>
@@ -220,18 +199,7 @@ export default function EntityDetailPage() {
   );
 }
 
-function HighlightedSnippet({
-  text,
-  entityName,
-  mergeHistory,
-  color,
-}: {
-  text: string;
-  entityName: string;
-  mergeHistory: string[];
-  color: string;
-}) {
-  // Highlight the entity name within the snippet
+function HighlightedSnippet({ text, entityName, mergeHistory, color }: { text: string; entityName: string; mergeHistory: string[]; color: string }) {
   const names = [entityName, ...mergeHistory].filter(Boolean);
   const pattern = names.map((n) => `(?<!\\w)${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?!\\w)`).join("|");
 
@@ -250,16 +218,7 @@ function HighlightedSnippet({
         const isMatch = names.some((n) => part.toLowerCase() === n.toLowerCase());
         if (isMatch) {
           return (
-            <span
-              key={i}
-              style={{
-                color: "#ffffff",
-                background: `${color}40`,
-                borderBottom: `1.5px solid ${color}`,
-                borderRadius: "2px",
-                padding: "0 2px",
-              }}
-            >
+            <span key={i} style={{ color: "#ffffff", background: `${color}40`, borderBottom: `1.5px solid ${color}`, borderRadius: "2px", padding: "0 2px" }}>
               {part}
             </span>
           );

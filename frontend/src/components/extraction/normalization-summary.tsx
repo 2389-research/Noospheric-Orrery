@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 
 interface NormalizationSummaryProps {
   data: {
@@ -18,6 +19,7 @@ const METHOD_LABELS: Record<string, { label: string; sub: string }> = {
 };
 
 export function NormalizationSummary({ data }: NormalizationSummaryProps) {
+  const noosphereId = useNoosphereId();
   if (!data) {
     return (
       <div className="border border-border/30 rounded overflow-hidden">
@@ -77,7 +79,7 @@ export function NormalizationSummary({ data }: NormalizationSummaryProps) {
             </div>
             {data.pending_reviews > 0 && (
               <Link
-                href="/pipeline"
+                href={`/n/${noosphereId}/pipeline`}
                 className="text-[9px] tracking-[1px] text-cyan-400/80 hover:text-cyan-400 border border-cyan-500/30 rounded px-2 py-0.5 transition-colors"
               >
                 review →
