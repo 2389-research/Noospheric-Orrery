@@ -1,12 +1,14 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { StatsBar } from "@/components/stats-bar";
 import { DomainTree } from "@/components/domain-tree";
 import { NormalizationPanel } from "@/components/normalization-panel";
 import { api } from "@/lib/api";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
+import { useDemoMode } from "@/lib/hooks/use-demo-mode";
 import type { Stats, DomainInfo, JobInfo } from "@/lib/types";
 
 const jobStatusStyle: Record<string, string> = {
@@ -84,6 +86,14 @@ function timeSince(dateStr: string): string {
 
 export default function PipelinePage() {
   const noosphereId = useNoosphereId();
+  const isDemo = useDemoMode();
+  const router = useRouter();
+
+  // Redirect demo users to orrery
+  if (isDemo) {
+    router.replace(`/n/${noosphereId}/orrery`);
+    return null;
+  }
   const [stats, setStats] = useState<Stats | null>(null);
   const [domains, setDomains] = useState<DomainInfo[]>([]);
   const [jobs, setJobs] = useState<JobInfo[]>([]);
