@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { EntityWithNew } from "@/lib/types";
+import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 
 const TYPE_COLORS: Record<string, { bg: string; text: string }> = {
   Person:       { bg: "#1a2a3a", text: "#378ADD" },
@@ -26,8 +27,9 @@ function TypeBadge({ type }: { type: string }) {
 }
 
 function EntityCard({ entity }: { entity: EntityWithNew }) {
+  const noosphereId = useNoosphereId();
   return (
-    <Link href={`/entities/${entity.id}`}>
+    <Link href={`/n/${noosphereId}/entities/${entity.id}`}>
       <div
         className={`border border-border/30 rounded p-2.5 hover:bg-card/40 transition-colors cursor-pointer h-full flex flex-col justify-between gap-1.5 ${
           entity.is_new ? "border-l-2 border-l-emerald-500" : ""

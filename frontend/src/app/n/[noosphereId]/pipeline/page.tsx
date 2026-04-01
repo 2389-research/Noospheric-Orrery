@@ -6,6 +6,7 @@ import { StatsBar } from "@/components/stats-bar";
 import { DomainTree } from "@/components/domain-tree";
 import { NormalizationPanel } from "@/components/normalization-panel";
 import { api } from "@/lib/api";
+import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 import type { Stats, DomainInfo, JobInfo } from "@/lib/types";
 
 const jobStatusStyle: Record<string, string> = {
@@ -15,13 +16,13 @@ const jobStatusStyle: Record<string, string> = {
   failed: "border-red-500/40 text-red-400",
 };
 
-function getJobLink(j: JobInfo): string | null {
-  if (j.type.startsWith("simmer")) return `/simmer/${j.id}`;
-  if (j.type === "extract_batch") return `/extraction/${j.id}`;
+function getJobLink(j: JobInfo, noosphereId: string): string | null {
+  if (j.type.startsWith("simmer")) return `/n/${noosphereId}/simmer/${j.id}`;
+  if (j.type === "extract_batch") return `/n/${noosphereId}/extraction/${j.id}`;
   return null;
 }
 
-function ActiveJobs({ jobs }: { jobs: JobInfo[] }) {
+function ActiveJobs({ jobs, noosphereId }: { jobs: JobInfo[]; noosphereId: string }) {
   const active = jobs.filter((j) => j.status === "running" || j.status === "queued");
   const recent = jobs.filter((j) => j.status === "completed" || j.status === "failed").slice(0, 3);
 
@@ -30,7 +31,7 @@ function ActiveJobs({ jobs }: { jobs: JobInfo[] }) {
   return (
     <div className="space-y-1.5">
       {active.map((j) => {
-        const link = getJobLink(j);
+        const link = getJobLink(j, noosphereId);
         const isExtract = j.type === "extract_batch";
         const inner = (
           <div key={j.id} className={`flex items-center gap-3 border border-cyan-500/20 rounded px-3 py-2 bg-cyan-500/5 ${link ? "cursor-pointer hover:bg-cyan-500/10 transition-colors" : ""}`}>
@@ -49,7 +50,7 @@ function ActiveJobs({ jobs }: { jobs: JobInfo[] }) {
         );
       })}
       {recent.map((j) => {
-        const link = getJobLink(j);
+        const link = getJobLink(j, noosphereId);
         const isExtract = j.type === "extract_batch";
         const row = (
           <div className={`flex items-center gap-3 px-3 py-1.5 text-xs ${link ? "cursor-pointer hover:bg-card/50 transition-colors rounded" : ""}`}>
@@ -82,6 +83,7 @@ function timeSince(dateStr: string): string {
 }
 
 export default function PipelinePage() {
+  const noosphereId = useNoosphereId();
   const [stats, setStats] = useState<Stats | null>(null);
   const [domains, setDomains] = useState<DomainInfo[]>([]);
   const [jobs, setJobs] = useState<JobInfo[]>([]);
@@ -95,16 +97,9 @@ export default function PipelinePage() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      {/* Header */}
       <h1 className="text-sm tracking-[4px] text-muted-foreground uppercase">Pipeline</h1>
-
-      {/* Stats row */}
       <StatsBar stats={stats} />
-
-      {/* Active jobs — prominent if running */}
-      <ActiveJobs jobs={jobs} />
-
-      {/* Two-column layout: domains + normalization */}
+      <ActiveJobs jobs={jobs} noosphereId={noosphereId} />
       <div className="grid grid-cols-2 gap-6">
         <section>
           <h2 className="text-xs tracking-[3px] text-muted-foreground/85 uppercase mb-3">Domains</h2>

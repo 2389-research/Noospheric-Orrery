@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
+import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 import { ReaderPane } from "@/components/reader/reader-pane";
 
 export default function StarPage() {
@@ -14,6 +15,7 @@ export default function StarPage() {
 
 function StarPageInner() {
   const searchParams = useSearchParams();
+  const noosphereId = useNoosphereId();
   const entity = searchParams.get("entity") || "";
 
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
@@ -30,7 +32,7 @@ function StarPageInner() {
       } else if (e.data?.type === "node_cleared") {
         setSelectedDocId(null);
       } else if (e.data?.type === "navigate_galaxy") {
-        window.location.href = "/viz";
+        window.location.href = `/n/${noosphereId}/orrery`;
       }
     };
     window.addEventListener("message", handler);
@@ -139,7 +141,7 @@ function StarPageInner() {
                 `/viz/star.html?entity=${encodeURIComponent(entityId)}`
               );
               // Update URL without full page reload
-              window.history.pushState({}, '', `/viz/star?entity=${encodeURIComponent(entityId)}`);
+              window.history.pushState({}, '', `/n/${noosphereId}/orrery/star?entity=${encodeURIComponent(entityId)}`);
             }}
           />
         </div>

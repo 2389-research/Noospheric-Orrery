@@ -118,4 +118,32 @@ export const api = {
       }[];
       total_mentions: number;
     }>(`/documents/${docId}/reader`),
+
+  // Workspace CRUD
+  createWorkspace: (name: string, description: string = "") =>
+    fetchAPI<{ workspaceId: string; name: string }>("/workspaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, description }),
+    }),
+  updateWorkspace: (id: string, name: string) =>
+    fetchAPI<{ updated: boolean }>(`/workspaces/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
+  archiveWorkspace: (id: string) =>
+    fetchAPI<{ archived: boolean }>(`/workspaces/${id}`, { method: "DELETE" }),
+
+  // Invites
+  getInvites: () =>
+    fetchAPI<{ id: string; email: string; role: string; createdAt: string; status: string }[]>("/invites"),
+  createInvite: (email: string, role: string) =>
+    fetchAPI<{ inviteId: string; email: string; role: string }>("/invites", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, role }),
+    }),
+  revokeInvite: (id: string) =>
+    fetchAPI<{ revoked: boolean }>(`/invites/${id}`, { method: "DELETE" }),
 };

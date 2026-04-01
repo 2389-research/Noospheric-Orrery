@@ -2,6 +2,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { EntityTable } from "@/components/entity-table";
 import { api } from "@/lib/api";
+import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 import type { EntitySummary } from "@/lib/types";
 
 const TYPE_COLORS: Record<string, string> = {
@@ -24,12 +25,12 @@ const TYPE_COLORS: Record<string, string> = {
 };
 
 export default function EntitiesPage() {
+  const noosphereId = useNoosphereId();
   const [entities, setEntities] = useState<EntitySummary[]>([]);
   const [allEntities, setAllEntities] = useState<EntitySummary[]>([]);
   const [typeFilter, setTypeFilter] = useState("");
   const [searchFilter, setSearchFilter] = useState("");
 
-  // Load all entities
   useEffect(() => {
     api.getEntities({ limit: 2000 }).then((data) => {
       setAllEntities(data);
@@ -37,7 +38,6 @@ export default function EntitiesPage() {
     }).catch(console.error);
   }, []);
 
-  // Apply filters
   useEffect(() => {
     let filtered = allEntities;
     if (typeFilter) {
@@ -50,32 +50,26 @@ export default function EntitiesPage() {
     setEntities(filtered);
   }, [typeFilter, searchFilter, allEntities]);
 
-  // Compute stats
   const typeCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const e of allEntities) {
       counts[e.type] = (counts[e.type] || 0) + 1;
     }
-    return Object.entries(counts)
-      .sort((a, b) => b[1] - a[1]);
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
   }, [allEntities]);
 
   const topEntities = useMemo(() => {
-    return [...allEntities]
-      .sort((a, b) => b.source_count - a.source_count)
-      .slice(0, 5);
+    return [...allEntities].sort((a, b) => b.source_count - a.source_count).slice(0, 5);
   }, [allEntities]);
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      {/* Dashboard header */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h1 className="text-sm tracking-[4px] text-muted-foreground uppercase">Entities</h1>
           <span className="text-xs text-muted-foreground/60">{allEntities.length} total</span>
         </div>
 
-        {/* Stats row */}
         <div className="grid grid-cols-4 gap-3">
           <div className="rounded border border-border/30 p-3">
             <div className="text-[9px] tracking-[2px] text-muted-foreground/60 uppercase mb-1">Total</div>
@@ -97,7 +91,6 @@ export default function EntitiesPage() {
           </div>
         </div>
 
-        {/* Type distribution — clickable bars */}
         <div className="rounded border border-border/30 p-3">
           <div className="text-[9px] tracking-[2px] text-muted-foreground/60 uppercase mb-3">By Type</div>
           <div className="space-y-1.5">
@@ -106,55 +99,29 @@ export default function EntitiesPage() {
               const isActive = typeFilter === type;
               const color = TYPE_COLORS[type] || "#8A8A8A";
               return (
-                <button
-                  key={type}
-                  onClick={() => setTypeFilter(isActive ? "" : type)}
-                  className="w-full flex items-center gap-2 group"
-                >
-                  <span
-                    className="w-2 h-2 rounded-full shrink-0"
-                    style={{ background: color, opacity: isActive ? 1 : 0.6 }}
-                  />
-                  <span className={`text-[11px] w-28 text-left truncate transition-colors ${
-                    isActive ? "text-foreground" : "text-muted-foreground/70 group-hover:text-muted-foreground"
-                  }`}>
-                    {type}
-                  </span>
+                <button key={type} onClick={() => setTypeFilter(isActive ? "" : type)} className="w-full flex items-center gap-2 group">
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color, opacity: isActive ? 1 : 0.6 }} />
+                  <span className={`text-[11px] w-28 text-left truncate transition-colors ${isActive ? "text-foreground" : "text-muted-foreground/70 group-hover:text-muted-foreground"}`}>{type}</span>
                   <div className="flex-1 h-3 bg-card/30 rounded-sm overflow-hidden">
-                    <div
-                      className="h-full rounded-sm transition-all"
-                      style={{
-                        width: `${pct}%`,
-                        background: color,
-                        opacity: isActive ? 0.5 : 0.2,
-                      }}
-                    />
+                    <div className="h-full rounded-sm transition-all" style={{ width: `${pct}%`, background: color, opacity: isActive ? 0.5 : 0.2 }} />
                   </div>
-                  <span className={`text-[10px] w-8 text-right shrink-0 ${
-                    isActive ? "text-foreground/80" : "text-muted-foreground/50"
-                  }`}>
-                    {count}
-                  </span>
+                  <span className={`text-[10px] w-8 text-right shrink-0 ${isActive ? "text-foreground/80" : "text-muted-foreground/50"}`}>{count}</span>
                 </button>
               );
             })}
           </div>
         </div>
 
-        {/* Top entities */}
         <div className="rounded border border-border/30 p-3">
           <div className="text-[9px] tracking-[2px] text-muted-foreground/60 uppercase mb-2">Top Entities by References</div>
           <div className="flex gap-3 flex-wrap">
             {topEntities.map((e) => (
               <a
                 key={e.id}
-                href={`/entities/${e.id}`}
+                href={`/n/${noosphereId}/entities/${e.id}`}
                 className="flex items-center gap-1.5 px-2 py-1 rounded border border-border/20 hover:border-border/50 transition-colors"
               >
-                <span
-                  className="w-1.5 h-1.5 rounded-full shrink-0"
-                  style={{ background: TYPE_COLORS[e.type] || "#8A8A8A" }}
-                />
+                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: TYPE_COLORS[e.type] || "#8A8A8A" }} />
                 <span className="text-[11px] text-foreground/80">{e.canonical_name}</span>
                 <span className="text-[9px] text-muted-foreground/50">{e.source_count}</span>
               </a>
@@ -163,7 +130,6 @@ export default function EntitiesPage() {
         </div>
       </div>
 
-      {/* Filters + table */}
       <div className="space-y-3">
         <div className="flex items-center gap-3">
           <input
@@ -184,17 +150,12 @@ export default function EntitiesPage() {
             ))}
           </select>
           {(typeFilter || searchFilter) && (
-            <button
-              onClick={() => { setTypeFilter(""); setSearchFilter(""); }}
-              className="text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
-            >
+            <button onClick={() => { setTypeFilter(""); setSearchFilter(""); }} className="text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors">
               clear
             </button>
           )}
         </div>
-        <div className="text-[10px] text-muted-foreground/50">
-          Showing {entities.length} of {allEntities.length}
-        </div>
+        <div className="text-[10px] text-muted-foreground/50">Showing {entities.length} of {allEntities.length}</div>
         <EntityTable entities={entities} />
       </div>
     </div>

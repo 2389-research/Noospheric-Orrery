@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 
 const ENTITY_COLORS: Record<string, string> = {
   Person: "#378ADD",
@@ -67,6 +68,7 @@ interface DomainPanelContentProps {
 }
 
 export function DomainPanelContent({ data, domainColor, onNavigateEntity, onNavigateDomain }: DomainPanelContentProps) {
+  const noosphereId = useNoosphereId();
   const [topEntities, setTopEntities] = useState<TopEntity[]>([]);
   const [specStatus, setSpecStatus] = useState<SpecStatus>({ exists: false, version: null, simmeredAt: null, isRunning: false });
   const [entityCount, setEntityCount] = useState<number | null>(null);
@@ -235,7 +237,7 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity, onNavi
             <span style={{ color: "rgba(200,215,235,0.85)" }}>
               simmering now…{" "}
               {specStatus.jobId && (
-                <a href={`/simmer/${specStatus.jobId}`} style={{ color: "rgba(100,180,255,0.6)", textDecoration: "none" }}>
+                <a href={`/n/${noosphereId}/simmer/${specStatus.jobId}`} style={{ color: "rgba(100,180,255,0.6)", textDecoration: "none" }}>
                   view
                 </a>
               )}
@@ -361,7 +363,7 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity, onNavi
       {/* Footer */}
       <div style={{ padding: "12px 16px", display: "flex", gap: 14, alignItems: "center" }}>
         <a
-          href={`/documents?domain=${encodeURIComponent(data.path)}`}
+          href={`/n/${noosphereId}/pipeline`}
           style={{
             fontSize: 11,
             color: "rgba(100,180,255,0.7)",
