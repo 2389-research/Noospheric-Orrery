@@ -12,6 +12,7 @@ dependencies = [
     "numpy>=1.26.0",
     "faiss-cpu>=1.7.0",
     "mcp>=1.0.0",
+    "orrery-relay",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +21,9 @@ dev = [
     "pytest-asyncio>=0.24",
     "httpx>=0.27",
 ]
+
+[tool.uv.sources]
+orrery-relay = { path = "../packages/orrery-relay" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

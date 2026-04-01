@@ -4,8 +4,6 @@ import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { GalaxyPanel } from "@/components/galaxy/galaxy-panel";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8100";
-
 interface SelectedNode {
   nodeType: string;
   data: Record<string, unknown>;
@@ -58,7 +56,7 @@ function SystemPageInner() {
 
   // WebSocket
   useEffect(() => {
-    const wsUrl = API_URL.replace("http", "ws") + "/ws";
+    const wsUrl = (window.location.protocol === "https:" ? "wss:" : "ws:") + "//" + window.location.host + "/api/ws";
     let ws: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout>;
     function connect() {
@@ -84,7 +82,7 @@ function SystemPageInner() {
     setSearching(true);
     setSelectedNode(null);
     try {
-      const resp = await fetch(`${API_URL}/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20`);
+      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20`);
       const results: SearchResult = await resp.json();
       setSearchResults(results);
       if (results.entities.length > 0) {

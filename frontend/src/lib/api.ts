@@ -1,7 +1,5 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8100";
-
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, options);
+  const res = await fetch(`/api${path}`, options);
   if (!res.ok) throw new Error(`API error: ${res.status} ${await res.text()}`);
   return res.json();
 }

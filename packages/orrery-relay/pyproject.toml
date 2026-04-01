@@ -1,26 +1,19 @@
 [project]
-name = "orrery-worker"
+name = "orrery-relay"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic[bedrock]>=0.40.0",
-    "sentence-transformers>=3.0.0",
-    # simmer-sdk: install from PyPI or local path (see worker/Dockerfile)
-    # "simmer-sdk>=0.2.0",
-    "orrery-relay",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
 ]
 
-[tool.uv.sources]
-orrery-relay = { path = "../packages/orrery-relay" }
-
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["src/orrery_relay"]
 
 [build-system]
 requires = ["hatchling"]

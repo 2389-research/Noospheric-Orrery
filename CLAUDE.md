@@ -110,29 +110,38 @@ The frontend reads `NEXT_PUBLIC_API_URL` at build/runtime. In Docker, it's set t
 
 ## Key Patterns
 
-### All Claude API Calls Go Through Bedrock
+### All Claude API Calls Go Through orrery-relay
 
-Never use direct Anthropic API. Always use `AsyncAnthropicBedrock`:
+Never instantiate Anthropic clients directly. Always use the `Relay` class from `orrery-relay`:
 
 ```python
-from anthropic import AsyncAnthropicBedrock
-client = AsyncAnthropicBedrock(
-    aws_access_key=settings.aws_access_key,
-    aws_secret_key=settings.aws_secret_key,
-    aws_region=settings.aws_region,
+from orrery_relay import Relay
+
+relay = Relay.from_settings(settings)
+response = await relay.complete(
+    model="claude-sonnet-4-6",
+    messages=[{"role": "user", "content": "..."}],
+    max_tokens=1024,
 )
+text = response.text
 ```
 
-### Model ID Format for Bedrock
+The relay supports two backends controlled by `ANTHROPIC_BACKEND` env var:
+- `gateway` (default): Routes through the Bedrock Gateway proxy at the configured `GATEWAY_URL`
+- `bedrock`: Direct AWS Bedrock access with `AWS_ACCESS_KEY`/`AWS_SECRET_KEY`
 
-Cross-region inference profile IDs include the region prefix:
+The `orrery-relay` package lives at `packages/orrery-relay/` and is a dependency of both orchestrator and worker via `[tool.uv.sources]` path reference.
+
+### Model Names
+
+Use friendly model names everywhere in config and code:
 ```
-us.anthropic.claude-sonnet-4-20250514-v1:0
-us.anthropic.claude-haiku-4-20250514-v1:0
-us.anthropic.claude-haiku-4-5-20251001-v1:0
+claude-sonnet-4-6
+claude-haiku-4-5
+claude-opus-4-6
 ```
 
-Without the `us.` prefix, Bedrock returns a 400. Check `config.py` for the current values.
+The relay handles translation to Bedrock inference profile IDs (`us.anthropic.claude-sonnet-4-20250514-v1:0`, etc.) when running in bedrock mode. Check `packages/orrery-relay/src/orrery_relay/backends.py` for the current mapping.
 
 ### simmer-sdk for Iterative Refinement
 
