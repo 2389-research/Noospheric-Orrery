@@ -4,21 +4,36 @@ Manages custom claims (orgId, role) on user JWTs,
 and signals the frontend to refresh tokens after claims change.
 """
 
+import firebase_admin
 from firebase_admin import auth
+
+
+def _ensure_firebase():
+    """Ensure Firebase Admin SDK is initialized."""
+    if not firebase_admin._apps:
+        firebase_admin.initialize_app()
 
 
 def set_user_claims(uid: str, org_id: str, role: str) -> None:
     """Set org and role on a user's JWT. Call after any membership change."""
-    auth.set_custom_user_claims(uid, {
-        "orgId": org_id,
-        "role": role,
-    })
+    _ensure_firebase()
+    try:
+        auth.set_custom_user_claims(uid, {
+            "orgId": org_id,
+            "role": role,
+        })
+    except (auth.UserNotFoundError, ValueError):
+        pass  # Dev user or invalid uid — skip claims
 
 
 def get_user_claims(uid: str) -> dict:
     """Read current custom claims for a user."""
-    user = auth.get_user(uid)
-    return user.custom_claims or {}
+    _ensure_firebase()
+    try:
+        user = auth.get_user(uid)
+        return user.custom_claims or {}
+    except (auth.UserNotFoundError, ValueError):
+        return {}
 
 
 def signal_token_refresh(db, uid: str) -> None:
