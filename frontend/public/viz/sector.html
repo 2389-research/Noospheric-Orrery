@@ -72,8 +72,13 @@ let hoveredRouteIdx = -1;
 let hoveredEntityId = null;
 
 // Load data
-const API_URL = '/api';
-fetch(`${API_URL}/graph`).then(r => r.json()).then(data => {
+const API_URL = new URLSearchParams(location.search).get('api') || '/api';
+const AUTH_TOKEN = new URLSearchParams(location.search).get('token') || '';
+const WORKSPACE_ID = new URLSearchParams(location.search).get('workspace') || '';
+const fetchHeaders = {};
+if (AUTH_TOKEN) fetchHeaders['Authorization'] = `Bearer ${AUTH_TOKEN}`;
+if (WORKSPACE_ID) fetchHeaders['X-Workspace-Id'] = WORKSPACE_ID;
+fetch(`${API_URL}/graph`, { headers: fetchHeaders }).then(r => r.json()).then(data => {
   buildSectorView(data);
 });
 

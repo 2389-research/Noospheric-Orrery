@@ -316,7 +316,7 @@ export default function VizPage() {
       {viewMode === "star" && starEntityId && (
         <iframe
           ref={starRef}
-          src={`/viz/star.html?entity=${encodeURIComponent(starEntityId)}&api=${encodeURIComponent("/api")}`}
+          src={`/viz/star.html?entity=${encodeURIComponent(starEntityId)}&api=${encodeURIComponent("/api")}${authToken ? `&token=${encodeURIComponent(authToken)}` : ""}&workspace=${encodeURIComponent(noosphereId)}`}
           style={{
             width: "100%", height: "100%", border: "none",
             position: "absolute", top: 0, left: 0,

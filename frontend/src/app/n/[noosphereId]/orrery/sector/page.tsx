@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
+import { getAuthToken } from "@/lib/firebase";
 import { GalaxyPanel } from "@/components/galaxy/galaxy-panel";
 
 interface SelectedNode {
@@ -37,11 +38,16 @@ function SectorPageInner() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult | null>(null);
   const [searching, setSearching] = useState(false);
+  const [authToken, setAuthToken] = useState("");
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
+  useEffect(() => {
+    getAuthToken().then(t => { if (t) setAuthToken(t); }).catch(() => {});
+  }, []);
+
   const iframeSrc = domain
-    ? `/viz/sector.html?domain=${encodeURIComponent(domain)}`
-    : `/viz/sector.html?cluster=${cluster}`;
+    ? `/viz/sector.html?domain=${encodeURIComponent(domain)}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}`
+    : `/viz/sector.html?cluster=${cluster}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}`;
 
   // Listen for postMessage
   useEffect(() => {
@@ -95,7 +101,11 @@ function SectorPageInner() {
     setSearching(true);
     setSelectedNode(null);
     try {
-      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20`);
+      const token = await getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      if (noosphereId) headers["X-Workspace-Id"] = noosphereId;
+      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20&expand=false`, { headers });
       const results: SearchResult = await resp.json();
       setSearchResults(results);
 

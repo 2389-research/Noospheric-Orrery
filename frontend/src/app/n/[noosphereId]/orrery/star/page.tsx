@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
+import { getAuthToken } from "@/lib/firebase";
 import { ReaderPane } from "@/components/reader/reader-pane";
 
 export default function StarPage() {
@@ -21,9 +22,14 @@ function StarPageInner() {
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searching, setSearching] = useState(false);
+  const [authToken, setAuthToken] = useState("");
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  const iframeSrc = `/viz/star.html?entity=${encodeURIComponent(entity)}`;
+  useEffect(() => {
+    getAuthToken().then(t => { if (t) setAuthToken(t); }).catch(() => {});
+  }, []);
+
+  const iframeSrc = `/viz/star.html?entity=${encodeURIComponent(entity)}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}`;
 
   useEffect(() => {
     const handler = (e: MessageEvent) => {
@@ -66,7 +72,11 @@ function StarPageInner() {
     if (!searchQuery.trim()) return;
     setSearching(true);
     try {
-      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20`);
+      const token = await getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      if (noosphereId) headers["X-Workspace-Id"] = noosphereId;
+      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20&expand=false`, { headers });
       const results = await resp.json();
       // Forward entity names + doc IDs from chunks to the viz
       const entityNames = (results.entities || []).slice(0, 10).map((e: { name: string }) => e.name);
@@ -138,7 +148,7 @@ function StarPageInner() {
               setSelectedDocId(null);
               // Navigate star view to this entity
               iframeRef.current?.contentWindow?.location.replace(
-                `/viz/star.html?entity=${encodeURIComponent(entityId)}`
+                `/viz/star.html?entity=${encodeURIComponent(entityId)}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}`
               );
               // Update URL without full page reload
               window.history.pushState({}, '', `/n/${noosphereId}/orrery/star?entity=${encodeURIComponent(entityId)}`);
