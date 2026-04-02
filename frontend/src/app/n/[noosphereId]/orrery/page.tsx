@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { GalaxyPanel } from "@/components/galaxy/galaxy-panel";
 import { ReaderPane } from "@/components/reader/reader-pane";
 import { api } from "@/lib/api";
+import { getAuthToken } from "@/lib/firebase";
 
 interface SelectedNode {
   nodeType: string;
@@ -36,8 +37,14 @@ export default function VizPage() {
   const [searchResults, setSearchResults] = useState<SearchResult | null>(null);
   const [searching, setSearching] = useState(false);
   const [fading, setFading] = useState(false);
+  const [authToken, setAuthToken] = useState<string>("");
   const galaxyRef = useRef<HTMLIFrameElement>(null);
   const starRef = useRef<HTMLIFrameElement>(null);
+
+  // Get auth token for iframe API calls
+  useEffect(() => {
+    getAuthToken().then(t => { if (t) setAuthToken(t); }).catch(() => {});
+  }, []);
 
   // Current iframe ref
   const activeRef = viewMode === "star" ? starRef : galaxyRef;
@@ -289,7 +296,7 @@ export default function VizPage() {
       {/* Galaxy/Sector iframe (always mounted, hidden when in star mode) */}
       <iframe
         ref={galaxyRef}
-        src={`/viz/index.html?api=${encodeURIComponent("/api")}`}
+        src={`/viz/index.html?api=${encodeURIComponent("/api")}${authToken ? `&token=${encodeURIComponent(authToken)}` : ""}`}
         style={{
           width: "100%", height: "100%", border: "none",
           position: "absolute", top: 0, left: 0,

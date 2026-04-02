@@ -50,6 +50,12 @@ async def run():
         if job_type == "simmer_general":
             from worker.jobs.simmer_general import run_simmer_general
             await run_simmer_general(db, workspace_id, job_id, job)
+        elif job_type == "simmer_golden_set":
+            from worker.jobs.simmer_general import run_simmer_golden_set
+            await run_simmer_golden_set(db, workspace_id, job_id, job)
+        elif job_type == "simmer_extraction_spec":
+            from worker.jobs.simmer_general import run_simmer_extraction_spec
+            await run_simmer_extraction_spec(db, workspace_id, job_id, job)
         elif job_type == "simmer_domain":
             from worker.jobs.simmer_domain import run_simmer_domain
             await run_simmer_domain(db, workspace_id, job_id, job)

@@ -1,7 +1,12 @@
 """General spec simmering via simmer-sdk, Firestore-aware.
 
-Reads sample docs from Firestore, runs simmer refinement loop,
-writes spec + iterations + criterion details back to Firestore.
+Split into two independent phases:
+  1. simmer_golden_set — refines the entity taxonomy (golden set)
+  2. simmer_extraction_spec — refines the extraction prompt using the golden set
+
+Each phase runs as a separate Cloud Run Job execution with its own
+timeout and resource allocation. Phase 1 saves its output to Firestore
+and queues Phase 2. Phase 2 reads the golden set and produces the final spec.
 """
 import os
 import uuid
@@ -125,40 +130,47 @@ def _make_iteration_recorder(db: firestore.Client, workspace_id: str, job_id: st
     return on_iteration
 
 
-async def run_simmer_general(db: firestore.Client, workspace_id: str, job_id: str, job: dict):
-    """Run general spec simmering."""
-    # Get sample documents from Firestore
+def _get_sample_dir(db: firestore.Client, workspace_id: str, tmpdir: str) -> Path:
+    """Write sample docs to temp directory for simmer-sdk."""
     doc_col = db.collection(f"workspaces/{workspace_id}/documents")
     docs = list(doc_col.where("status", "in", ["classified", "extracted", "enriched"]).limit(10).stream())
 
     if not docs:
-        raise ValueError("No documents available to simmer general spec")
+        raise ValueError("No documents available for simmering")
 
-    # Write sample docs to temp directory (simmer-sdk reads from disk)
+    sample_dir = Path(tmpdir) / "samples"
+    sample_dir.mkdir()
+    for doc in docs:
+        d = doc.to_dict()
+        (sample_dir / f"{doc.id}.txt").write_text(d.get("content", ""))
+
+    return sample_dir
+
+
+def _get_bedrock_kwargs():
+    return {
+        "api_provider": "bedrock",
+        "aws_access_key": os.environ.get("AWS_ACCESS_KEY", ""),
+        "aws_secret_key": os.environ.get("AWS_SECRET_KEY", ""),
+        "aws_region": os.environ.get("AWS_REGION", "us-east-1"),
+    }
+
+
+# ── Phase 1: Golden Set ──────────────────────────────────────
+
+async def run_simmer_golden_set(db: firestore.Client, workspace_id: str, job_id: str, job: dict):
+    """Run golden set refinement. Saves result to Firestore and queues extraction spec phase."""
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        sample_dir = Path(tmpdir) / "samples"
-        sample_dir.mkdir()
-        for doc in docs:
-            d = doc.to_dict()
-            (sample_dir / f"{doc.id}.txt").write_text(d.get("content", ""))
-
+        sample_dir = _get_sample_dir(db, workspace_id, tmpdir)
         seed_path = Path(tmpdir) / "seed.md"
         seed_path.write_text(SEED_ONTOLOGY)
 
-        bedrock_kwargs = {
-            "api_provider": "bedrock",
-            "aws_access_key": os.environ.get("AWS_ACCESS_KEY", ""),
-            "aws_secret_key": os.environ.get("AWS_SECRET_KEY", ""),
-            "aws_region": os.environ.get("AWS_REGION", "us-east-1"),
-        }
-
         iterations = int(os.environ.get("SIMMER_ITERATIONS", "5"))
         golden_dir = Path(tmpdir) / "golden"
-        spec_dir = Path(tmpdir) / "spec"
 
-        print(f"Simmering general spec (job {job_id})", flush=True)
+        print(f"Phase 1: Golden set (job {job_id})", flush=True)
 
-        # Phase 1: Golden set
         golden_result = await refine(
             artifact=str(seed_path),
             criteria={
@@ -178,12 +190,65 @@ async def run_simmer_general(db: firestore.Client, workspace_id: str, job_id: st
             judge_model="claude-sonnet-4-6",
             background=f"Sample documents are in {sample_dir}. Read them to understand what entity types exist in this corpus.",
             on_iteration=_make_iteration_recorder(db, workspace_id, job_id, "golden_set", str(golden_dir)),
-            **bedrock_kwargs,
+            **_get_bedrock_kwargs(),
         )
 
-        # Phase 2: Extraction spec
+    # Save golden set artifact to Firestore
+    golden_ref = db.collection(f"workspaces/{workspace_id}/specs").document("golden_set_latest")
+    golden_ref.set({
+        "type": "golden_set",
+        "content": golden_result.best_candidate,
+        "score": golden_result.composite,
+        "bestIteration": golden_result.best_iteration,
+        "createdAt": datetime.now(timezone.utc),
+        "jobId": job_id,
+    })
+
+    # Queue extraction spec phase
+    spec_job_id = str(uuid.uuid4())
+    db.collection(f"workspaces/{workspace_id}/jobs").document(spec_job_id).set({
+        "type": "simmer_extraction_spec",
+        "target": "general",
+        "status": "queued",
+        "config": {"golden_set_job_id": job_id},
+        "createdAt": datetime.now(timezone.utc),
+    })
+
+    # Update this job's result
+    db.collection(f"workspaces/{workspace_id}/jobs").document(job_id).update({
+        "result": {
+            "golden_score": golden_result.composite,
+            "next_job_id": spec_job_id,
+        }
+    })
+
+    print(f"Golden set complete! Score: {golden_result.composite}/10, queued extraction spec job {spec_job_id}", flush=True)
+
+
+# ── Phase 2: Extraction Spec ─────────────────────────────────
+
+async def run_simmer_extraction_spec(db: firestore.Client, workspace_id: str, job_id: str, job: dict):
+    """Run extraction spec refinement using the golden set from Phase 1."""
+
+    # Read golden set from Firestore
+    golden_doc = db.collection(f"workspaces/{workspace_id}/specs").document("golden_set_latest").get()
+    if not golden_doc.exists:
+        raise ValueError("No golden set found — run simmer_golden_set first")
+
+    golden_data = golden_doc.to_dict()
+    golden_content = golden_data["content"]
+    print(f"Using golden set (score {golden_data.get('score')}): {golden_content[:100]}...", flush=True)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        sample_dir = _get_sample_dir(db, workspace_id, tmpdir)
+
+        iterations = int(os.environ.get("SIMMER_ITERATIONS", "5"))
+        spec_dir = Path(tmpdir) / "spec"
+
+        print(f"Phase 2: Extraction spec (job {job_id})", flush=True)
+
         spec_result = await refine(
-            artifact=golden_result.best_candidate,
+            artifact=golden_content,
             criteria={
                 "coverage": "When run on sample docs, the spec finds all entities from the golden set",
                 "precision": "Zero false positives",
@@ -200,27 +265,25 @@ async def run_simmer_general(db: firestore.Client, workspace_id: str, job_id: st
             generator_model="claude-sonnet-4-6",
             judge_model="claude-sonnet-4-6",
             clerk_model="claude-haiku-4-5",
-            background=f"This spec will be executed by Haiku. Golden set: {golden_result.best_candidate[:2000]}",
+            background=f"This spec will be executed by Haiku. Golden set: {golden_content[:2000]}",
             on_iteration=_make_iteration_recorder(db, workspace_id, job_id, "extraction_spec", str(spec_dir)),
-            **bedrock_kwargs,
+            **_get_bedrock_kwargs(),
         )
 
-    # Store spec in Firestore
+    # Store final spec
     spec_id = str(uuid.uuid4())
-    spec_col = db.collection(f"workspaces/{workspace_id}/specs")
-    spec_col.document(spec_id).set({
-        "domainPath": None,  # general spec
+    db.collection(f"workspaces/{workspace_id}/specs").document(spec_id).set({
+        "domainPath": None,
         "version": 1,
         "specContent": spec_result.best_candidate,
-        "goldenSet": golden_result.best_candidate,
+        "goldenSet": golden_content,
         "score": spec_result.composite,
         "createdAt": datetime.now(timezone.utc),
     })
 
-    # Queue batch extraction job
+    # Queue batch extraction
     batch_job_id = str(uuid.uuid4())
-    job_col = db.collection(f"workspaces/{workspace_id}/jobs")
-    job_col.document(batch_job_id).set({
+    db.collection(f"workspaces/{workspace_id}/jobs").document(batch_job_id).set({
         "type": "extract_batch",
         "target": "general",
         "status": "queued",
@@ -231,15 +294,24 @@ async def run_simmer_general(db: firestore.Client, workspace_id: str, job_id: st
         "completedAt": None,
     })
 
-    # Update job result
-    job_ref = db.collection(f"workspaces/{workspace_id}/jobs").document(job_id)
-    job_ref.update({
+    # Update this job's result
+    db.collection(f"workspaces/{workspace_id}/jobs").document(job_id).update({
         "result": {
             "spec_id": spec_id,
-            "golden_score": golden_result.composite,
             "spec_score": spec_result.composite,
             "batch_job_id": batch_job_id,
         }
     })
 
-    print(f"General spec simmered! Score: {spec_result.composite}/10, queued batch extraction {batch_job_id}", flush=True)
+    print(f"Extraction spec complete! Score: {spec_result.composite}/10, queued batch extraction {batch_job_id}", flush=True)
+
+
+# ── Legacy: Combined run (kept for backwards compat) ──────────
+
+async def run_simmer_general(db: firestore.Client, workspace_id: str, job_id: str, job: dict):
+    """Legacy combined run — golden set + extraction spec in one job."""
+    await run_simmer_golden_set(db, workspace_id, job_id, job)
+    # Read back the queued spec job and run it inline
+    golden_doc = db.collection(f"workspaces/{workspace_id}/specs").document("golden_set_latest").get()
+    if golden_doc.exists:
+        await run_simmer_extraction_spec(db, workspace_id, job_id, job)
