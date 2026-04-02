@@ -5,7 +5,56 @@ so they don't get lost between sessions.
 
 ---
 
+## Cloud Pipeline: Post-Extraction Steps (SHORT TERM)
+
+**Problem:** The cloud batch extraction worker was missing several post-
+extraction steps that the local SQLite ingest path handles inline. These
+gaps cause the orrery to not render and search to not work after extraction.
+
+**What's missing / recently fixed:**
+
+| Step | Status | Notes |
+|---|---|---|
+| Entity extraction | DONE | Works in extract_batch.py |
+| Entity embeddings (Vertex AI) | DONE | In extract_batch.py |
+| Entity sources | DONE | Stored in entitySources collection |
+| Cooccurrences | ADDED 2026-04-02 | Compute from entity sources, store in relationships |
+| Domain layout positions | ADDED 2026-04-02 | Circular layout, stored in domainLayout |
+| Graph cache | ADDED 2026-04-02 | Precompute full graph JSON, store in cache/graph |
+| UMAP layout | TODO | Replace circular layout with semantic UMAP |
+| Search index rebuild | TODO | Firestore vector search needs index update |
+| Graph cache rebuild trigger | TODO | Should auto-rebuild after extraction completes |
+
+**The correct post-extraction pipeline in the worker should be:**
+
+```
+extract entities from chunks
+  → store entities + sources
+  → embed entities (Vertex AI)
+  → compute cooccurrences from sources
+  → compute domain layout (UMAP or circular)
+  → precompute graph JSON → store in cache/graph
+  → update search index
+```
+
+All of these run at the end of `extract_batch.py`. The graph cache
+is a single Firestore doc (~300KB for 800 entities) that the `/graph`
+endpoint reads directly — no live N+1 queries.
+
+**Auth for viz iframe:** The orrery viz iframe (static HTML) needs
+auth tokens + workspace ID passed via URL params. Currently works but
+tokens in URLs is not ideal long-term. Better approach: postMessage
+token exchange between parent page and iframe, or server-side proxy
+that injects auth headers.
+
+**Priority:** HIGH — these are required for the orrery to render after
+any new extraction run.
+
+---
+
 ## Simmer Worker: Split into Phase-Based Jobs
+
+**Status:** DONE (2026-04-02) — split into simmer_golden_set + simmer_extraction_spec.
 
 **Problem:** The simmer worker runs Golden Set + Extraction Spec sequentially
 in a single Cloud Run Job execution. With investigation-first judges (Claude
