@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
+import { getAuthToken } from "@/lib/firebase";
 
 const ENTITY_COLORS: Record<string, string> = {
   Person: "#378ADD",
@@ -139,7 +140,11 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity, onNavi
   useEffect(() => {
     (async () => {
       try {
-        const graphResp = await fetch(`/api/graph`);
+        const token = await getAuthToken();
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        if (noosphereId) headers["X-Workspace-Id"] = noosphereId;
+        const graphResp = await fetch(`/api/graph`, { headers });
         const graph = await graphResp.json();
         const routes = (graph.trade_routes || []).filter(
           (r: { source: string; target: string }) => r.source === data.path || r.target === data.path
@@ -158,7 +163,7 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity, onNavi
         // trade routes are optional
       }
     })();
-  }, [data.path]);
+  }, [data.path, noosphereId]);
 
   const maxCount = topEntities.length > 0 ? topEntities[0].source_count : 1;
 

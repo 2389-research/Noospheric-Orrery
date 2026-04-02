@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
+import { getAuthToken } from "@/lib/firebase";
 
 const TYPE_COLORS: Record<string, string> = {
   Person: "#378ADD",
@@ -47,27 +48,33 @@ export default function EntityDetailPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`/api/entities/${id}`)
-      .then((r) => {
+    (async () => {
+      try {
+        const token = await getAuthToken();
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        if (noosphereId) headers["X-Workspace-Id"] = noosphereId;
+
+        const r = await fetch(`/api/entities/${id}`, { headers });
         if (!r.ok) throw new Error(`${r.status}`);
-        return r.json();
-      })
-      .then(async (e) => {
+        const e = await r.json();
         setEntity(e);
         const docIds = [...new Set(e.sources.map((s: { document_id: string }) => s.document_id))];
         const docMap: Record<string, DocumentInfo> = {};
         for (const docId of docIds) {
           try {
-            const doc = await fetch(`/api/documents/${docId}`).then((r) => r.json());
+            const doc = await fetch(`/api/documents/${docId}`, { headers }).then((r) => r.json());
             docMap[docId as string] = doc;
           } catch {
             // skip
           }
         }
         setDocs(docMap);
-      })
-      .catch((e) => setError(e.message));
-  }, [id]);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to load entity");
+      }
+    })();
+  }, [id, noosphereId]);
 
   const handleToggleDoc = async (docId: string) => {
     if (expandedDoc === docId) {
@@ -79,7 +86,11 @@ export default function EntityDetailPage() {
     if (!docSnippets[docId]) {
       setDocSnippets((prev) => ({ ...prev, [docId]: { snippets: [], loading: true } }));
       try {
-        const reader = await fetch(`/api/documents/${docId}/reader`).then((r) => r.json());
+        const token = await getAuthToken();
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        if (noosphereId) headers["X-Workspace-Id"] = noosphereId;
+        const reader = await fetch(`/api/documents/${docId}/reader`, { headers }).then((r) => r.json());
         const entityData = reader.entities?.find(
           (e: { id: string; canonical_name: string }) =>
             e.id === id || e.canonical_name === entity?.canonical_name
