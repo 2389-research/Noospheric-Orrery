@@ -149,6 +149,81 @@ async def run_extract_batch(db: firestore.Client, workspace_id: str, job_id: str
     except Exception as e:
         print(f"Entity embedding failed (non-fatal): {e}", flush=True)
 
+    # Compute cooccurrences from entity sources
+    try:
+        print("Computing cooccurrences...", flush=True)
+        rel_col = db.collection(f"workspaces/{workspace_id}/relationships")
+
+        # Group entity sources by document
+        all_sources = list(source_col.stream())
+        doc_entities: dict[str, set[str]] = {}
+        for s in all_sources:
+            sd = s.to_dict()
+            did = sd.get("documentId", "")
+            eid = sd.get("entityId", "")
+            if did and eid:
+                if did not in doc_entities:
+                    doc_entities[did] = set()
+                doc_entities[did].add(eid)
+
+        # Count co-occurrences (entities appearing in the same document)
+        cooccurrence_counts: dict[tuple[str, str], int] = {}
+        for did, eids in doc_entities.items():
+            eid_list = sorted(eids)
+            for i in range(len(eid_list)):
+                for j in range(i + 1, len(eid_list)):
+                    pair = (eid_list[i], eid_list[j])
+                    cooccurrence_counts[pair] = cooccurrence_counts.get(pair, 0) + 1
+
+        # Write top cooccurrences (limit to avoid explosion)
+        top_pairs = sorted(cooccurrence_counts.items(), key=lambda x: -x[1])[:500]
+        for (ea, eb), weight in top_pairs:
+            rel_id = f"{ea}_{eb}"
+            rel_col.document(rel_id).set({
+                "entityA": ea,
+                "entityB": eb,
+                "weight": weight,
+                "type": "cooccurrence",
+            })
+        print(f"  Stored {len(top_pairs)} cooccurrence relationships", flush=True)
+    except Exception as e:
+        print(f"Cooccurrence computation failed (non-fatal): {e}", flush=True)
+
+    # Compute domain layout positions
+    try:
+        import math, random
+        print("Computing domain layout...", flush=True)
+        domain_col = db.collection(f"workspaces/{workspace_id}/domains")
+        layout_col = db.collection(f"workspaces/{workspace_id}/domainLayout")
+        all_domains = list(domain_col.stream())
+
+        # Group by top-level domain for circular layout
+        groups: dict[str, list] = {}
+        for d in all_domains:
+            dd = d.to_dict()
+            path = dd.get("path", "")
+            top = path.split("/")[0] if path else "unknown"
+            if top not in groups:
+                groups[top] = []
+            groups[top].append((d.id, path))
+
+        n_groups = max(len(groups), 1)
+        for i, (group_name, members) in enumerate(groups.items()):
+            angle = (2 * math.pi * i) / n_groups
+            cx = math.cos(angle) * 400
+            cy = math.sin(angle) * 400
+            for j, (doc_id, path) in enumerate(members):
+                offset_angle = (2 * math.pi * j) / max(len(members), 1)
+                spread = 80 + 30 * path.count("/")
+                x = cx + math.cos(offset_angle) * spread + random.uniform(-20, 20)
+                y = cy + math.sin(offset_angle) * spread + random.uniform(-20, 20)
+                encoded = path.replace("/", "__")
+                layout_col.document(encoded).set({"x": x, "y": y})
+
+        print(f"  Laid out {len(all_domains)} domains", flush=True)
+    except Exception as e:
+        print(f"Domain layout failed (non-fatal): {e}", flush=True)
+
     # Update job result
     job_ref = db.collection(f"workspaces/{workspace_id}/jobs").document(job_id)
     job_ref.update({
