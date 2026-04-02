@@ -59,6 +59,12 @@ async def run():
         elif job_type == "simmer_domain":
             from worker.jobs.simmer_domain import run_simmer_domain
             await run_simmer_domain(db, workspace_id, job_id, job)
+        elif job_type == "simmer_domain_golden_set":
+            from worker.jobs.simmer_domain import run_simmer_domain_golden_set
+            await run_simmer_domain_golden_set(db, workspace_id, job_id, job)
+        elif job_type == "simmer_domain_extraction_spec":
+            from worker.jobs.simmer_domain import run_simmer_domain_extraction_spec
+            await run_simmer_domain_extraction_spec(db, workspace_id, job_id, job)
         elif job_type == "extract_batch":
             from worker.jobs.extract_batch import run_extract_batch
             await run_extract_batch(db, workspace_id, job_id, job)
@@ -68,8 +74,8 @@ async def run():
         else:
             raise ValueError(f"Unknown job type: {job_type}")
 
-        # Parent simmer_general stays running — child phases manage its status
-        if job_type != "simmer_general":
+        # Parent jobs stay running — child phases manage their status
+        if job_type not in ("simmer_general", "simmer_domain"):
             job_ref.update({
                 "status": "completed",
                 "completedAt": datetime.now(timezone.utc),

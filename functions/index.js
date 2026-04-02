@@ -31,7 +31,7 @@ exports.onJobCreated = onDocumentCreated(
 
     if (job.status !== "queued") return;
 
-    const validTypes = ["simmer_general", "simmer_golden_set", "simmer_extraction_spec", "simmer_domain", "extract_batch", "post_process"];
+    const validTypes = ["simmer_general", "simmer_golden_set", "simmer_extraction_spec", "simmer_domain", "simmer_domain_golden_set", "simmer_domain_extraction_spec", "extract_batch", "post_process"];
     if (!validTypes.includes(job.type)) return;
 
     console.log(`Job ${jobId} (${job.type}) queued in workspace ${workspaceId}`);
