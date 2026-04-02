@@ -509,18 +509,23 @@ class FirestoreRelationshipRepository(RelationshipRepository):
         })
 
     def get_cooccurrences(self, entity_id, limit=10):
-        # Query both directions
+        # Query both directions — supports both old (fromEntity/toEntity) and new (entityA/entityB) schemas
         results = []
-        for field in ["fromEntity", "toEntity"]:
-            other_field = "toEntity" if field == "fromEntity" else "fromEntity"
-            for doc in self._col.where(field, "==", entity_id).where("type", "==", "co_occurs").stream():
-                d = doc.to_dict()
-                other_id = d[other_field]
-                ent = self._db.collection("workspaces").document(self._ws).collection("entities").document(other_id).get()
-                if ent.exists:
-                    ed = ent.to_dict()
-                    results.append(CoEntity(id=other_id, canonical_name=ed["canonicalName"],
-                                             type=ed["type"], weight=d["weight"]))
+        for field, other_field in [("entityA", "entityB"), ("entityB", "entityA"),
+                                    ("fromEntity", "toEntity"), ("toEntity", "fromEntity")]:
+            try:
+                for doc in self._col.where(field, "==", entity_id).stream():
+                    d = doc.to_dict()
+                    other_id = d.get(other_field)
+                    if not other_id:
+                        continue
+                    ent = self._db.collection("workspaces").document(self._ws).collection("entities").document(other_id).get()
+                    if ent.exists:
+                        ed = ent.to_dict()
+                        results.append(CoEntity(id=other_id, canonical_name=ed["canonicalName"],
+                                                 type=ed["type"], weight=d.get("weight", 1)))
+            except Exception:
+                continue
         # Dedupe and sort
         seen = set()
         deduped = []
