@@ -173,13 +173,24 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
                 store.jobs.create(job_id, "simmer_domain", domain_path, {"domain": domain_path})
                 jobs_queued.append(job_id)
 
-    # Rebuild search index to include new entities/chunks
-    try:
-        from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
-        embed_new_entities(store.conn)
-        embed_new_chunks(store.conn)
-    except Exception as e:
-        print(f"Search index update after ingest: {e}")
+    # Queue post-processing if entities were extracted
+    # Handles: embedding, cooccurrences, UMAP layout, graph cache rebuild
+    if entity_count > 0:
+        import os as _os
+        if _os.environ.get("DB_BACKEND", "sqlite").lower() == "firestore":
+            existing_pp = store.jobs.get_existing("post_process", "general", ["queued", "running"])
+            if not existing_pp:
+                pp_id = str(uuid.uuid4())
+                store.jobs.create(pp_id, "post_process", "general")
+                jobs_queued.append(pp_id)
+        else:
+            # SQLite: rebuild search index inline
+            try:
+                from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
+                embed_new_entities(store.conn)
+                embed_new_chunks(store.conn)
+            except Exception as e:
+                print(f"Search index update after ingest: {e}")
 
     return {
         "document_id": doc_id,
