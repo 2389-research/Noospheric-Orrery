@@ -70,13 +70,22 @@ async def run_simmer_domain_golden_set(db: firestore.Client, workspace_id: str, 
                 content = doc.to_dict().get("content", "")
                 (sample_dir / f"{doc_id}.txt").write_text(content)
 
-        # Use general spec as the starting artifact (not generic seed)
+        # Build seed from general spec with domain refinement instructions
         spec_col = db.collection(f"workspaces/{workspace_id}/specs")
         general_specs = list(spec_col.where("domainPath", "==", None).stream())
         if general_specs:
-            seed_content = max(general_specs, key=lambda s: s.to_dict().get("version", 0)).to_dict().get("specContent", "")
+            general_content = max(general_specs, key=lambda s: s.to_dict().get("version", 0)).to_dict().get("specContent", "")
+            seed_content = f"""Starting from the general extraction spec (extend it with domain-specific types):
+
+{general_content}
+
+Now refine this for the specific domain: {domain_path}
+Add entity types that are specific to this domain that the general spec misses.
+Keep the general types but add domain-specific ones."""
         else:
-            seed_content = "Extract named entities with name and type fields."
+            seed_content = f"""Entity types to extract for domain: {domain_path}
+- Discover what entity types matter for this specific domain
+- Be more specific than generic types like Person, Organization, Thing"""
 
         seed_path = Path(tmpdir) / "seed.md"
         seed_path.write_text(seed_content)
