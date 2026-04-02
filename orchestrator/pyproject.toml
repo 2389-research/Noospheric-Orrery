@@ -7,10 +7,7 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     "anthropic[bedrock]>=0.40.0",
     "python-multipart>=0.0.9",
-    "sentence-transformers>=3.0.0",
-    "umap-learn>=0.5.0",
     "numpy>=1.26.0",
-    "faiss-cpu>=1.7.0",
     "mcp>=1.0.0",
     "orrery-relay",
     "firebase-admin>=6.0.0",
@@ -19,6 +16,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+local = [
+    # For local SQLite mode — FAISS search + sentence-transformers embeddings
+    # Not needed on Cloud Run (uses Vertex AI + Firestore vector search)
+    "sentence-transformers>=3.0.0",
+    "umap-learn>=0.5.0",
+    "faiss-cpu>=1.7.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
