@@ -68,10 +68,12 @@ async def run():
         else:
             raise ValueError(f"Unknown job type: {job_type}")
 
-        job_ref.update({
-            "status": "completed",
-            "completedAt": datetime.now(timezone.utc),
-        })
+        # Parent simmer_general stays running — child phases manage its status
+        if job_type != "simmer_general":
+            job_ref.update({
+                "status": "completed",
+                "completedAt": datetime.now(timezone.utc),
+            })
         print(f"Job {job_id} completed", flush=True)
 
     except Exception as e:
