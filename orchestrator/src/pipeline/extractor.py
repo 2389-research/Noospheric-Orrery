@@ -34,7 +34,19 @@ async def extract_entities_from_chunk(relay: Relay, chunk_text: str, spec: str, 
     text = response.text
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-    return json.loads(text).get("entities", [])
+    text = text.strip()
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed.get("entities", [])
+        if isinstance(parsed, list):
+            return parsed
+        return []
+    except json.JSONDecodeError:
+        # JSONL format: one JSON object per line
+        if text.startswith("{"):
+            return [json.loads(line) for line in text.splitlines() if line.strip().startswith("{")]
+        return []
 
 async def extract_document(relay: Relay, chunks: list[dict], spec: str, model: str) -> list[dict]:
     all_entities = []
