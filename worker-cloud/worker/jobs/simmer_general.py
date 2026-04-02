@@ -1,12 +1,11 @@
 """General spec simmering via simmer-sdk, Firestore-aware.
 
-Split into two independent phases:
-  1. simmer_golden_set — refines the entity taxonomy (golden set)
-  2. simmer_extraction_spec — refines the extraction prompt using the golden set
+Split into two independent phases that run as separate Cloud Run Jobs:
+  1. simmer_golden_set — refines the entity taxonomy
+  2. simmer_extraction_spec — refines the extraction prompt
 
-Each phase runs as a separate Cloud Run Job execution with its own
-timeout and resource allocation. Phase 1 saves its output to Firestore
-and queues Phase 2. Phase 2 reads the golden set and produces the final spec.
+A parent simmer_general job tracks the whole flow. Both phases write
+iterations to the parent job so the UI shows them as one unified run.
 """
 import os
 import uuid
@@ -81,8 +80,8 @@ If you can't parse a criterion, skip it. Return [] if unparseable."""
         return []
 
 
-def _make_iteration_recorder(db: firestore.Client, workspace_id: str, job_id: str, phase: str, output_dir: str):
-    """Create an on_iteration callback that stores iteration data in Firestore."""
+def _make_iteration_recorder(db: firestore.Client, workspace_id: str, parent_job_id: str, phase: str, output_dir: str):
+    """Create an on_iteration callback that stores iteration data under the parent job."""
     seed_scores: dict[str, int] = {}
     iter_col = db.collection(f"workspaces/{workspace_id}/simmerIterations")
     detail_col = db.collection(f"workspaces/{workspace_id}/simmerCriterionDetails")
@@ -95,7 +94,7 @@ def _make_iteration_recorder(db: firestore.Client, workspace_id: str, job_id: st
 
         iteration_id = str(uuid.uuid4())
         iter_col.document(iteration_id).set({
-            "jobId": job_id,
+            "jobId": parent_job_id,
             "phase": phase,
             "iteration": record.iteration,
             "scores": record.scores,
@@ -156,10 +155,40 @@ def _get_bedrock_kwargs():
     }
 
 
+# ── Parent: Simmer General ────────────────────────────────────
+
+async def run_simmer_general(db: firestore.Client, workspace_id: str, job_id: str, job: dict):
+    """Create parent tracking job and kick off golden set phase.
+
+    The parent job stays in 'running' status while child phases execute.
+    Iterations from both phases are written to the parent job ID.
+    """
+    # This job IS the parent — kick off golden set as first phase
+    print(f"Simmer general (parent {job_id}): starting golden set phase", flush=True)
+
+    # Queue golden set child job
+    golden_job_id = str(uuid.uuid4())
+    db.collection(f"workspaces/{workspace_id}/jobs").document(golden_job_id).set({
+        "type": "simmer_golden_set",
+        "target": "general",
+        "status": "queued",
+        "parentJobId": job_id,
+        "createdAt": datetime.now(timezone.utc),
+    })
+
+    # Update parent with child reference
+    db.collection(f"workspaces/{workspace_id}/jobs").document(job_id).update({
+        "result": {"golden_set_job_id": golden_job_id, "phase": "golden_set"},
+    })
+
+    # Don't mark parent as completed — it stays running until the whole chain finishes
+
+
 # ── Phase 1: Golden Set ──────────────────────────────────────
 
 async def run_simmer_golden_set(db: firestore.Client, workspace_id: str, job_id: str, job: dict):
-    """Run golden set refinement. Saves result to Firestore and queues extraction spec phase."""
+    """Run golden set refinement. Writes iterations to parent job."""
+    parent_job_id = job.get("parentJobId", job_id)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         sample_dir = _get_sample_dir(db, workspace_id, tmpdir)
@@ -169,7 +198,7 @@ async def run_simmer_golden_set(db: firestore.Client, workspace_id: str, job_id:
         iterations = int(os.environ.get("SIMMER_ITERATIONS", "5"))
         golden_dir = Path(tmpdir) / "golden"
 
-        print(f"Phase 1: Golden set (job {job_id})", flush=True)
+        print(f"Phase 1: Golden set (child {job_id}, parent {parent_job_id})", flush=True)
 
         golden_result = await refine(
             artifact=str(seed_path),
@@ -189,11 +218,11 @@ async def run_simmer_golden_set(db: firestore.Client, workspace_id: str, job_id:
             generator_model="claude-sonnet-4-6",
             judge_model="claude-sonnet-4-6",
             background=f"Sample documents are in {sample_dir}. Read them to understand what entity types exist in this corpus.",
-            on_iteration=_make_iteration_recorder(db, workspace_id, job_id, "golden_set", str(golden_dir)),
+            on_iteration=_make_iteration_recorder(db, workspace_id, parent_job_id, "golden_set", str(golden_dir)),
             **_get_bedrock_kwargs(),
         )
 
-    # Save golden set artifact to Firestore
+    # Save golden set artifact
     golden_ref = db.collection(f"workspaces/{workspace_id}/specs").document("golden_set_latest")
     golden_ref.set({
         "type": "golden_set",
@@ -201,34 +230,38 @@ async def run_simmer_golden_set(db: firestore.Client, workspace_id: str, job_id:
         "score": golden_result.composite,
         "bestIteration": golden_result.best_iteration,
         "createdAt": datetime.now(timezone.utc),
-        "jobId": job_id,
+        "jobId": parent_job_id,
     })
 
-    # Queue extraction spec phase
+    # Queue extraction spec phase (child of same parent)
     spec_job_id = str(uuid.uuid4())
     db.collection(f"workspaces/{workspace_id}/jobs").document(spec_job_id).set({
         "type": "simmer_extraction_spec",
         "target": "general",
         "status": "queued",
+        "parentJobId": parent_job_id,
         "config": {"golden_set_job_id": job_id},
         "createdAt": datetime.now(timezone.utc),
     })
 
-    # Update this job's result
-    db.collection(f"workspaces/{workspace_id}/jobs").document(job_id).update({
+    # Update parent
+    db.collection(f"workspaces/{workspace_id}/jobs").document(parent_job_id).update({
         "result": {
             "golden_score": golden_result.composite,
-            "next_job_id": spec_job_id,
+            "golden_set_job_id": job_id,
+            "extraction_spec_job_id": spec_job_id,
+            "phase": "extraction_spec",
         }
     })
 
-    print(f"Golden set complete! Score: {golden_result.composite}/10, queued extraction spec job {spec_job_id}", flush=True)
+    print(f"Golden set complete! Score: {golden_result.composite}/10, queued extraction spec {spec_job_id}", flush=True)
 
 
 # ── Phase 2: Extraction Spec ─────────────────────────────────
 
 async def run_simmer_extraction_spec(db: firestore.Client, workspace_id: str, job_id: str, job: dict):
-    """Run extraction spec refinement using the golden set from Phase 1."""
+    """Run extraction spec refinement. Writes iterations to parent job."""
+    parent_job_id = job.get("parentJobId", job_id)
 
     # Read golden set from Firestore
     golden_doc = db.collection(f"workspaces/{workspace_id}/specs").document("golden_set_latest").get()
@@ -237,7 +270,7 @@ async def run_simmer_extraction_spec(db: firestore.Client, workspace_id: str, jo
 
     golden_data = golden_doc.to_dict()
     golden_content = golden_data["content"]
-    print(f"Using golden set (score {golden_data.get('score')}): {golden_content[:100]}...", flush=True)
+    print(f"Using golden set (score {golden_data.get('score')})", flush=True)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         sample_dir = _get_sample_dir(db, workspace_id, tmpdir)
@@ -245,7 +278,7 @@ async def run_simmer_extraction_spec(db: firestore.Client, workspace_id: str, jo
         iterations = int(os.environ.get("SIMMER_ITERATIONS", "5"))
         spec_dir = Path(tmpdir) / "spec"
 
-        print(f"Phase 2: Extraction spec (job {job_id})", flush=True)
+        print(f"Phase 2: Extraction spec (child {job_id}, parent {parent_job_id})", flush=True)
 
         spec_result = await refine(
             artifact=golden_content,
@@ -266,7 +299,7 @@ async def run_simmer_extraction_spec(db: firestore.Client, workspace_id: str, jo
             judge_model="claude-sonnet-4-6",
             clerk_model="claude-haiku-4-5",
             background=f"This spec will be executed by Haiku. Golden set: {golden_content[:2000]}",
-            on_iteration=_make_iteration_recorder(db, workspace_id, job_id, "extraction_spec", str(spec_dir)),
+            on_iteration=_make_iteration_recorder(db, workspace_id, parent_job_id, "extraction_spec", str(spec_dir)),
             **_get_bedrock_kwargs(),
         )
 
@@ -287,31 +320,23 @@ async def run_simmer_extraction_spec(db: firestore.Client, workspace_id: str, jo
         "type": "extract_batch",
         "target": "general",
         "status": "queued",
+        "parentJobId": parent_job_id,
         "config": {"spec_id": spec_id, "scope": "all_classified"},
         "result": None,
         "createdAt": datetime.now(timezone.utc),
-        "startedAt": None,
-        "completedAt": None,
     })
 
-    # Update this job's result
-    db.collection(f"workspaces/{workspace_id}/jobs").document(job_id).update({
+    # Update parent — mark as completed with full results
+    db.collection(f"workspaces/{workspace_id}/jobs").document(parent_job_id).update({
+        "status": "completed",
+        "completedAt": datetime.now(timezone.utc),
         "result": {
             "spec_id": spec_id,
+            "golden_score": golden_data.get("score"),
             "spec_score": spec_result.composite,
             "batch_job_id": batch_job_id,
+            "phase": "completed",
         }
     })
 
     print(f"Extraction spec complete! Score: {spec_result.composite}/10, queued batch extraction {batch_job_id}", flush=True)
-
-
-# ── Legacy: Combined run (kept for backwards compat) ──────────
-
-async def run_simmer_general(db: firestore.Client, workspace_id: str, job_id: str, job: dict):
-    """Legacy combined run — golden set + extraction spec in one job."""
-    await run_simmer_golden_set(db, workspace_id, job_id, job)
-    # Read back the queued spec job and run it inline
-    golden_doc = db.collection(f"workspaces/{workspace_id}/specs").document("golden_set_latest").get()
-    if golden_doc.exists:
-        await run_simmer_extraction_spec(db, workspace_id, job_id, job)

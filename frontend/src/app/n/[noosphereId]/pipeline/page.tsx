@@ -18,6 +18,9 @@ const jobStatusStyle: Record<string, string> = {
   failed: "border-red-500/40 text-red-400",
 };
 
+// Child job types — hidden from pipeline list, shown under parent
+const CHILD_JOB_TYPES = ["simmer_golden_set", "simmer_extraction_spec"];
+
 function getJobLink(j: JobInfo, noosphereId: string): string | null {
   if (j.type.startsWith("simmer")) return `/n/${noosphereId}/simmer/${j.id}`;
   if (j.type === "extract_batch") return `/n/${noosphereId}/extraction/${j.id}`;
@@ -25,8 +28,10 @@ function getJobLink(j: JobInfo, noosphereId: string): string | null {
 }
 
 function ActiveJobs({ jobs, noosphereId }: { jobs: JobInfo[]; noosphereId: string }) {
-  const active = jobs.filter((j) => j.status === "running" || j.status === "queued");
-  const recent = jobs.filter((j) => j.status === "completed" || j.status === "failed").slice(0, 3);
+  // Filter out child jobs — they show under their parent
+  const visibleJobs = jobs.filter((j) => !CHILD_JOB_TYPES.includes(j.type));
+  const active = visibleJobs.filter((j) => j.status === "running" || j.status === "queued");
+  const recent = visibleJobs.filter((j) => j.status === "completed" || j.status === "failed").slice(0, 3);
 
   if (active.length === 0 && recent.length === 0) return null;
 
