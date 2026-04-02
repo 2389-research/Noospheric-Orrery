@@ -155,8 +155,24 @@ def _layout_domains(domains: list[dict]) -> dict[str, dict]:
 
 @router.get("/graph")
 def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
-    """Return graph data in cosmic_data_v4 format."""
+    """Return graph data in cosmic_data_v4 format.
+
+    On Firestore: reads precomputed graph JSON from workspaces/{id}/cache/graph.
+    On SQLite: computes live (fast with SQL joins).
+    """
     store = auth.store
+
+    # Firestore: try cached graph first
+    if hasattr(store, '_db'):
+        cache_ref = store._db.collection("workspaces").document(store._workspace_id).collection("cache").document("graph")
+        cache_doc = cache_ref.get()
+        if cache_doc.exists:
+            import json
+            cached = cache_doc.to_dict()
+            data = json.loads(cached.get("data", "{}"))
+            if data.get("domains"):
+                store.close()
+                return data
 
     # Get all domains with docs
     domain_objs = store.domains.list(min_doc_count=1)
@@ -189,16 +205,60 @@ def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
 
     subdomains = [d["path"] for d in domains if d["path"].count("/") >= 2]
 
-    # Entities with domain weights
+    # Entities with domain weights — batch load to avoid N+1 queries
     all_entities = store.entities.list(limit=5000)
+
+    # Batch: load all entity sources and document-domain mappings at once
+    if hasattr(store, '_db'):
+        # Firestore: batch load
+        es_col = store._db.collection("workspaces").document(store._workspace_id).collection("entitySources")
+        dd_col = store._db.collection("workspaces").document(store._workspace_id).collection("documentDomains")
+
+        all_sources = list(es_col.stream())
+        all_doc_domains = list(dd_col.stream())
+
+        # Build lookup: doc_id -> [domain_paths]
+        doc_to_domains: dict[str, list[str]] = {}
+        for dd in all_doc_domains:
+            ddd = dd.to_dict()
+            did = ddd.get("documentId", "")
+            path = ddd.get("domainPath", "")
+            if did and path:
+                doc_to_domains.setdefault(did, []).append(path)
+
+        # Build lookup: entity_id -> {domain_path: count}
+        entity_domain_weights: dict[str, dict[str, float]] = {}
+        for s in all_sources:
+            sd = s.to_dict()
+            eid = sd.get("entityId", "")
+            did = sd.get("documentId", "")
+            if eid and did:
+                for path in doc_to_domains.get(did, []):
+                    if eid not in entity_domain_weights:
+                        entity_domain_weights[eid] = {}
+                    entity_domain_weights[eid][path] = entity_domain_weights[eid].get(path, 0) + 1
+
+        # Normalize weights
+        for eid, counts in entity_domain_weights.items():
+            total = sum(counts.values())
+            if total > 0:
+                entity_domain_weights[eid] = {p: round(c / total, 3) for p, c in counts.items()}
+    else:
+        # SQLite: use the per-entity method (fast with SQL joins)
+        entity_domain_weights = {}
+        for e in all_entities:
+            w = store.domains.get_entity_domain_weights(e.id)
+            if w:
+                entity_domain_weights[e.id] = w
+
     entities = []
     for e in all_entities:
-        domain_weights = store.domains.get_entity_domain_weights(e.id)
-        if not domain_weights:
+        dw = entity_domain_weights.get(e.id, {})
+        if not dw:
             continue
         entities.append({
             "entityId": e.id, "name": e.canonical_name, "type": e.type,
-            "videoCount": e.source_count, "domainWeights": domain_weights,
+            "videoCount": e.source_count, "domainWeights": dw,
         })
 
     # Trade routes
