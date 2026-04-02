@@ -9,7 +9,12 @@ ENV CLAUDECODE=""
 ENV DISABLE_AUTOUPDATER=1
 ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
-# Install simmer-sdk (pulls claude-agent-sdk which bundles Claude CLI binary)
+# Install Node.js + Claude Code CLI (system binary — simmer-sdk finds it via shutil.which)
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm && \
+    npm install -g @anthropic-ai/claude-code && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install simmer-sdk (pulls claude-agent-sdk but we prefer the system CLI above)
 COPY simmer-sdk/ /tmp/simmer-sdk/
 RUN pip install --no-cache-dir /tmp/simmer-sdk/ && rm -rf /tmp/simmer-sdk/
 
