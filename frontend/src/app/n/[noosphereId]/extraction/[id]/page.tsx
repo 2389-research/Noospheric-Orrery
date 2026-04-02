@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
+import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
+import { getAuthToken } from "@/lib/firebase";
 import { api } from "@/lib/api";
 import type { JobInfo, BatchResults, DocumentSummary, EntityWithNew } from "@/lib/types";
 import { ExtractionHeader } from "@/components/extraction/extraction-header";
@@ -23,6 +25,7 @@ type NormSummary = {
 
 export default function ExtractionPage() {
   const params = useParams();
+  const noosphereId = useNoosphereId();
   const jobId = params.id as string;
 
   const [job, setJob] = useState<JobWithResults | null>(null);
@@ -73,14 +76,21 @@ export default function ExtractionPage() {
       setDocEntityIds(null);
       return;
     }
-    fetch(`/api/documents/${selectedDocId}`)
-      .then((r) => r.json())
-      .then((doc) => {
+    (async () => {
+      try {
+        const token = await getAuthToken();
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        if (noosphereId) headers["X-Workspace-Id"] = noosphereId;
+        const r = await fetch(`/api/documents/${selectedDocId}`, { headers });
+        const doc = await r.json();
         const ids = new Set<string>(doc.entities?.map((e: { id: string }) => e.id) || []);
         setDocEntityIds(ids);
-      })
-      .catch(() => setDocEntityIds(null));
-  }, [selectedDocId]);
+      } catch {
+        setDocEntityIds(null);
+      }
+    })();
+  }, [selectedDocId, noosphereId]);
 
   if (error) {
     return (
