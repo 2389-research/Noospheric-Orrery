@@ -5,6 +5,7 @@ import { GalaxyPanel } from "@/components/galaxy/galaxy-panel";
 import { ReaderPane } from "@/components/reader/reader-pane";
 import { api } from "@/lib/api";
 import { getAuthToken } from "@/lib/firebase";
+import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 
 interface SelectedNode {
   nodeType: string;
@@ -27,6 +28,7 @@ interface Breadcrumb {
 }
 
 export default function VizPage() {
+  const noosphereId = useNoosphereId();
   const [viewMode, setViewMode] = useState<ViewMode>("galaxy");
   const [starEntityId, setStarEntityId] = useState<string | null>(null);
   const [starEntityName, setStarEntityName] = useState<string>("");
@@ -296,7 +298,7 @@ export default function VizPage() {
       {/* Galaxy/Sector iframe (always mounted, hidden when in star mode) */}
       <iframe
         ref={galaxyRef}
-        src={`/viz/index.html?api=${encodeURIComponent("/api")}${authToken ? `&token=${encodeURIComponent(authToken)}` : ""}`}
+        src={`/viz/index.html?api=${encodeURIComponent("/api")}${authToken ? `&token=${encodeURIComponent(authToken)}` : ""}&workspace=${encodeURIComponent(noosphereId)}`}
         style={{
           width: "100%", height: "100%", border: "none",
           position: "absolute", top: 0, left: 0,
