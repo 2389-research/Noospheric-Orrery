@@ -1,10 +1,9 @@
 # ABOUTME: Extract entities from document chunks using an LLM and an extraction spec.
-# ABOUTME: Takes a Relay instance and returns deduplicated entity lists.
+# ABOUTME: Uses tool use for guaranteed valid JSON. Takes a Relay instance.
 
-import json
 from orrery_relay import Relay
 
-EXTRACTION_WRAPPER = """You are an entity extraction system. Follow the extraction spec below exactly.
+EXTRACTION_PROMPT = """You are an entity extraction system. Follow the extraction spec below exactly.
 
 EXTRACTION SPEC:
 {spec}
@@ -12,41 +11,37 @@ EXTRACTION SPEC:
 TEXT TO EXTRACT FROM:
 {chunk_text}
 
-Respond with JSON only:
-{{
-    "entities": [
-        {{"name": "entity name", "type": "EntityType"}}
-    ]
-}}
+Extract all entities mentioned in the text according to the spec. Only extract entities explicitly present — do not hallucinate or infer. Normalize names: lowercase, strip extra whitespace."""
 
-Rules:
-- Only extract entities explicitly mentioned in the text
-- Do not hallucinate or infer entities not present
-- Use the entity types defined in the spec
-- Normalize names: lowercase, strip extra whitespace
-"""
+ENTITY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "entities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Entity name, lowercase, stripped"},
+                    "type": {"type": "string", "description": "Entity type from the spec"},
+                },
+                "required": ["name", "type"],
+            },
+        },
+    },
+    "required": ["entities"],
+}
+
 
 async def extract_entities_from_chunk(relay: Relay, chunk_text: str, spec: str, model: str) -> list[dict]:
-    response = await relay.complete(
+    result = await relay.complete_structured(
         model=model, max_tokens=4096,
-        messages=[{"role": "user", "content": EXTRACTION_WRAPPER.format(spec=spec, chunk_text=chunk_text)}],
+        messages=[{"role": "user", "content": EXTRACTION_PROMPT.format(spec=spec, chunk_text=chunk_text)}],
+        schema=ENTITY_SCHEMA,
+        tool_name="extract_entities",
+        tool_description="Extract named entities from the text according to the extraction spec",
     )
-    text = response.text
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-    text = text.strip()
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            return parsed.get("entities", [])
-        if isinstance(parsed, list):
-            return parsed
-        return []
-    except json.JSONDecodeError:
-        # JSONL format: one JSON object per line
-        if text.startswith("{"):
-            return [json.loads(line) for line in text.splitlines() if line.strip().startswith("{")]
-        return []
+    return result.get("entities", [])
+
 
 async def extract_document(relay: Relay, chunks: list[dict], spec: str, model: str) -> list[dict]:
     all_entities = []
