@@ -62,6 +62,9 @@ async def run():
         elif job_type == "extract_batch":
             from worker.jobs.extract_batch import run_extract_batch
             await run_extract_batch(db, workspace_id, job_id, job)
+        elif job_type == "post_process":
+            from worker.jobs.post_process import run_post_processing
+            run_post_processing(db, workspace_id)
         else:
             raise ValueError(f"Unknown job type: {job_type}")
 
