@@ -175,7 +175,7 @@ export default function VizPage() {
       if (token) headers["Authorization"] = `Bearer ${token}`;
       if (noosphereId) headers["X-Workspace-Id"] = noosphereId;
 
-      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20`, { headers });
+      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20&expand=false`, { headers });
       const results: SearchResult = await resp.json();
       setSearchResults(results);
 
