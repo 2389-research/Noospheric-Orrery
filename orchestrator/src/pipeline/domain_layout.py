@@ -7,7 +7,6 @@ from __future__ import annotations
 import pickle
 import sqlite3
 import numpy as np
-import umap
 
 
 def _embed_texts(texts: list[str]) -> np.ndarray:
@@ -143,6 +142,7 @@ def full_fit(store_or_conn):
     texts = [_build_domain_text(store_or_conn, p) for p in paths]
     embeddings = _embed_texts(texts)
 
+    import umap
     n_neighbors = min(15, len(paths) - 1)
     reducer = umap.UMAP(
         n_components=2, n_neighbors=n_neighbors,

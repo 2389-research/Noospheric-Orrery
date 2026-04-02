@@ -1,8 +1,10 @@
-"""Stage 1: Parallel retrieval — FAISS semantic + exact match."""
+"""Stage 1: Parallel retrieval — FAISS semantic + exact match.
+
+Only used in SQLite local mode. Cloud mode uses Firestore vector search.
+"""
 
 import sqlite3
 import numpy as np
-import faiss
 from .models import ScoredEntity, ScoredChunk
 from .config import SearchConfig
 
@@ -31,7 +33,8 @@ def embed_text(text: str | list[str]) -> np.ndarray:
 
 
 def build_indexes(conn: sqlite3.Connection) -> dict:
-    """Build FAISS indexes from stored embeddings, or embed if missing."""
+    """Build FAISS indexes from stored embeddings, or embed if missing. SQLite only."""
+    import faiss
     global _entity_index, _chunk_index, _entity_ids, _chunk_ids
 
     model = _get_model()
