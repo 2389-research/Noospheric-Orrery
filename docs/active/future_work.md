@@ -1,172 +1,152 @@
 # Future Work
 
-Tracked improvements and architecture changes. Not urgent — captured here
-so they don't get lost between sessions.
+Tracked improvements and architecture changes. Items move from active
+to done as they're completed.
 
 ---
 
-## Cloud Pipeline: Post-Extraction Steps (SHORT TERM)
+## DONE (2026-04-02)
 
-**Problem:** The cloud batch extraction worker was missing several post-
-extraction steps that the local SQLite ingest path handles inline. These
-gaps cause the orrery to not render and search to not work after extraction.
+### Simmer Worker: Split into Phase-Based Jobs
+Split `simmer_general` into `simmer_golden_set` + `simmer_extraction_spec`.
+Each runs in its own Cloud Run Job with fresh resources. Golden set saves
+artifact to Firestore between phases. Parent `simmer_general` job tracks
+both phases — iterations written to parent ID, UI shows one unified entry.
 
-**What's missing / recently fixed:**
+### Cloud Pipeline: Post-Extraction Steps
+Shared `post_process.py` runs after batch extraction:
+embed entities (Vertex AI, batched) → cooccurrences → UMAP layout → graph cache.
+Called by `extract_batch.py` and also available as standalone `post_process` job type.
 
-| Step | Status | Notes |
-|---|---|---|
-| Entity extraction | DONE | Works in extract_batch.py |
-| Entity embeddings (Vertex AI) | DONE | In extract_batch.py |
-| Entity sources | DONE | Stored in entitySources collection |
-| Cooccurrences | ADDED 2026-04-02 | Compute from entity sources, store in relationships |
-| Domain layout positions | ADDED 2026-04-02 | Circular layout, stored in domainLayout |
-| Graph cache | ADDED 2026-04-02 | Precompute full graph JSON, store in cache/graph |
-| UMAP layout | TODO | Replace circular layout with semantic UMAP |
-| Search index rebuild | TODO | Firestore vector search needs index update |
-| Graph cache rebuild trigger | TODO | Should auto-rebuild after extraction completes |
+### Graph Cache
+Precomputed graph JSON stored in `workspaces/{id}/cache/graph`. The `/graph`
+endpoint reads this directly — eliminates N+1 Firestore queries that caused
+30s timeouts. Cache uses the exact format the viz expects (`domain_positions`,
+`trade_routes`, `domain_specs`, etc.).
 
-**The correct post-extraction pipeline in the worker should be:**
+### Firestore Vector Search
+Search endpoint uses Vertex AI `find_nearest()` on stored entity embeddings.
+Falls back to FAISS on SQLite. Full pipeline: expansion (optional) → vector
+search + exact match → entity boost → fusion → chunk context.
 
-```
-extract entities from chunks
-  → store entities + sources
-  → embed entities (Vertex AI)
-  → compute cooccurrences from sources
-  → compute domain layout (UMAP or circular)
-  → precompute graph JSON → store in cache/graph
-  → update search index
-```
+### Auth on All Viz Iframes
+All viz HTML files (index, star, sector, system) read auth token + workspace
+ID from URL params. All orrery pages pass them through. Search uses
+`expand=false` for UI, `expand=true` for agents/MCP.
 
-All of these run at the end of `extract_batch.py`. The graph cache
-is a single Firestore doc (~300KB for 800 entities) that the `/graph`
-endpoint reads directly — no live N+1 queries.
+### Job Chain Automation
+Cloud Function trigger handles all job types: `simmer_general`,
+`simmer_golden_set`, `simmer_extraction_spec`, `simmer_domain`,
+`extract_batch`, `post_process`. Full chain fires automatically.
 
-**Auth for viz iframe:** The orrery viz iframe (static HTML) needs
-auth tokens + workspace ID passed via URL params. Currently works but
-tokens in URLs is not ideal long-term. Better approach: postMessage
-token exchange between parent page and iframe, or server-side proxy
-that injects auth headers.
+### Bedrock Model IDs
+Sonnet 4.6 = `us.anthropic.claude-sonnet-4-6` (no -v1:0 suffix).
+Verified against `aws bedrock list-inference-profiles`. 6M TPM quota.
 
-**Priority:** HIGH — these are required for the orrery to render after
-any new extraction run.
+### Worker CLI Fix
+Installed system Claude CLI (v2.1.90) via npm in worker Dockerfile.
+Fixes `Control request timeout: initialize` from bundled v2.1.88.
 
 ---
 
-## Simmer Worker: Split into Phase-Based Jobs
+## ACTIVE — Short Term
 
-**Status:** DONE (2026-04-02) — split into simmer_golden_set + simmer_extraction_spec.
+### Fix Remaining Bare Fetch Calls
+**Status:** DONE — all bare `fetch('/api/...')` calls now include auth
+headers and workspace ID. No remaining unauthed API calls in frontend.
 
-**Problem:** The simmer worker runs Golden Set + Extraction Spec sequentially
-in a single Cloud Run Job execution. With investigation-first judges (Claude
-CLI with Read/Grep/Glob tools) and board deliberation, each phase can take
-45-60+ minutes. A 1-hour timeout kills the job mid-extraction-spec even
-though golden set completed fine. Currently bumped to 2 hours but that's a
-bandaid.
+### Post-Ingest Processing Trigger
+**Problem:** When docs are uploaded and extracted inline (spec already
+exists), the post-processing steps (embed, cooccurrences, UMAP, graph
+cache) don't run. Only batch extraction triggers them.
 
-**Fix:** Split into two separate Cloud Run Job executions:
+**Fix:** After inline ingest extraction, queue a `post_process` job.
+The Cloud Function triggers the worker to run the shared pipeline.
+The `post_process` job type and Cloud Function trigger already exist —
+just need the orchestrator's ingest route to create the job.
 
-```
-Job 1: simmer_golden_set
-  - Runs golden set refinement (~5 iterations)
-  - Saves best golden set artifact to Firestore specs collection
-  - Marks phase complete
-  - Triggers Job 2
+**Priority:** HIGH — without this, uploading new docs to an existing
+noosphere doesn't update the orrery.
 
-Job 2: simmer_extraction_spec
-  - Reads golden set from Firestore
-  - Runs extraction spec refinement (~5 iterations)  
-  - Saves best extraction spec
-  - Triggers batch extraction
-```
+### Viz Iframe Auth: Longer Term Fix
+**Problem:** Auth tokens passed via URL params (visible in logs, browser
+history). Works but not ideal.
 
-**Benefits:**
-- Each phase gets its own full timeout window
-- If extraction spec fails, golden set output is preserved
-- Can retry just the failed phase
-- Progress is visible between phases (not just at the end)
-- Could parallelize domain-specific spec runs after general spec
+**Fix options:**
+1. PostMessage token exchange between parent page and iframe
+2. Server-side proxy that injects auth headers (Next.js middleware)
 
-**Scope:** simmer-sdk worker code + Cloud Function trigger logic. The
-simmer-sdk `refine()` API already returns after each call — the sequential
-chaining is in `worker-cloud/worker/jobs/simmer_general.py`.
+**Priority:** LOW — current approach works fine for internal tool.
 
-**Priority:** Medium — blocks reliable pipeline completion. Current workaround
-is 2-hour timeout.
+### Domain-Specific Simmering
+**Problem:** Only general spec simmering works end-to-end. Domain-specific
+simmering (`simmer_domain`) exists in code but hasn't been tested with
+the new split pipeline.
 
----
+**Fix:** Extend the parent/child pattern to domain-specific simmers.
+Test with a domain from the Magos Lex noosphere.
 
-## Adapter Formalization (Local vs Cloud)
-
-**Problem:** The codebase has implicit adapters (SQLite vs Firestore, DEV_USER
-vs Firebase JWT, sentence-transformers vs Vertex AI) but they're scattered
-env-var checks and try/except blocks, not formal interfaces.
-
-**Fix:** Formalize into a container/DI pattern with explicit adapter
-interfaces. See memory note `local_vs_cloud_architecture.md` for full
-analysis. ~70% done, ~2-3 days to formalize.
-
-**Priority:** Low — current approach works fine. Do this when external
-contributors need to run local instances or when adding new adapters
-(Postgres, S3, etc).
+**Priority:** MEDIUM — enriches the orrery (individual domains glow when
+they have their own spec).
 
 ---
 
-## Simmer-SDK Resumability
+## ACTIVE — Medium Term
 
-**Problem:** If a simmer run is interrupted (timeout, crash), it restarts
-from scratch. Previous iterations are in Firestore but simmer-sdk doesn't
-read them back.
+### Adapter Formalization (Local vs Cloud)
+Implicit adapters (SQLite/Firestore, DEV_USER/Firebase, sentence-transformers/
+Vertex AI) work but are scattered env-var checks. Formalize into container/DI
+pattern. ~70% done, ~2-3 days. See `local_vs_cloud_architecture.md`.
 
-**Fix:** On startup, check Firestore for existing iterations for this job.
-If found, reconstruct the trajectory and resume from the last iteration
-instead of starting over. The simmer-sdk `refine()` function would need a
-`resume_from` parameter or auto-detect existing state.
+**Priority:** LOW — do when external contributors need local instances.
 
-**Priority:** Medium — directly related to the timeout issue. Even with
-phase splitting, resumability prevents wasted compute.
+### Simmer-SDK Issues
+Filed on github.com/2389-research/simmer-sdk:
+- **#1** Regression detection should use primary criterion, not just composite
+- **#2** Bundled CLI broken on Cloud Run (workaround: system CLI)
+- **#3** Plateau detection should stop early after N identical composites
 
----
+### Simmer-SDK Resumability
+If a simmer phase is interrupted, it restarts from scratch. Should check
+Firestore for existing iterations and resume. Prevents wasted compute.
 
-## Frontend: Noop Auth for Local Mode
+**Priority:** MEDIUM — phase splitting reduces the impact but doesn't
+eliminate it.
 
-**Problem:** The frontend always tries Firebase Auth. Local users without
-Firebase config see "Firebase not configured" errors.
+### Frontend: Noop Auth for Local Mode
+Add `NEXT_PUBLIC_AUTH_MODE=noop|firebase` for `docker compose up` experience.
+NoopAuthProvider returns fake admin user.
 
-**Fix:** Add `NEXT_PUBLIC_AUTH_MODE=noop|firebase` env var. When `noop`,
-use a `NoopAuthProvider` that returns a fake admin user. All auth-aware
-components work unchanged.
-
-**Priority:** Low — needed for "anyone can docker compose up" experience.
-
----
-
-## Onboarding Tutorial Overlay
-
-**Problem:** New users land in the app with no guidance. The Magos Noosphere
-content exists but there's no tutorial walkthrough.
-
-**Fix:** Build the 5-step tutorial overlay from `tutorial_oboarding_fun.md`:
-1. Orrery (the wow) — mascot with `galxy.png`
-2. Search (the power move) — mascot with `pointing.png`
-3. Entities (the detail layer) — mascot with `reading.png`
-4. Pipeline (the engine) — mascot with `thinking.png`
-5. The Unlock (create your own) — mascot with `happy.png`
-
-Components: `<TutorialOverlay>`, `<MascotPanel>`, `<NamingScreen>`
-
-**Priority:** Medium — depends on Magos Noosphere content being loaded and
-the demo read-only mode working.
+**Priority:** LOW
 
 ---
 
-## Merge firebase-migration Branch
+## ACTIVE — Onboarding & Polish
 
-**Status:** 50+ commits ahead of main. Rebased on top of orrery-relay PR.
-All 82 tests passing.
+### Onboarding Tutorial Overlay
+5-step walkthrough using Magos mascot images (in `public/mascot/`):
+1. Orrery (galxy.png) — the wow
+2. Search (pointing.png) — the power move
+3. Entities (reading.png) — the detail layer
+4. Pipeline (thinking.png) — the engine
+5. The Unlock (happy.png) — create your own
 
-**Blockers:**
-- Verify pipeline completes end-to-end (simmer → extraction → entities)
-- Test with real user flow (sign in → provision → upload → pipeline → orrery)
-- Reconcile Dockerfile (our Python 3.13 vs relay's Python 3.11 — resolved to 3.13)
+Depends on Magos Noosphere being set up as read-only demo workspace.
+Demo mode infrastructure exists (`DemoModeContext`, `useDemoMode()`,
+`NEXT_PUBLIC_MAGOS_WORKSPACE_ID`). Content is loaded (22 docs, 779
+entities, 33 domains).
 
-**Priority:** High — everything else builds on this.
+**Priority:** MEDIUM
+
+### Merge firebase-migration Branch
+80+ commits ahead of main. Rebased on orrery-relay PR.
+Pipeline works end-to-end: upload → classify → simmer → extract →
+embed → orrery renders.
+
+**Remaining before merge:**
+- Run full pipeline on a clean workspace to verify automation
+- Test the new parent/child simmer job chain end-to-end
+- Verify `post_process` job fires correctly from Cloud Function
+- Update tests (some may need adjusting for new job types)
+
+**Priority:** HIGH
