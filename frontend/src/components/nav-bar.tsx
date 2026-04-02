@@ -26,7 +26,7 @@ export function NavBar({
   return (
     <nav className="flex items-center gap-6 px-6 h-12 border-b border-border/50 bg-card/50">
       <span className="font-semibold text-sm tracking-widest text-muted-foreground uppercase">
-        Orrery
+        Noospheric Orrery
       </span>
 
       <NoosphereSwitcher currentId={currentNoosphereId} />
