@@ -19,7 +19,7 @@ const jobStatusStyle: Record<string, string> = {
 };
 
 // Child job types — hidden from pipeline list, shown under parent
-const CHILD_JOB_TYPES = ["simmer_golden_set", "simmer_extraction_spec"];
+const CHILD_JOB_TYPES = ["simmer_golden_set", "simmer_extraction_spec", "simmer_domain_golden_set", "simmer_domain_extraction_spec"];
 
 function getJobLink(j: JobInfo, noosphereId: string): string | null {
   if (j.type.startsWith("simmer")) return `/n/${noosphereId}/simmer/${j.id}`;
