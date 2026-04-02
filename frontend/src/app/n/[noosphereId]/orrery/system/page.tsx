@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
+import { getAuthToken } from "@/lib/firebase";
 import { GalaxyPanel } from "@/components/galaxy/galaxy-panel";
 
 interface SelectedNode {
@@ -35,9 +36,14 @@ function SystemPageInner() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult | null>(null);
   const [searching, setSearching] = useState(false);
+  const [authToken, setAuthToken] = useState("");
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  const iframeSrc = `/viz/system.html?domain=${encodeURIComponent(domain)}`;
+  useEffect(() => {
+    getAuthToken().then(t => { if (t) setAuthToken(t); }).catch(() => {});
+  }, []);
+
+  const iframeSrc = `/viz/system.html?domain=${encodeURIComponent(domain)}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}`;
 
   useEffect(() => {
     const handler = (e: MessageEvent) => {
@@ -84,7 +90,11 @@ function SystemPageInner() {
     setSearching(true);
     setSelectedNode(null);
     try {
-      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20`);
+      const token = await getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      if (noosphereId) headers["X-Workspace-Id"] = noosphereId;
+      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20&expand=false`, { headers });
       const results: SearchResult = await resp.json();
       setSearchResults(results);
       if (results.entities.length > 0) {

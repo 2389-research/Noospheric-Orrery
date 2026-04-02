@@ -74,6 +74,11 @@ const pulses = []; // traveling dots along connections
 let hoveredId = null;
 
 const API_URL = new URLSearchParams(location.search).get('api') || window.API_URL || 'http://localhost:8100';
+const AUTH_TOKEN = new URLSearchParams(location.search).get('token') || '';
+const WORKSPACE_ID = new URLSearchParams(location.search).get('workspace') || '';
+const fetchHeaders = {};
+if (AUTH_TOKEN) fetchHeaders['Authorization'] = `Bearer ${AUTH_TOKEN}`;
+if (WORKSPACE_ID) fetchHeaders['X-Workspace-Id'] = WORKSPACE_ID;
 
 async function loadData() {
   if (!entityId) {
@@ -81,7 +86,7 @@ async function loadData() {
     return;
   }
   try {
-    const graph = await fetch(`${API_URL}/entities/${entityId}/star-graph?co_limit=30`).then(r => r.json());
+    const graph = await fetch(`${API_URL}/entities/${entityId}/star-graph?co_limit=30`, { headers: fetchHeaders }).then(r => r.json());
     buildStarView(graph);
   } catch (err) {
     console.error('Star view: load failed', err);
