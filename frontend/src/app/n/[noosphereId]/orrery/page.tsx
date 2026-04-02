@@ -170,13 +170,18 @@ export default function VizPage() {
     setSelectedNode(null);
     setSelectedDocId(null);
     try {
-      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20`);
+      const token = await getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      if (noosphereId) headers["X-Workspace-Id"] = noosphereId;
+
+      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20`, { headers });
       const results: SearchResult = await resp.json();
       setSearchResults(results);
 
       // Fire glow in active viz
-      const entityNames = results.entities.slice(0, 10).map(e => e.name);
-      const docIds = [...new Set(results.chunks.map(c => c.document_id))];
+      const entityNames = (results.entities || []).slice(0, 10).map(e => e.name);
+      const docIds = [...new Set((results.chunks || []).map(c => c.document_id))];
       activeRef.current?.contentWindow?.postMessage({
         type: "search_result",
         entities: entityNames,
