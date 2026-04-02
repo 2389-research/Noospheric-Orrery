@@ -170,7 +170,7 @@ def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
             import json
             cached = cache_doc.to_dict()
             data = json.loads(cached.get("data", "{}"))
-            if data.get("domains"):
+            if data.get("domain_positions"):
                 store.close()
                 return data
 
