@@ -14,17 +14,28 @@ type SortKey = "size" | "name" | "spec";
 
 function SimmerAction({ domain: d, jobs, onSimmer }: { domain: DomainInfo; jobs: JobInfo[]; onSimmer: (path: string) => void }) {
   const noosphereId = useNoosphereId();
-  if (d.spec_version) {
-    const simmerJob = jobs.find(j => j.type.startsWith("simmer") && j.target === d.path);
-    if (simmerJob) {
-      return (
-        <Link href={`/n/${noosphereId}/simmer/${simmerJob.id}`} className="text-[10px] text-purple-400/70 hover:text-purple-400 transition-colors">
-          view run
-        </Link>
-      );
-    }
-    return <span className="text-[10px] text-muted-foreground/40">spec v{d.spec_version}</span>;
+  const isRunning = jobs.some(j => j.type.startsWith("simmer") && j.target === d.path && (j.status === "running" || j.status === "queued"));
+  const simmerJob = jobs.find(j => j.type.startsWith("simmer") && j.target === d.path);
+
+  if (isRunning) {
+    return <span className="text-[10px] text-purple-400/60 animate-pulse">simmering...</span>;
   }
+
+  if (d.spec_version) {
+    return (
+      <span className="flex items-center gap-2">
+        {simmerJob && (
+          <Link href={`/n/${noosphereId}/simmer/${simmerJob.id}`} className="text-[10px] text-purple-400/70 hover:text-purple-400 transition-colors">
+            v{d.spec_version}
+          </Link>
+        )}
+        <button onClick={() => onSimmer(d.path)} className="text-[10px] text-muted-foreground/30 hover:text-purple-400/70 transition-colors">
+          re-simmer
+        </button>
+      </span>
+    );
+  }
+
   return (
     <Button size="sm" variant="outline" className="h-5 text-[10px] px-2" onClick={() => onSimmer(d.path)}>
       simmer
