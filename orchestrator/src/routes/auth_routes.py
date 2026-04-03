@@ -1,11 +1,13 @@
 """Auth provisioning and invite endpoints for multi-tenancy."""
 
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from google.cloud import firestore
 
 from ..auth import get_current_user, require_role, AuthUser
-from ..auth_admin import set_user_claims, get_user_claims, signal_token_refresh
+
+def _is_sqlite():
+    return os.environ.get("DB_BACKEND", "sqlite").lower() == "sqlite"
 
 
 class InviteRequest(BaseModel):
@@ -17,6 +19,7 @@ router = APIRouter()
 
 def _get_firestore_db():
     """Get raw Firestore client (not workspace-scoped)."""
+    from google.cloud import firestore
     return firestore.Client()
 
 
@@ -24,9 +27,19 @@ def _get_firestore_db():
 async def provision_user(user: AuthUser = Depends(get_current_user)):
     """Create org + default workspace on first sign-in. Idempotent.
 
-    Returns existing org if already provisioned.
-    Safe to call on every sign-in.
+    In SQLite mode, returns a fixed local session.
     """
+    if _is_sqlite():
+        from .workspace_routes import _load_registry
+        registry = _load_registry()
+        workspaces = [{"id": ws["id"], "name": ws["name"]} for ws in registry if ws.get("status") != "archived"]
+        return {
+            "orgId": "local",
+            "role": "admin",
+            "workspaces": workspaces,
+        }
+
+    from ..auth_admin import set_user_claims, get_user_claims, signal_token_refresh
     db = _get_firestore_db()
     claims = get_user_claims(user.uid)
 
@@ -83,7 +96,7 @@ async def provision_user(user: AuthUser = Depends(get_current_user)):
     }
 
 
-# --- Invite flow ---
+# --- Invite flow (Firestore only — no-ops in SQLite mode) ---
 
 
 @router.post("/invites")
@@ -92,9 +105,12 @@ async def create_invite(
     user: AuthUser = Depends(require_role("admin")),
 ):
     """Admin creates an invite. Invitee accepts on next sign-in."""
+    if _is_sqlite():
+        return {"inviteId": "local", "email": req.email, "role": req.role}
     if req.role not in ("editor", "viewer"):
         raise HTTPException(400, "role must be editor or viewer")
 
+    from google.cloud import firestore
     db = _get_firestore_db()
     invite_ref = db.collection("invites").document()
     invite_ref.set({
@@ -111,6 +127,8 @@ async def create_invite(
 @router.get("/invites")
 async def list_invites(user: AuthUser = Depends(require_role("admin"))):
     """List pending invites for this org."""
+    if _is_sqlite():
+        return []
     db = _get_firestore_db()
     invites = (
         db.collection("invites")
@@ -126,6 +144,8 @@ async def revoke_invite(
     invite_id: str,
     user: AuthUser = Depends(require_role("admin")),
 ):
+    if _is_sqlite():
+        return {"revoked": True}
     db = _get_firestore_db()
     invite_ref = db.collection("invites").document(invite_id)
     invite = invite_ref.get().to_dict()
@@ -138,6 +158,9 @@ async def revoke_invite(
 @router.post("/auth/accept-invite")
 async def accept_invite(user: AuthUser = Depends(get_current_user)):
     """Called after sign-in for new users. Checks for pending invite matching their email."""
+    if _is_sqlite():
+        return {"invited": False}
+    from ..auth_admin import get_user_claims, set_user_claims, signal_token_refresh
     claims = get_user_claims(user.uid)
     if claims.get("orgId"):
         return {"invited": False, "alreadyProvisioned": True}

@@ -12,7 +12,7 @@ services:
     ports:
       - "8100:8000"
     volumes:
-      - orrery-data:/data
+      - ./data:/data
     env_file: .env
     environment:
       - DB_BACKEND=sqlite
@@ -26,7 +26,7 @@ services:
       context: .
       dockerfile: worker/Dockerfile
     volumes:
-      - orrery-data:/data
+      - ./data:/data
     env_file: .env
     environment:
       - DB_PATH=/data/orrery.db
@@ -46,5 +46,5 @@ services:
     depends_on:
       - orchestrator
 
-volumes:
-  orrery-data:
+# Data lives at ./data/ on the host — persists through container restarts,
+# rebuilds, and prunes. To reset: rm -rf ./data/

@@ -5,6 +5,9 @@ WORKDIR /app
 COPY packages/orrery-relay/ /tmp/orrery-relay/
 RUN pip install --no-cache-dir /tmp/orrery-relay/ && rm -rf /tmp/orrery-relay/
 
+# Install torch CPU-only FIRST (prevents sentence-transformers pulling 5GB CUDA)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
 # Install orchestrator with local deps (FAISS, UMAP, sentence-transformers)
 COPY orchestrator/pyproject.toml .
 RUN pip install --no-cache-dir '.[local]'
