@@ -2,6 +2,9 @@ import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, type User, type Auth } from "firebase/auth";
 import { getFirestore, doc, onSnapshot, type Firestore } from "firebase/firestore";
 
+const AUTH_MODE = process.env.NEXT_PUBLIC_AUTH_MODE || "firebase";
+const IS_NOOP = AUTH_MODE === "noop";
+
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "",
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "noospheric-orrery.firebaseapp.com",
@@ -11,14 +14,15 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "",
 };
 
-// Lazy initialization — only in browser
+// Lazy initialization — only in browser, only in firebase mode
 let _app: FirebaseApp | null = null;
 let _auth: Auth | null = null;
 const googleProvider = new GoogleAuthProvider();
 
 function getFirebaseAuth(): Auth | null {
-  if (typeof window === "undefined") return null; // SSR — skip
-  if (!firebaseConfig.apiKey) return null; // No config — skip
+  if (typeof window === "undefined") return null;
+  if (IS_NOOP) return null;
+  if (!firebaseConfig.apiKey) return null;
   if (!_app) {
     _app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
   }
@@ -28,7 +32,28 @@ function getFirebaseAuth(): Auth | null {
   return _auth;
 }
 
+// Mock user for noop mode — satisfies the User type shape used by the UI
+const NOOP_USER = {
+  uid: "local-dev",
+  email: "dev@localhost",
+  displayName: "Local Dev",
+  photoURL: null,
+  emailVerified: true,
+  isAnonymous: false,
+  metadata: {},
+  providerData: [],
+  providerId: "local",
+  refreshToken: "",
+  tenantId: null,
+  delete: async () => {},
+  getIdToken: async () => "",
+  getIdTokenResult: async () => ({} as never),
+  reload: async () => {},
+  toJSON: () => ({}),
+} as unknown as User;
+
 export async function signInWithGoogle() {
+  if (IS_NOOP) return NOOP_USER;
   const auth = getFirebaseAuth();
   if (!auth) throw new Error("Firebase not configured");
   const result = await signInWithPopup(auth, googleProvider);
@@ -36,14 +61,19 @@ export async function signInWithGoogle() {
 }
 
 export async function signOutUser() {
+  if (IS_NOOP) return;
   const auth = getFirebaseAuth();
   if (auth) await signOut(auth);
 }
 
 export function onAuthChange(callback: (user: User | null) => void) {
+  if (IS_NOOP) {
+    // Noop mode — immediately "sign in" as local dev user
+    callback(NOOP_USER);
+    return () => {};
+  }
   const auth = getFirebaseAuth();
   if (!auth) {
-    // No Firebase — treat as unauthenticated
     callback(null);
     return () => {};
   }
@@ -51,6 +81,7 @@ export function onAuthChange(callback: (user: User | null) => void) {
 }
 
 export async function getAuthToken(): Promise<string | null> {
+  if (IS_NOOP) return null; // No token needed — backend has AUTH_REQUIRED=false
   const auth = getFirebaseAuth();
   if (!auth) return null;
   const user = auth.currentUser;
@@ -60,6 +91,7 @@ export async function getAuthToken(): Promise<string | null> {
 
 export function getFirestoreDb(): Firestore | null {
   if (typeof window === "undefined") return null;
+  if (IS_NOOP) return null; // No Firestore in local mode
   if (!_app) return null;
   return getFirestore(_app);
 }
@@ -72,9 +104,25 @@ export interface SessionInfo {
 
 /**
  * Call after sign-in to provision org/workspace and set up token refresh watcher.
- * Returns session info with orgId, role, and available workspaces.
+ * In noop mode, calls the API without auth headers (backend uses DEV_USER).
  */
 export async function setupSession(apiUrl: string): Promise<SessionInfo | null> {
+  if (IS_NOOP) {
+    // Noop mode — call provision without auth headers
+    try {
+      const res = await fetch(`${apiUrl}/auth/provision`, { method: "POST" });
+      if (!res.ok) {
+        // Backend might not have /auth/provision in SQLite mode — return default session
+        return { orgId: "local", role: "admin", workspaces: [{ id: "default", name: "Default" }] };
+      }
+      return await res.json();
+    } catch {
+      // API not reachable — return hardcoded default
+      return { orgId: "local", role: "admin", workspaces: [{ id: "default", name: "Default" }] };
+    }
+  }
+
+  // Firebase mode — need auth token
   const token = await getAuthToken();
   if (!token) return null;
 
@@ -107,12 +155,7 @@ export async function setupSession(apiUrl: string): Promise<SessionInfo | null> 
 
 let _tokenRefreshUnsub: (() => void) | null = null;
 
-/**
- * Watch users/{uid}/tokenRefreshAt sentinel doc.
- * When it changes (backend updated claims), force a token refresh.
- */
 export function watchTokenRefresh(uid: string, db: Firestore): void {
-  // Clean up previous watcher
   if (_tokenRefreshUnsub) {
     _tokenRefreshUnsub();
   }

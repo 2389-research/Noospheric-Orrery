@@ -1,11 +1,16 @@
-# SQLite-only local development — no Firebase, no cloud.
+# Local development — SQLite, no Firebase, no cloud dependencies.
 # Usage: docker compose -f docker-compose.sqlite.yml up
+#
+# Requires: .env file with ANTHROPIC_BACKEND + credentials
+# (either GATEWAY_URL+GATEWAY_API_KEY or AWS_ACCESS_KEY+AWS_SECRET_KEY)
 
 services:
   orchestrator:
-    build: ./orchestrator
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile.local
     ports:
-      - "8100:8080"
+      - "8100:8000"
     volumes:
       - orrery-data:/data
     env_file: .env
@@ -14,9 +19,12 @@ services:
       - DB_PATH=/data/orrery.db
       - DOCUMENTS_DIR=/data/documents
       - SPECS_DIR=/data/specs
+      - AUTH_REQUIRED=false
 
   worker:
-    build: ./worker
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
     volumes:
       - orrery-data:/data
     env_file: .env
@@ -24,13 +32,17 @@ services:
       - DB_PATH=/data/orrery.db
       - DOCUMENTS_DIR=/data/documents
       - SPECS_DIR=/data/specs
+    depends_on:
+      - orchestrator
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        - NEXT_PUBLIC_AUTH_MODE=noop
+        - BACKEND_URL=http://orchestrator:8000
     ports:
       - "3100:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8100
     depends_on:
       - orchestrator
 
