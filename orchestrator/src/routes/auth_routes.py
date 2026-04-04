@@ -17,10 +17,18 @@ class InviteRequest(BaseModel):
 router = APIRouter()
 
 
+_firestore = None
+
+def _get_firestore_module():
+    global _firestore
+    if _firestore is None:
+        from google.cloud import firestore
+        _firestore = firestore
+    return _firestore
+
 def _get_firestore_db():
     """Get raw Firestore client (not workspace-scoped)."""
-    from google.cloud import firestore
-    return firestore.Client()
+    return _get_firestore_module().Client()
 
 
 @router.post("/auth/provision")
@@ -64,7 +72,7 @@ async def provision_user(user: AuthUser = Depends(get_current_user)):
 
     org_ref.set({
         "name": org_name,
-        "createdAt": firestore.SERVER_TIMESTAMP,
+        "createdAt": _get_firestore_module().SERVER_TIMESTAMP,
         "createdBy": user.uid,
     })
 
@@ -72,7 +80,7 @@ async def provision_user(user: AuthUser = Depends(get_current_user)):
     org_ref.collection("members").document(user.uid).set({
         "role": "admin",
         "email": user.email,
-        "joinedAt": firestore.SERVER_TIMESTAMP,
+        "joinedAt": _get_firestore_module().SERVER_TIMESTAMP,
     })
 
     # Create default workspace
@@ -81,7 +89,7 @@ async def provision_user(user: AuthUser = Depends(get_current_user)):
         "name": "Default",
         "orgId": org_id,
         "createdBy": user.uid,
-        "createdAt": firestore.SERVER_TIMESTAMP,
+        "createdAt": _get_firestore_module().SERVER_TIMESTAMP,
         "description": "",
     })
 
@@ -118,7 +126,7 @@ async def create_invite(
         "role": req.role,
         "orgId": user.org_id,
         "createdBy": user.uid,
-        "createdAt": firestore.SERVER_TIMESTAMP,
+        "createdAt": _get_firestore_module().SERVER_TIMESTAMP,
         "status": "pending",
     })
     return {"inviteId": invite_ref.id, "email": req.email, "role": req.role}
@@ -188,7 +196,7 @@ async def accept_invite(user: AuthUser = Depends(get_current_user)):
         .collection("members").document(user.uid).set({
             "role": role,
             "email": user.email,
-            "joinedAt": firestore.SERVER_TIMESTAMP,
+            "joinedAt": _get_firestore_module().SERVER_TIMESTAMP,
         })
 
     # Set claims

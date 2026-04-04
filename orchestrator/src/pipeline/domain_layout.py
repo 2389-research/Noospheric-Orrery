@@ -10,16 +10,23 @@ import numpy as np
 
 
 def _embed_texts(texts: list[str]) -> np.ndarray:
-    """Embed texts — uses Vertex AI if available, falls back to sentence-transformers."""
+    """Embed texts — uses Vertex AI if available, falls back to sentence-transformers.
+
+    Returns None if no embedding is available (Docker ARM compatibility).
+    """
     try:
         from ..services.embedding import embed_texts
         embeddings = embed_texts(texts)
         return np.array(embeddings, dtype=np.float32)
     except Exception:
-        # Fallback to local sentence-transformers (for SQLite/local dev)
+        pass
+
+    try:
         from sentence_transformers import SentenceTransformer
         model = SentenceTransformer("all-MiniLM-L6-v2")
         return model.encode(texts, normalize_embeddings=True)
+    except ImportError:
+        return None
 
 
 def _is_store(obj):
@@ -141,6 +148,18 @@ def full_fit(store_or_conn):
 
     texts = [_build_domain_text(store_or_conn, p) for p in paths]
     embeddings = _embed_texts(texts)
+
+    if embeddings is None:
+        # No embedding available — circular layout fallback
+        import math
+        positions = {}
+        for i, path in enumerate(paths):
+            angle = (2 * math.pi * i) / len(paths)
+            x = 0.5 + 0.35 * math.cos(angle)
+            y = 0.5 + 0.35 * math.sin(angle)
+            positions[path] = {"x": x, "y": y}
+            _store_position(store_or_conn, path, x, y)
+        return positions
 
     import umap
     n_neighbors = min(15, len(paths) - 1)
