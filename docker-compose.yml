@@ -24,7 +24,7 @@ services:
     ports:
       - "3100:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8100
+      - BACKEND_URL=http://orchestrator:8000
     depends_on:
       - orchestrator
 
