@@ -8,6 +8,9 @@ from .db import init_db
 async def lifespan(app: FastAPI):
     settings = get_settings()
     init_db(settings.db_path)
+    # Pre-warm SentenceTransformer model so first /graph request isn't slow
+    from .pipeline.domain_layout import _get_embed_model
+    _get_embed_model()
     yield
 
 app = FastAPI(title="Noospheric Orrery", lifespan=lifespan)
