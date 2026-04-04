@@ -1,8 +1,16 @@
-# Local development — SQLite, no Firebase, no cloud dependencies.
-# Usage: docker compose -f docker-compose.sqlite.yml up
+# Local deployment — SQLite, no Firebase, no cloud dependencies.
+# Usage: docker-compose -f docker-compose.sqlite.yml up
+#
+# NOTE: On ARM Macs, torch/sentence-transformers crash in Docker (SIGILL).
+# Set DISABLE_LOCAL_EMBEDDINGS=1 (already set below) for circular layout.
+# For full UMAP layout, run natively instead of Docker (see below).
+#
+# Native dev (recommended on ARM Mac):
+#   cd orchestrator && pip install -e '.[local]' && uvicorn src.main:app --port 8100
+#   cd worker && pip install -e . && python -m src.main
+#   cd frontend && NEXT_PUBLIC_AUTH_MODE=noop BACKEND_URL=http://localhost:8100 npm run dev
 #
 # Requires: .env file with ANTHROPIC_BACKEND + credentials
-# (either GATEWAY_URL+GATEWAY_API_KEY or AWS_ACCESS_KEY+AWS_SECRET_KEY)
 
 services:
   orchestrator:
@@ -20,6 +28,7 @@ services:
       - DOCUMENTS_DIR=/data/documents
       - SPECS_DIR=/data/specs
       - AUTH_REQUIRED=false
+      # No torch in Docker — circular layout. For UMAP, run natively.
 
   worker:
     build:

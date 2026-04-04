@@ -27,10 +27,14 @@ def embed_entities(names: list[str]) -> np.ndarray:
         norms[norms == 0] = 1
         return arr / norms
     except Exception:
-        # Fallback to sentence-transformers for local/SQLite mode
+        pass
+
+    try:
         from sentence_transformers import SentenceTransformer
         model = SentenceTransformer("all-MiniLM-L6-v2")
         return model.encode(names, normalize_embeddings=True)
+    except ImportError:
+        return None
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
