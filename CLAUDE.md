@@ -182,7 +182,7 @@ result = await refine(
 simmer-sdk is an internal dependency (**not** the PyPI `simmer-sdk` package — that's a different project):
 - **Repo**: `https://github.com/2389-research/simmer-sdk`
 - **Minimum version**: 0.2.1 (includes `get_cli_path()` fix for bundled CLI subprocess transport bug)
-- **Docker**: clone alongside, then `cp -r simmer-sdk/ worker/simmer-sdk/` before `docker compose build`
+- **Docker**: installed directly from GitHub in the worker Dockerfile — no manual clone needed
 - **Local dev**: `git clone https://github.com/2389-research/simmer-sdk.git && uv pip install -e simmer-sdk/`
 - **Gotcha**: `pip install simmer-sdk` from PyPI installs a completely different package (blockchain/Solana). Always install from the 2389-research repo.
 
