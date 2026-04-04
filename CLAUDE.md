@@ -71,12 +71,14 @@ frontend/
 
 ## Data Lives Outside the Repo
 
-All persistent data is at `~/orrery-data/`:
-- `~/orrery-data/orrery.db` — SQLite database
-- `~/orrery-data/documents/` — uploaded file copies
-- `~/orrery-data/specs/` — simmered spec files
+All persistent data follows the XDG Base Directory spec, defaulting to `~/.local/share/orrery/`:
+- `~/.local/share/orrery/orrery.db` — SQLite database
+- `~/.local/share/orrery/documents/` — uploaded file copies
+- `~/.local/share/orrery/specs/` — simmered spec files
 
-In Docker, this maps to the `orrery-data` volume mounted at `/data`.
+Override with `XDG_DATA_HOME` or the individual env vars (`DB_PATH`, `DOCUMENTS_DIR`, `SPECS_DIR`).
+
+In Docker, the `.env` file sets `/data/` paths and the `orrery-data` volume is mounted at `/data`.
 
 ## Starting the Services
 
