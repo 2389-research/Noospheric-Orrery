@@ -1,5 +1,7 @@
-FROM python:3.11-slim
-WORKDIR /app
+# ABOUTME: Docker build for the worker (background job processor).
+# ABOUTME: Uses uv for dependency management; includes Node.js + Claude CLI for simmer judge board.
+
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 # Install Node.js + Claude CLI (needed by simmer-sdk judge board)
 # The bundled CLI in claude-agent-sdk has a broken subprocess transport;
@@ -10,14 +12,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
     && npm install -g @anthropic-ai/claude-code \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install orrery-relay (shared LLM client SDK)
-COPY packages/orrery-relay/ /tmp/orrery-relay/
-RUN pip install --no-cache-dir /tmp/orrery-relay/ && rm -rf /tmp/orrery-relay/
+# Mirror repo layout so ../packages/orrery-relay resolves from pyproject.toml
+COPY packages/orrery-relay/ /app/packages/orrery-relay/
 
-# Install simmer-sdk (internal dependency — not the PyPI package, which is unrelated)
-RUN pip install --no-cache-dir "simmer-sdk @ git+https://github.com/2389-research/simmer-sdk.git"
+WORKDIR /app/worker
 
-COPY worker/pyproject.toml .
-RUN pip install --no-cache-dir .
+# Install dependencies from lockfile
+COPY worker/pyproject.toml worker/uv.lock ./
+RUN uv sync --frozen --no-cache --no-dev
+
+# Install simmer-sdk into the project venv (internal dep — not the PyPI package, which is unrelated)
+RUN uv pip install --no-cache-dir "simmer-sdk @ git+https://github.com/2389-research/simmer-sdk.git"
+
+# Copy application code
 COPY worker/src/ src/
-CMD ["python", "-m", "src.main"]
+
+CMD ["uv", "run", "python", "-m", "src.main"]
