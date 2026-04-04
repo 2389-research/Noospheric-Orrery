@@ -80,7 +80,20 @@ In Docker, this maps to the `orrery-data` volume mounted at `/data`.
 
 ## Starting the Services
 
-### With Docker
+### Local Mode (SQLite, no cloud dependencies)
+
+```bash
+# Docker (recommended):
+docker-compose -f docker-compose.sqlite.yml up
+
+# Requires: .env file with LLM credentials (ANTHROPIC_BACKEND, AWS_ACCESS_KEY, etc.)
+# Data persists at ./data/ on the host filesystem
+# Ports: orchestrator → 8100, frontend → 3100
+# Auth: noop (no sign-in required)
+# Workspaces: multi-workspace via separate SQLite files
+```
+
+### Cloud Mode (Firestore + Firebase Auth)
 
 ```bash
 docker compose up          # all three services
@@ -89,21 +102,19 @@ docker compose up orchestrator worker   # without frontend
 
 Ports: orchestrator → 8100, frontend → 3100.
 
-### Without Docker (dev)
-
-There is an env script at `/tmp/run-orchestrator.sh` that sets all required environment variables. Source it before running either Python service.
+### Without Docker (native dev)
 
 ```bash
 # Orchestrator
 source /tmp/run-orchestrator.sh
-cd orchestrator && uvicorn src.main:app --reload --port 8000
+cd orchestrator && pip install -e '.[local]' && uvicorn src.main:app --reload --port 8000
 
 # Worker (separate terminal)
 source /tmp/run-orchestrator.sh
 cd worker && python -m src.main
 
 # Frontend (separate terminal)
-cd frontend && NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
+cd frontend && NEXT_PUBLIC_AUTH_MODE=noop BACKEND_URL=http://localhost:8000 npm run dev
 ```
 
 The frontend reads `NEXT_PUBLIC_API_URL` at build/runtime. In Docker, it's set to `http://localhost:8100`.
