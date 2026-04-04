@@ -27,4 +27,9 @@ RUN uv pip install --no-cache-dir "simmer-sdk @ git+https://github.com/2389-rese
 # Copy application code
 COPY worker/src/ src/
 
+# Run as non-root user (Claude CLI refuses --dangerously-skip-permissions as root)
+RUN useradd --create-home --shell /bin/bash worker
+RUN chown -R worker:worker /app
+USER worker
+
 CMD ["uv", "run", "python", "-m", "src.main"]
