@@ -20,7 +20,10 @@ services:
     depends_on: []
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        BACKEND_URL: http://orchestrator:8000
     ports:
       - "3100:3000"
     environment:
