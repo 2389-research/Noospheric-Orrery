@@ -1,7 +1,7 @@
 [project]
 name = "orrery-orchestrator"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
@@ -13,9 +13,19 @@ dependencies = [
     "faiss-cpu>=1.7.0",
     "mcp>=1.0.0",
     "orrery-relay",
+    "firebase-admin>=6.0.0",
+    "google-cloud-firestore>=2.0.0",
+    "google-genai>=1.0.0",
 ]
 
 [project.optional-dependencies]
+local = [
+    # For local SQLite mode — FAISS search + sentence-transformers embeddings
+    # Not needed on Cloud Run (uses Vertex AI + Firestore vector search)
+    "sentence-transformers>=3.0.0",
+    "umap-learn>=0.5.0",
+    "faiss-cpu>=1.7.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",

@@ -48,11 +48,16 @@ camera.x = WORLD_W / 2;
 camera.y = WORLD_H / 2;
 
 // Load data
-const API_URL = '/api';
+const API_URL = new URLSearchParams(location.search).get('api') || window.API_URL || 'http://localhost:8100';
+const AUTH_TOKEN = new URLSearchParams(location.search).get('token') || '';
+const WORKSPACE_ID = new URLSearchParams(location.search).get('workspace') || '';
 // Use ?layout=umap to test UMAP positions
 const layoutParam = new URLSearchParams(location.search).get('layout');
 const graphUrl = layoutParam === 'umap' ? `${API_URL}/graph/umap` : `${API_URL}/graph`;
-fetch(graphUrl).then(r => r.json()).then(data => {
+const fetchHeaders = {};
+if (AUTH_TOKEN) fetchHeaders['Authorization'] = `Bearer ${AUTH_TOKEN}`;
+if (WORKSPACE_ID) fetchHeaders['X-Workspace-Id'] = WORKSPACE_ID;
+fetch(graphUrl, { headers: fetchHeaders }).then(r => r.json()).then(data => {
   state.loadGraphData(data);
   console.log(`Loaded: ${state.domains.size} domains, ${state.entities.size} entities, ${state.clusters.length} clusters`);
   updateHUD();

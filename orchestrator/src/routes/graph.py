@@ -3,9 +3,10 @@
 import math
 import numpy as np
 from collections import defaultdict
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from ..config import get_settings
-from ..db import get_connection
+from ..dependencies import get_auth_store, AuthStore
+from ..repositories.factory import get_store
 
 router = APIRouter()
 
@@ -153,105 +154,122 @@ def _layout_domains(domains: list[dict]) -> dict[str, dict]:
 
 
 @router.get("/graph")
-def get_graph_data():
-    """Return graph data in cosmic_data_v4 format."""
-    settings = get_settings()
-    conn = get_connection(settings.db_path)
+def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
+    """Return graph data in cosmic_data_v4 format.
+
+    On Firestore: reads precomputed graph JSON from workspaces/{id}/cache/graph.
+    On SQLite: computes live (fast with SQL joins).
+    """
+    store = auth.store
+
+    # Firestore: try cached graph first
+    if hasattr(store, '_db'):
+        cache_ref = store._db.collection("workspaces").document(store._workspace_id).collection("cache").document("graph")
+        cache_doc = cache_ref.get()
+        if cache_doc.exists:
+            import json
+            cached = cache_doc.to_dict()
+            data = json.loads(cached.get("data", "{}"))
+            if data.get("domain_positions"):
+                store.close()
+                return data
 
     # Get all domains with docs
-    domains_raw = conn.execute(
-        "SELECT id, path, parent_path, document_count, spec_version FROM domains WHERE document_count > 0 ORDER BY path"
-    ).fetchall()
-    domains = [{"id": r[0], "path": r[1], "parent_path": r[2], "doc_count": r[3], "spec_version": r[4]} for r in domains_raw]
+    domain_objs = store.domains.list(min_doc_count=1)
+    domains = [{"id": d.id, "path": d.path, "parent_path": d.parent_path,
+                "doc_count": d.document_count, "spec_version": d.spec_version} for d in domain_objs]
 
-    # Domain positions — UMAP-based with persistence
-    from ..pipeline.domain_layout import ensure_layout
-    domain_positions = ensure_layout(conn)
+    # Domain positions — read from stored positions
+    # On SQLite: UMAP computes if needed. On Firestore: positions pre-pushed, just read.
+    if store.conn is not None:
+        from ..pipeline.domain_layout import ensure_layout
+        domain_positions = ensure_layout(store)
+    else:
+        domain_positions = store.layout.get_stored_positions()
+        # Place any domains without positions in a circle
+        import math
+        missing = [d["path"] for d in domains if d["path"] not in domain_positions]
+        for i, path in enumerate(missing):
+            angle = (i / max(len(missing), 1)) * 2 * math.pi
+            x = 0.5 + 0.3 * math.cos(angle)
+            y = 0.5 + 0.3 * math.sin(angle)
+            domain_positions[path] = {"x": x, "y": y}
+            store.layout.store_position(path, x, y)
 
-    # Domain doc counts
     domain_doc_counts = {d["path"]: d["doc_count"] for d in domains}
-
-    # Domain colors — golden ratio distribution within hue slices
     region_colors = _assign_domain_colors(domains)
-    # Also add top-level region key for backward compat
     for d in domains:
         region = d["path"].split("/")[0]
         if region not in region_colors:
             region_colors[region] = region_colors.get(d["path"], "#81d4fa")
 
-    # Subdomains (3+ levels deep)
     subdomains = [d["path"] for d in domains if d["path"].count("/") >= 2]
 
-    # Entities with domain weights
-    entities_raw = conn.execute("""
-        SELECT e.id, e.canonical_name, e.type,
-               (SELECT COUNT(*) FROM entity_sources es WHERE es.entity_id = e.id) as source_count
-        FROM entities e
-        ORDER BY source_count DESC
-    """).fetchall()
+    # Entities with domain weights — batch load to avoid N+1 queries
+    all_entities = store.entities.list(limit=5000)
+
+    # Batch: load all entity sources and document-domain mappings at once
+    if hasattr(store, '_db'):
+        # Firestore: batch load
+        es_col = store._db.collection("workspaces").document(store._workspace_id).collection("entitySources")
+        dd_col = store._db.collection("workspaces").document(store._workspace_id).collection("documentDomains")
+
+        all_sources = list(es_col.stream())
+        all_doc_domains = list(dd_col.stream())
+
+        # Build lookup: doc_id -> [domain_paths]
+        doc_to_domains: dict[str, list[str]] = {}
+        for dd in all_doc_domains:
+            ddd = dd.to_dict()
+            did = ddd.get("documentId", "")
+            path = ddd.get("domainPath", "")
+            if did and path:
+                doc_to_domains.setdefault(did, []).append(path)
+
+        # Build lookup: entity_id -> {domain_path: count}
+        entity_domain_weights: dict[str, dict[str, float]] = {}
+        for s in all_sources:
+            sd = s.to_dict()
+            eid = sd.get("entityId", "")
+            did = sd.get("documentId", "")
+            if eid and did:
+                for path in doc_to_domains.get(did, []):
+                    if eid not in entity_domain_weights:
+                        entity_domain_weights[eid] = {}
+                    entity_domain_weights[eid][path] = entity_domain_weights[eid].get(path, 0) + 1
+
+        # Normalize weights
+        for eid, counts in entity_domain_weights.items():
+            total = sum(counts.values())
+            if total > 0:
+                entity_domain_weights[eid] = {p: round(c / total, 3) for p, c in counts.items()}
+    else:
+        # SQLite: use the per-entity method (fast with SQL joins)
+        entity_domain_weights = {}
+        for e in all_entities:
+            w = store.domains.get_entity_domain_weights(e.id)
+            if w:
+                entity_domain_weights[e.id] = w
 
     entities = []
-    for e in entities_raw:
-        # Get domain weights for this entity
-        domain_weights_raw = conn.execute("""
-            SELECT dd.domain_path, COUNT(*) as weight
-            FROM entity_sources es
-            JOIN document_domains dd ON es.document_id = dd.document_id
-            WHERE es.entity_id = ?
-            GROUP BY dd.domain_path
-        """, (e[0],)).fetchall()
-
-        if not domain_weights_raw:
+    for e in all_entities:
+        dw = entity_domain_weights.get(e.id, {})
+        if not dw:
             continue
-
-        total = sum(r[1] for r in domain_weights_raw)
-        domain_weights = {r[0]: round(r[1] / total, 3) for r in domain_weights_raw}
-
         entities.append({
-            "entityId": e[0],
-            "name": e[1],
-            "type": e[2],
-            "videoCount": e[3],
-            "domainWeights": domain_weights,
+            "entityId": e.id, "name": e.canonical_name, "type": e.type,
+            "videoCount": e.source_count, "domainWeights": dw,
         })
 
-    # Trade routes — domains that share entities, weighted by count of shared entity mentions
-    shared = conn.execute("""
-        SELECT dd1.domain_path, dd2.domain_path, COUNT(*) as weight
-        FROM entity_sources es1
-        JOIN entity_sources es2 ON es1.entity_id = es2.entity_id AND es1.document_id != es2.document_id
-        JOIN document_domains dd1 ON es1.document_id = dd1.document_id
-        JOIN document_domains dd2 ON es2.document_id = dd2.document_id
-        WHERE dd1.domain_path < dd2.domain_path
-        GROUP BY dd1.domain_path, dd2.domain_path
-    """).fetchall()
+    # Trade routes
+    trade_routes = store.relationships.get_trade_routes()
 
-    trade_routes = [
-        {"source": r[0], "target": r[1], "weight": r[2]}
-        for r in shared
-    ]
+    # Recent documents
+    recent_docs = store.documents.get_recent(limit=50)
+    videos = [{"id": d.id, "title": d.title, "domains": d.domains,
+               "primary": d.domains[0] if d.domains else None} for d in recent_docs]
 
-    # Documents (for comet animations)
-    docs_raw = conn.execute("""
-        SELECT d.id, d.title, GROUP_CONCAT(dd.domain_path) as domains
-        FROM documents d
-        LEFT JOIN document_domains dd ON d.id = dd.document_id
-        GROUP BY d.id
-        ORDER BY d.created_at DESC
-        LIMIT 50
-    """).fetchall()
-
-    videos = [
-        {
-            "id": r[0],
-            "title": r[1],
-            "domains": r[2].split(",") if r[2] else [],
-            "primary": r[2].split(",")[0] if r[2] else None,
-        }
-        for r in docs_raw
-    ]
-
-    # Domain specs for maturity calculation
+    # Domain specs
     domain_specs = {}
     for d in domains:
         if d["spec_version"]:
@@ -259,14 +277,11 @@ def get_graph_data():
         else:
             domain_specs[d["path"]] = None
 
-    # Active simmer jobs
-    active_simmers = []
-    active_jobs = conn.execute(
-        "SELECT target FROM jobs WHERE type LIKE 'simmer_%' AND status = 'running'"
-    ).fetchall()
-    active_simmers = [r[0] for r in active_jobs]
+    # Active simmers
+    running_jobs = store.jobs.list(status_filter="running")
+    active_simmers = [j.target for j in running_jobs if j.type.startswith("simmer_")]
 
-    conn.close()
+    store.close()
 
     return {
         "domain_positions": domain_positions,
@@ -277,7 +292,7 @@ def get_graph_data():
         "subdomains": subdomains,
         "videos": videos,
         "entities": entities,
-        "v3_entities": [],  # compat field
+        "v3_entities": [],
         "trade_routes": trade_routes,
     }
 
@@ -358,10 +373,11 @@ def _layout_domains_umap(domains: list[dict], conn) -> dict[str, dict]:
 
 
 @router.get("/graph/umap")
-def get_graph_data_umap():
+def get_graph_data_umap(auth: AuthStore = Depends(get_auth_store)):
     """Same as /graph but with UMAP-based domain positions."""
     settings = get_settings()
-    conn = get_connection(settings.db_path)
+    store = auth.store
+    conn = store.conn
 
     domains_raw = conn.execute(
         "SELECT id, path, parent_path, document_count, spec_version FROM domains WHERE document_count > 0 ORDER BY path"
@@ -425,7 +441,7 @@ def get_graph_data_umap():
     ).fetchall()
     active_simmers = [r[0] for r in active_jobs]
 
-    conn.close()
+    store.close()
 
     return {
         "domain_positions": domain_positions,

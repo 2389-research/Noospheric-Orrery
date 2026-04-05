@@ -1,13 +1,13 @@
-from fastapi import APIRouter
-from ..config import get_settings
-from ..db import get_connection
+from fastapi import APIRouter, Depends
+from ..dependencies import get_auth_store, AuthStore
 
 router = APIRouter()
 
 @router.get("/domains")
-def list_domains():
-    settings = get_settings()
-    conn = get_connection(settings.db_path)
-    rows = conn.execute("SELECT id, path, parent_path, document_count, spec_version, created_at FROM domains WHERE document_count > 0 ORDER BY path").fetchall()
-    conn.close()
-    return [{"id": r[0], "path": r[1], "parent_path": r[2], "document_count": r[3], "spec_version": r[4], "created_at": r[5]} for r in rows]
+def list_domains(auth: AuthStore = Depends(get_auth_store)):
+    store = auth.store
+    domains = store.domains.list(min_doc_count=1)
+    store.close()
+    return [{"id": d.id, "path": d.path, "parent_path": d.parent_path,
+             "document_count": d.document_count, "spec_version": d.spec_version,
+             "created_at": d.created_at} for d in domains]

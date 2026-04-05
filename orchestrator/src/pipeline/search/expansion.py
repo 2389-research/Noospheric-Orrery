@@ -1,8 +1,19 @@
 # ABOUTME: Stage 0: Query expansion via Haiku.
-# ABOUTME: Expands a search query into multiple sub-queries using an LLM.
+# ABOUTME: Uses tool use for guaranteed valid JSON output.
 
-import json
 from orrery_relay import Relay
+
+EXPANSION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "sub_queries": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Expanded search sub-queries",
+        },
+    },
+    "required": ["sub_queries"],
+}
 
 
 async def expand_query(
@@ -11,7 +22,7 @@ async def expand_query(
     max_sub_queries: int = 5,
 ) -> list[str]:
     """Expand a query into multiple sub-queries using Haiku."""
-    response = await relay.complete(
+    result = await relay.complete_structured(
         model="claude-haiku-4-5",
         max_tokens=512,
         messages=[{
@@ -22,21 +33,10 @@ async def expand_query(
 - Related concepts
 - More specific versions of vague terms
 
-Query: {query}
-
-Return as a JSON array of strings only. No explanation.""",
+Query: {query}""",
         }],
+        schema=EXPANSION_SCHEMA,
+        tool_name="expand_query",
+        tool_description="Generate search sub-queries to expand the original query",
     )
-
-    text = response.text
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-
-    try:
-        sub_queries = json.loads(text)
-        if isinstance(sub_queries, list):
-            return sub_queries[:max_sub_queries]
-    except json.JSONDecodeError:
-        pass
-
-    return [query]
+    return result.get("sub_queries", [query])[:max_sub_queries]

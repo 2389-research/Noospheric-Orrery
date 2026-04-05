@@ -1,7 +1,6 @@
 # ABOUTME: Lightweight subdomain discovery from extracted entities.
 # ABOUTME: Additive — docs gain subdomains, never lose existing domains.
 
-import json
 import sqlite3
 from orrery_relay import Relay
 
@@ -22,12 +21,19 @@ Rules:
 - Subdomains must be children of existing domains (e.g., business/fundraising → business/fundraising/seed_round)
 - Only propose if the entities clearly indicate a specific subtopic
 - If no subdomains are warranted, return an empty list
-
-Respond with JSON only:
-{{
-    "new_subdomains": ["domain/path/subdomain", ...]
-}}
 """
+
+SUBDOMAIN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "new_subdomains": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "New subdomain paths to add, or empty list",
+        },
+    },
+    "required": ["new_subdomains"],
+}
 
 
 async def discover_subdomains_for_document(
@@ -65,9 +71,8 @@ async def discover_subdomains_for_document(
     taxonomy = conn.execute("SELECT path FROM domains ORDER BY path").fetchall()
     taxonomy_str = "\n".join(f"- {t[0]}" for t in taxonomy)
 
-    response = await relay.complete(
-        model=model,
-        max_tokens=512,
+    result = await relay.complete_structured(
+        model=model, max_tokens=512,
         messages=[{
             "role": "user",
             "content": SUBDOMAIN_PROMPT.format(
@@ -76,17 +81,11 @@ async def discover_subdomains_for_document(
                 taxonomy=taxonomy_str,
             ),
         }],
+        schema=SUBDOMAIN_SCHEMA,
+        tool_name="propose_subdomains",
+        tool_description="Propose new subdomains based on extracted entities",
     )
-
-    text = response.text
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-
-    try:
-        result = json.loads(text)
-        return result.get("new_subdomains", [])
-    except json.JSONDecodeError:
-        return []
+    return result.get("new_subdomains", [])
 
 
 async def run_subdomain_discovery(

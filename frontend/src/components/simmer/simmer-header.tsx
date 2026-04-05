@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { SimmerJobDetail } from "@/lib/types";
+import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 
-function timeSince(dateStr: string | undefined): string {
-  if (!dateStr) return "unknown";
+function timeSince(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
   // Ensure UTC parsing — timestamps from SQLite lack timezone suffix
   const utcStr = dateStr.includes("Z") || dateStr.includes("+") ? dateStr : dateStr + "Z";
   const seconds = Math.floor((Date.now() - new Date(utcStr).getTime()) / 1000);
@@ -28,6 +29,7 @@ function getStartedAt(job: SimmerJobDetail): string {
 }
 
 export function SimmerHeader({ job }: { job: SimmerJobDetail }) {
+  const noosphereId = useNoosphereId();
   const shortId = job.job_id.slice(0, 8);
   const startedAt = getStartedAt(job);
   const isRunning = job.status === "running";
@@ -38,7 +40,7 @@ export function SimmerHeader({ job }: { job: SimmerJobDetail }) {
     <div className="flex items-start justify-between">
       <div className="space-y-1">
         <div className="text-[10px] tracking-[2px] text-muted-foreground/85 uppercase">
-          <Link href="/pipeline" className="hover:text-muted-foreground transition-colors">jobs</Link>
+          <Link href={`/n/${noosphereId}/pipeline`} className="hover:text-muted-foreground transition-colors">jobs</Link>
           <span className="mx-1">/</span>
           <span className="text-muted-foreground/85">{shortId}</span>
           <span className="mx-2 text-muted-foreground/85">·</span>

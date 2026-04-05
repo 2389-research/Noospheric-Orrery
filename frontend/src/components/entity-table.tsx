@@ -1,6 +1,7 @@
 "use client";
 import { Badge } from "@/components/ui/badge";
 import { EntitySummary } from "@/lib/types";
+import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 
 const typeColors: Record<string, string> = {
   Person: "border-blue-500/40 text-blue-400",
@@ -13,6 +14,7 @@ const typeColors: Record<string, string> = {
 };
 
 export function EntityTable({ entities }: { entities: EntitySummary[] }) {
+  const noosphereId = useNoosphereId();
   if (entities.length === 0) return <p className="text-muted-foreground/85 text-xs">No entities yet</p>;
   return (
     <div className="rounded border border-border/30">
@@ -26,7 +28,7 @@ export function EntityTable({ entities }: { entities: EntitySummary[] }) {
             {e.type}
           </Badge>
           <span className="text-muted-foreground/90">{e.source_count}</span>
-          <a href={`/entities/${e.id}`} className="text-cyan-500/70 hover:text-cyan-400 transition-colors">→</a>
+          <a href={`/n/${noosphereId}/entities/${e.id}`} className="text-cyan-500/70 hover:text-cyan-400 transition-colors">→</a>
         </div>
       ))}
     </div>

@@ -1,0 +1,831 @@
+from __future__ import annotations
+"""SQLite implementation of the DataStore repositories.
+
+Wraps all existing SQL queries behind the repository interfaces.
+This is a drop-in replacement — the same queries, same behavior,
+just organized behind a clean interface.
+"""
+
+import json
+import sqlite3
+from .interfaces import (
+    DataStore,
+    DocumentRepository, ChunkRepository, DomainRepository,
+    EntityRepository, EntitySourceRepository, RelationshipRepository,
+    JobRepository, SpecRepository, NormalizationRepository,
+    LayoutRepository, SimmerIterationRepository,
+    Document, Chunk, Domain, Entity, EntitySource, Relationship,
+    Job, Spec, SimmerIteration, NormalizationReview, DomainAssignment, CoEntity,
+)
+from ..db import get_connection, init_db
+
+
+class SQLiteDocumentRepository(DocumentRepository):
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+
+    def count(self):
+        return self._conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+
+    def create(self, id, title, content, content_hash, source_path=None):
+        self._conn.execute(
+            "INSERT INTO documents (id, title, content, content_hash, source_path, status) VALUES (?, ?, ?, ?, ?, 'pending')",
+            (id, title, content, content_hash, source_path),
+        )
+        self._conn.commit()
+        return id
+
+    def get(self, doc_id):
+        row = self._conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        if not row:
+            return None
+        return Document(
+            id=row["id"], title=row["title"], content=row["content"],
+            content_hash=row["content_hash"], source_path=row["source_path"],
+            status=row["status"], created_at=row["created_at"],
+        )
+
+    def list(self, limit=50, offset=0):
+        rows = self._conn.execute(
+            "SELECT d.*, GROUP_CONCAT(dd.domain_path) as domains FROM documents d "
+            "LEFT JOIN document_domains dd ON d.id = dd.document_id "
+            "GROUP BY d.id ORDER BY d.created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+        result = []
+        for r in rows:
+            doc = Document(id=r["id"], title=r["title"], status=r["status"], created_at=r["created_at"])
+            doc.domains = r["domains"].split(",") if r["domains"] else []
+            result.append(doc)
+        return result
+
+    def get_by_hash(self, content_hash):
+        row = self._conn.execute("SELECT id FROM documents WHERE content_hash = ?", (content_hash,)).fetchone()
+        return Document(id=row["id"], title="") if row else None
+
+    def update_status(self, doc_id, status):
+        self._conn.execute("UPDATE documents SET status = ? WHERE id = ?", (status, doc_id))
+        self._conn.commit()
+
+    def get_for_domain(self, domain_path, status_filter=None):
+        query = """SELECT d.* FROM documents d
+            JOIN document_domains dd ON d.id = dd.document_id
+            WHERE dd.domain_path = ?"""
+        params = [domain_path]
+        if status_filter:
+            placeholders = ",".join("?" * len(status_filter))
+            query += f" AND d.status IN ({placeholders})"
+            params.extend(status_filter)
+        rows = self._conn.execute(query, params).fetchall()
+        return [Document(id=r["id"], title=r["title"], content=r["content"],
+                         status=r["status"], created_at=r["created_at"]) for r in rows]
+
+    def get_recent(self, limit=50):
+        rows = self._conn.execute(
+            "SELECT d.id, d.title, GROUP_CONCAT(dd.domain_path) as domains "
+            "FROM documents d LEFT JOIN document_domains dd ON d.id = dd.document_id "
+            "GROUP BY d.id ORDER BY d.created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        result = []
+        for r in rows:
+            doc = Document(id=r["id"], title=r["title"])
+            doc.domains = r["domains"].split(",") if r["domains"] else []
+            result.append(doc)
+        return result
+
+    def get_sample(self, limit=10, status_filter=None):
+        query = "SELECT * FROM documents"
+        params = []
+        if status_filter:
+            placeholders = ",".join("?" * len(status_filter))
+            query += f" WHERE status IN ({placeholders})"
+            params.extend(status_filter)
+        query += " ORDER BY RANDOM() LIMIT ?"
+        params.append(limit)
+        rows = self._conn.execute(query, params).fetchall()
+        return [Document(id=r["id"], title=r["title"], content=r["content"],
+                         status=r["status"]) for r in rows]
+
+
+class SQLiteChunkRepository(ChunkRepository):
+    def __init__(self, conn):
+        self._conn = conn
+
+    def create_batch(self, chunks):
+        for c in chunks:
+            self._conn.execute(
+                "INSERT INTO chunks (id, document_id, chunk_index, offset, length, text) VALUES (?, ?, ?, ?, ?, ?)",
+                (c.id, c.document_id, c.chunk_index, c.offset, c.length, c.text),
+            )
+        self._conn.commit()
+
+    def get_for_document(self, doc_id):
+        rows = self._conn.execute(
+            "SELECT * FROM chunks WHERE document_id = ? ORDER BY chunk_index", (doc_id,)
+        ).fetchall()
+        return [Chunk(id=r["id"], document_id=r["document_id"], chunk_index=r["chunk_index"],
+                       text=r["text"], offset=r["offset"], length=r["length"],
+                       embedding=r["embedding"]) for r in rows]
+
+    def get_all_with_embeddings(self):
+        rows = self._conn.execute("SELECT id, document_id, chunk_index, text, embedding FROM chunks").fetchall()
+        return [Chunk(id=r["id"], document_id=r["document_id"], chunk_index=r["chunk_index"],
+                       text=r["text"], embedding=r["embedding"]) for r in rows]
+
+    def update_embedding(self, chunk_id, embedding):
+        self._conn.execute("UPDATE chunks SET embedding = ? WHERE id = ?", (embedding, chunk_id))
+        self._conn.commit()
+
+
+class SQLiteDomainRepository(DomainRepository):
+    def __init__(self, conn):
+        self._conn = conn
+
+    def create(self, id, path, parent_path=None):
+        self._conn.execute(
+            "INSERT INTO domains (id, path, parent_path, document_count) VALUES (?, ?, ?, 0)",
+            (id, path, parent_path),
+        )
+        self._conn.commit()
+
+    def get(self, path):
+        row = self._conn.execute("SELECT * FROM domains WHERE path = ?", (path,)).fetchone()
+        if not row:
+            return None
+        return Domain(id=row["id"], path=row["path"], parent_path=row["parent_path"],
+                      document_count=row["document_count"], spec_version=row["spec_version"],
+                      created_at=row["created_at"])
+
+    def get_by_id(self, domain_id):
+        row = self._conn.execute("SELECT * FROM domains WHERE id = ?", (domain_id,)).fetchone()
+        if not row:
+            return None
+        return Domain(id=row["id"], path=row["path"], parent_path=row["parent_path"],
+                      document_count=row["document_count"], spec_version=row["spec_version"])
+
+    def list(self, min_doc_count=0):
+        rows = self._conn.execute(
+            "SELECT * FROM domains WHERE document_count >= ? ORDER BY path", (min_doc_count,)
+        ).fetchall()
+        return [Domain(id=r["id"], path=r["path"], parent_path=r["parent_path"],
+                        document_count=r["document_count"], spec_version=r["spec_version"],
+                        created_at=r["created_at"]) for r in rows]
+
+    def get_all_paths(self):
+        rows = self._conn.execute("SELECT path FROM domains ORDER BY path").fetchall()
+        return [r["path"] for r in rows]
+
+    def increment_doc_count(self, path):
+        self._conn.execute("UPDATE domains SET document_count = document_count + 1 WHERE path = ?", (path,))
+        self._conn.commit()
+
+    def update_spec_version(self, path, version):
+        self._conn.execute("UPDATE domains SET spec_version = ? WHERE path = ?", (version, path))
+        self._conn.commit()
+
+    def get_merge_target(self, label):
+        row = self._conn.execute("SELECT to_path FROM domain_merge_map WHERE from_label = ?",
+                                  (label.lower().strip(),)).fetchone()
+        return row["to_path"] if row else None
+
+    def assign_document(self, doc_id, domain_path, is_primary, confidence):
+        self._conn.execute(
+            "INSERT OR REPLACE INTO document_domains (document_id, domain_path, is_primary, confidence) VALUES (?, ?, ?, ?)",
+            (doc_id, domain_path, is_primary, confidence),
+        )
+        self._conn.commit()
+
+    def get_domains_for_document(self, doc_id):
+        rows = self._conn.execute(
+            "SELECT * FROM document_domains WHERE document_id = ?", (doc_id,)
+        ).fetchall()
+        return [DomainAssignment(document_id=r["document_id"], domain_path=r["domain_path"],
+                                  is_primary=bool(r["is_primary"]), confidence=r["confidence"]) for r in rows]
+
+    def get_entity_domain_weights(self, entity_id):
+        rows = self._conn.execute("""
+            SELECT dd.domain_path, COUNT(*) as weight
+            FROM entity_sources es
+            JOIN document_domains dd ON es.document_id = dd.document_id
+            WHERE es.entity_id = ?
+            GROUP BY dd.domain_path
+        """, (entity_id,)).fetchall()
+        total = sum(r["weight"] for r in rows)
+        if total == 0:
+            return {}
+        return {r["domain_path"]: round(r["weight"] / total, 3) for r in rows}
+
+
+class SQLiteEntityRepository(EntityRepository):
+    def __init__(self, conn):
+        self._conn = conn
+
+    def count(self):
+        return self._conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+
+    def create(self, id, name, type):
+        self._conn.execute(
+            "INSERT INTO entities (id, canonical_name, type) VALUES (?, ?, ?)", (id, name, type),
+        )
+        self._conn.commit()
+        return id
+
+    def get(self, entity_id):
+        row = self._conn.execute("SELECT * FROM entities WHERE id = ?", (entity_id,)).fetchone()
+        if not row:
+            return None
+        count = self._conn.execute(
+            "SELECT COUNT(*) as c FROM entity_sources WHERE entity_id = ?", (entity_id,)
+        ).fetchone()["c"]
+        return Entity(id=row["id"], canonical_name=row["canonical_name"], type=row["type"],
+                      source_count=count, embedding=row["embedding"], created_at=row["created_at"])
+
+    def get_by_name(self, name, type):
+        row = self._conn.execute(
+            "SELECT * FROM entities WHERE canonical_name = ? AND type = ?", (name, type)
+        ).fetchone()
+        if not row:
+            return None
+        return Entity(id=row["id"], canonical_name=row["canonical_name"], type=row["type"])
+
+    def list(self, limit=50, offset=0, type_filter=None, domain_filter=None, job_id=None):
+        query = """SELECT e.id, e.canonical_name, e.type,
+                   (SELECT COUNT(*) FROM entity_sources es WHERE es.entity_id = e.id) as source_count
+                   FROM entities e"""
+        params = []
+        joins = []
+        conditions = []
+
+        if domain_filter:
+            joins.append("JOIN entity_sources es2 ON e.id = es2.entity_id "
+                         "JOIN document_domains dd ON es2.document_id = dd.document_id AND dd.domain_path LIKE ? || '%'")
+            params.append(domain_filter)
+        if job_id:
+            joins.append("JOIN entity_sources es3 ON e.id = es3.entity_id AND es3.job_id = ?")
+            params.append(job_id)
+        if type_filter:
+            conditions.append("e.type = ?")
+            params.append(type_filter)
+
+        if joins:
+            query += " " + " ".join(joins)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " GROUP BY e.id ORDER BY source_count DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        rows = self._conn.execute(query, params).fetchall()
+        return [Entity(id=r["id"], canonical_name=r["canonical_name"], type=r["type"],
+                        source_count=r["source_count"]) for r in rows]
+
+    def delete(self, entity_id):
+        self._conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
+        self._conn.commit()
+
+    def update_embedding(self, entity_id, embedding):
+        self._conn.execute("UPDATE entities SET embedding = ? WHERE id = ?", (embedding, entity_id))
+        self._conn.commit()
+
+    def get_all_for_normalization(self):
+        rows = self._conn.execute(
+            "SELECT id, canonical_name, type FROM entities ORDER BY canonical_name"
+        ).fetchall()
+        return [Entity(id=r["id"], canonical_name=r["canonical_name"], type=r["type"]) for r in rows]
+
+    def get_for_document(self, doc_id):
+        rows = self._conn.execute("""
+            SELECT DISTINCT e.id, e.canonical_name, e.type,
+                   (SELECT COUNT(*) FROM entity_sources es2 WHERE es2.entity_id = e.id) as source_count
+            FROM entities e
+            JOIN entity_sources es ON e.id = es.entity_id
+            WHERE es.document_id = ?
+            ORDER BY source_count DESC
+        """, (doc_id,)).fetchall()
+        return [Entity(id=r["id"], canonical_name=r["canonical_name"], type=r["type"],
+                        source_count=r["source_count"]) for r in rows]
+
+    def get_for_domain(self, domain_path, limit=12):
+        rows = self._conn.execute("""
+            SELECT e.canonical_name FROM entities e
+            JOIN entity_sources es ON e.id = es.entity_id
+            JOIN document_domains dd ON es.document_id = dd.document_id
+            WHERE dd.domain_path = ?
+            GROUP BY e.id ORDER BY COUNT(*) DESC LIMIT ?
+        """, (domain_path, limit)).fetchall()
+        return [Entity(id="", canonical_name=r["canonical_name"], type="") for r in rows]
+
+
+class SQLiteEntitySourceRepository(EntitySourceRepository):
+    def __init__(self, conn):
+        self._conn = conn
+
+    def create(self, entity_id, document_id, chunk_id=None, extraction_pass=None,
+               spec_version=None, job_id=None):
+        self._conn.execute(
+            "INSERT INTO entity_sources (entity_id, document_id, chunk_id, extraction_pass, spec_version, job_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (entity_id, document_id, chunk_id, extraction_pass, spec_version, job_id),
+        )
+        self._conn.commit()
+
+    def get_for_entity(self, entity_id):
+        rows = self._conn.execute(
+            "SELECT * FROM entity_sources WHERE entity_id = ?", (entity_id,)
+        ).fetchall()
+        return [EntitySource(entity_id=r["entity_id"], document_id=r["document_id"],
+                              chunk_id=r["chunk_id"], extraction_pass=r["extraction_pass"],
+                              spec_version=r["spec_version"], job_id=r["job_id"]) for r in rows]
+
+    def get_source_count(self, entity_id):
+        row = self._conn.execute(
+            "SELECT COUNT(*) as c FROM entity_sources WHERE entity_id = ?", (entity_id,)
+        ).fetchone()
+        return row["c"]
+
+    def update_entity_id(self, from_id, to_id):
+        self._conn.execute(
+            "UPDATE entity_sources SET entity_id = ? WHERE entity_id = ?", (to_id, from_id)
+        )
+        self._conn.commit()
+
+    def get_shared_documents(self, entity_id, doc_ids):
+        if not doc_ids:
+            return {}
+        placeholders = ",".join("?" * len(doc_ids))
+        rows = self._conn.execute(f"""
+            SELECT es.entity_id, es.document_id
+            FROM entity_sources es
+            WHERE es.entity_id = ? AND es.document_id IN ({placeholders})
+        """, [entity_id] + doc_ids).fetchall()
+        result = {}
+        for r in rows:
+            result.setdefault(r["entity_id"], []).append(r["document_id"])
+        return result
+
+    def get_documents_for_entity(self, entity_id):
+        rows = self._conn.execute("""
+            SELECT DISTINCT d.id, d.title
+            FROM entity_sources es
+            JOIN documents d ON es.document_id = d.id
+            WHERE es.entity_id = ?
+            ORDER BY d.title
+        """, (entity_id,)).fetchall()
+        return [{"id": r["id"], "title": r["title"]} for r in rows]
+
+
+class SQLiteRelationshipRepository(RelationshipRepository):
+    def __init__(self, conn):
+        self._conn = conn
+
+    def upsert_cooccurrence(self, id, from_entity, to_entity, weight, source_chunk=None):
+        self._conn.execute(
+            "INSERT OR REPLACE INTO relationships (id, from_entity, to_entity, type, weight, source_chunk) "
+            "VALUES (?, ?, ?, 'co_occurs', ?, ?)",
+            (id, from_entity, to_entity, weight, source_chunk),
+        )
+        self._conn.commit()
+
+    def get_cooccurrences(self, entity_id, limit=10):
+        rows = self._conn.execute("""
+            SELECT e.id, e.canonical_name, e.type, SUM(r.weight) as total_weight
+            FROM relationships r
+            JOIN entities e ON (
+                CASE WHEN r.from_entity = ? THEN r.to_entity ELSE r.from_entity END
+            ) = e.id
+            WHERE (r.from_entity = ? OR r.to_entity = ?) AND r.type = 'co_occurs'
+            GROUP BY e.id ORDER BY total_weight DESC LIMIT ?
+        """, (entity_id, entity_id, entity_id, limit)).fetchall()
+        return [CoEntity(id=r["id"], canonical_name=r["canonical_name"], type=r["type"],
+                          weight=r["total_weight"]) for r in rows]
+
+    def get_trade_routes(self):
+        rows = self._conn.execute("""
+            SELECT dd1.domain_path, dd2.domain_path, COUNT(*) as weight
+            FROM entity_sources es1
+            JOIN entity_sources es2 ON es1.entity_id = es2.entity_id AND es1.document_id != es2.document_id
+            JOIN document_domains dd1 ON es1.document_id = dd1.document_id
+            JOIN document_domains dd2 ON es2.document_id = dd2.document_id
+            WHERE dd1.domain_path < dd2.domain_path
+            GROUP BY dd1.domain_path, dd2.domain_path
+        """).fetchall()
+        return [{"source": r[0], "target": r[1], "weight": r[2]} for r in rows]
+
+    def get_star_graph(self, entity_id, co_limit=30):
+        # Entity info
+        entity = self._conn.execute(
+            "SELECT id, canonical_name, type FROM entities WHERE id = ?", (entity_id,)
+        ).fetchone()
+        if not entity:
+            return None
+
+        # Documents
+        doc_rows = self._conn.execute("""
+            SELECT DISTINCT d.id, d.title FROM entity_sources es
+            JOIN documents d ON es.document_id = d.id WHERE es.entity_id = ?
+            ORDER BY d.title
+        """, (entity_id,)).fetchall()
+        doc_ids = [r["id"] for r in doc_rows]
+        documents = [{"id": r["id"], "title": r["title"]} for r in doc_rows]
+
+        # Co-entities
+        co_rows = self._conn.execute("""
+            SELECT e.id, e.canonical_name, e.type, SUM(r.weight) as total_weight
+            FROM relationships r
+            JOIN entities e ON (
+                CASE WHEN r.from_entity = ? THEN r.to_entity ELSE r.from_entity END
+            ) = e.id
+            WHERE (r.from_entity = ? OR r.to_entity = ?) AND r.type = 'co_occurs'
+            GROUP BY e.id ORDER BY total_weight DESC LIMIT ?
+        """, (entity_id, entity_id, entity_id, co_limit)).fetchall()
+
+        co_entity_ids = list(dict.fromkeys(r["id"] for r in co_rows))
+
+        # Shared docs
+        shared_docs = {}
+        if co_entity_ids and doc_ids:
+            ph_co = ",".join("?" * len(co_entity_ids))
+            ph_doc = ",".join("?" * len(doc_ids))
+            shared_rows = self._conn.execute(f"""
+                SELECT es.entity_id, es.document_id FROM entity_sources es
+                WHERE es.entity_id IN ({ph_co}) AND es.document_id IN ({ph_doc})
+            """, co_entity_ids + doc_ids).fetchall()
+            for r in shared_rows:
+                shared_docs.setdefault(r["entity_id"], []).append(r["document_id"])
+
+        co_entities = [{
+            "id": r["id"], "canonical_name": r["canonical_name"], "type": r["type"],
+            "weight": r["total_weight"],
+            "shared_doc_ids": list(set(shared_docs.get(r["id"], []))),
+        } for r in co_rows]
+
+        return {
+            "entity": {"id": entity["id"], "canonical_name": entity["canonical_name"],
+                        "type": entity["type"], "source_count": len(doc_ids)},
+            "documents": documents,
+            "co_entities": co_entities,
+        }
+
+    def update_entity_references(self, from_id, to_id):
+        self._conn.execute("UPDATE relationships SET from_entity = ? WHERE from_entity = ?", (to_id, from_id))
+        self._conn.execute("UPDATE relationships SET to_entity = ? WHERE to_entity = ?", (to_id, from_id))
+        self._conn.commit()
+
+
+class SQLiteJobRepository(JobRepository):
+    def __init__(self, conn):
+        self._conn = conn
+
+    def count_active(self):
+        return self._conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')"
+        ).fetchone()[0]
+
+    def create(self, id, type, target, config=None):
+        self._conn.execute(
+            "INSERT INTO jobs (id, type, target, status, config) VALUES (?, ?, ?, 'queued', ?)",
+            (id, type, target, json.dumps(config) if config else None),
+        )
+        self._conn.commit()
+
+    def get(self, job_id):
+        row = self._conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            return None
+        return Job(id=row["id"], type=row["type"], target=row["target"], status=row["status"],
+                   config=json.loads(row["config"]) if row["config"] else None,
+                   result=json.loads(row["result"]) if row["result"] else None,
+                   created_at=row["created_at"], started_at=row["started_at"],
+                   completed_at=row["completed_at"])
+
+    def list(self, status_filter=None):
+        if status_filter:
+            rows = self._conn.execute("SELECT * FROM jobs WHERE status = ? ORDER BY created_at DESC",
+                                       (status_filter,)).fetchall()
+        else:
+            rows = self._conn.execute("SELECT * FROM jobs ORDER BY created_at DESC").fetchall()
+        return [Job(id=r["id"], type=r["type"], target=r["target"], status=r["status"],
+                     config=json.loads(r["config"]) if r["config"] else None,
+                     result=json.loads(r["result"]) if r["result"] else None,
+                     created_at=r["created_at"], started_at=r["started_at"],
+                     completed_at=r["completed_at"]) for r in rows]
+
+    def get_existing(self, type, target, statuses):
+        placeholders = ",".join("?" * len(statuses))
+        row = self._conn.execute(
+            f"SELECT id FROM jobs WHERE type = ? AND target = ? AND status IN ({placeholders})",
+            [type, target] + statuses,
+        ).fetchone()
+        return Job(id=row["id"], type=type, target=target) if row else None
+
+    def pick_next(self):
+        row = self._conn.execute(
+            "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        return Job(id=row["id"], type=row["type"], target=row["target"], status=row["status"],
+                   config=json.loads(row["config"]) if row["config"] else None)
+
+    def mark_running(self, job_id):
+        self._conn.execute(
+            "UPDATE jobs SET status = 'running', started_at = CURRENT_TIMESTAMP WHERE id = ?", (job_id,)
+        )
+        self._conn.commit()
+
+    def mark_completed(self, job_id, result=None):
+        self._conn.execute(
+            "UPDATE jobs SET status = 'completed', completed_at = CURRENT_TIMESTAMP, result = ? WHERE id = ?",
+            (json.dumps(result) if result else None, job_id),
+        )
+        self._conn.commit()
+
+    def mark_failed(self, job_id, error):
+        self._conn.execute(
+            "UPDATE jobs SET status = 'failed', completed_at = CURRENT_TIMESTAMP, result = ? WHERE id = ?",
+            (json.dumps({"error": error}), job_id),
+        )
+        self._conn.commit()
+
+
+class SQLiteSpecRepository(SpecRepository):
+    def __init__(self, conn):
+        self._conn = conn
+
+    def create(self, id, domain_path, version, content, golden_set=None, score=None):
+        self._conn.execute(
+            "INSERT INTO specs (id, domain_path, version, spec_content, golden_set, score) VALUES (?, ?, ?, ?, ?, ?)",
+            (id, domain_path, version, content, golden_set, score),
+        )
+        self._conn.commit()
+
+    def get_general(self):
+        row = self._conn.execute(
+            "SELECT * FROM specs WHERE domain_path IS NULL ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        return Spec(id=row["id"], domain_path=None, version=row["version"],
+                    spec_content=row["spec_content"], golden_set=row["golden_set"],
+                    score=row["score"])
+
+    def get_for_domain(self, domain_path):
+        row = self._conn.execute(
+            "SELECT * FROM specs WHERE domain_path = ? ORDER BY version DESC LIMIT 1",
+            (domain_path,),
+        ).fetchone()
+        if not row:
+            return None
+        return Spec(id=row["id"], domain_path=row["domain_path"], version=row["version"],
+                    spec_content=row["spec_content"], golden_set=row["golden_set"],
+                    score=row["score"])
+
+    def get_latest_version(self, domain_path):
+        row = self._conn.execute(
+            "SELECT MAX(version) as v FROM specs WHERE domain_path = ?", (domain_path,)
+        ).fetchone()
+        return row["v"] or 0
+
+
+class SQLiteNormalizationRepository(NormalizationRepository):
+    def __init__(self, conn):
+        self._conn = conn
+
+    def get_review_by_id(self, review_id):
+        row = self._conn.execute(
+            "SELECT * FROM normalization_review_queue WHERE id = ?", (review_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return NormalizationReview(
+            id=row["id"], entity_a_id=row["entity_a_id"], entity_a_name=row["entity_a_name"],
+            entity_b_id=row["entity_b_id"], entity_b_name=row["entity_b_name"],
+            similarity=row["similarity"], status=row["status"], resolution=row["resolution"],
+        )
+
+    def get_existing_review(self, entity_a_id, entity_b_id):
+        row = self._conn.execute(
+            "SELECT * FROM normalization_review_queue WHERE "
+            "((entity_a_id = ? AND entity_b_id = ?) OR (entity_a_id = ? AND entity_b_id = ?))",
+            (entity_a_id, entity_b_id, entity_b_id, entity_a_id),
+        ).fetchone()
+        if not row:
+            return None
+        return NormalizationReview(
+            id=row["id"], entity_a_id=row["entity_a_id"], entity_a_name=row["entity_a_name"],
+            entity_b_id=row["entity_b_id"], entity_b_name=row["entity_b_name"],
+            similarity=row["similarity"], status=row["status"], resolution=row["resolution"],
+        )
+
+    def create_review(self, id, entity_a_id, entity_a_name, entity_b_id, entity_b_name, similarity):
+        self._conn.execute(
+            "INSERT INTO normalization_review_queue (id, entity_a_id, entity_a_name, entity_b_id, entity_b_name, similarity) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (id, entity_a_id, entity_a_name, entity_b_id, entity_b_name, similarity),
+        )
+        self._conn.commit()
+
+    def get_review_queue(self):
+        rows = self._conn.execute(
+            "SELECT * FROM normalization_review_queue WHERE status = 'pending' ORDER BY similarity DESC"
+        ).fetchall()
+        return [NormalizationReview(
+            id=r["id"], entity_a_id=r["entity_a_id"], entity_a_name=r["entity_a_name"],
+            entity_b_id=r["entity_b_id"], entity_b_name=r["entity_b_name"],
+            similarity=r["similarity"], status=r["status"],
+        ) for r in rows]
+
+    def resolve_review(self, review_id, action):
+        self._conn.execute(
+            "UPDATE normalization_review_queue SET status = 'resolved', resolution = ? WHERE id = ?",
+            (action, review_id),
+        )
+        self._conn.commit()
+
+    def create_merge_log(self, id, from_id, from_name, to_id, to_name, method, similarity):
+        self._conn.execute(
+            "INSERT INTO normalization_log (id, from_entity_id, from_name, to_entity_id, to_name, method, similarity) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (id, from_id, from_name, to_id, to_name, method, similarity),
+        )
+        self._conn.commit()
+
+    def get_merge_summary(self):
+        by_method = self._conn.execute(
+            "SELECT method, COUNT(*) as c FROM normalization_log GROUP BY method"
+        ).fetchall()
+        total = self._conn.execute("SELECT COUNT(*) as c FROM normalization_log").fetchone()["c"]
+        pending = self._conn.execute(
+            "SELECT COUNT(*) as c FROM normalization_review_queue WHERE status = 'pending'"
+        ).fetchone()["c"]
+        recent = self._conn.execute(
+            "SELECT from_name, to_name, method, similarity, created_at FROM normalization_log "
+            "ORDER BY created_at DESC LIMIT 10"
+        ).fetchall()
+        return {
+            "merges_by_method": {r["method"]: r["c"] for r in by_method},
+            "total_merges": total,
+            "pending_reviews": pending,
+            "recent_merges": [{"from": r["from_name"], "to": r["to_name"], "method": r["method"],
+                                "similarity": r["similarity"], "date": r["created_at"]} for r in recent],
+        }
+
+    def get_merge_map_entry(self, name):
+        row = self._conn.execute("SELECT to_entity_id FROM merge_map WHERE from_name = ?", (name,)).fetchone()
+        return row["to_entity_id"] if row else None
+
+    def create_merge_map_entry(self, from_name, to_entity_id):
+        self._conn.execute("INSERT OR REPLACE INTO merge_map (from_name, to_entity_id) VALUES (?, ?)",
+                            (from_name, to_entity_id))
+        self._conn.commit()
+
+    def get_merge_history(self, entity_id):
+        rows = self._conn.execute("SELECT from_name FROM merge_map WHERE to_entity_id = ?", (entity_id,)).fetchall()
+        return [r[0] for r in rows]
+
+
+class SQLiteLayoutRepository(LayoutRepository):
+    def __init__(self, conn):
+        self._conn = conn
+
+    def get_stored_positions(self):
+        rows = self._conn.execute("SELECT domain_path, x, y FROM domain_layout").fetchall()
+        return {r["domain_path"]: {"x": r["x"], "y": r["y"]} for r in rows}
+
+    def store_position(self, domain_path, x, y, embedding=None):
+        self._conn.execute(
+            "INSERT OR REPLACE INTO domain_layout (domain_path, x, y, embedding) VALUES (?, ?, ?, ?)",
+            (domain_path, x, y, embedding),
+        )
+        self._conn.commit()
+
+    def delete_position(self, domain_path):
+        self._conn.execute("DELETE FROM domain_layout WHERE domain_path = ?", (domain_path,))
+        self._conn.commit()
+
+    def store_model(self, model_blob, domain_count):
+        self._conn.execute(
+            "INSERT OR REPLACE INTO layout_model (id, model_blob, domain_count) VALUES (?, ?, ?)",
+            ("umap", model_blob, domain_count),
+        )
+        self._conn.commit()
+
+    def get_model(self):
+        row = self._conn.execute("SELECT model_blob, domain_count FROM layout_model WHERE id = 'umap'").fetchone()
+        if not row or not row["model_blob"]:
+            return None
+        return {"model_blob": row["model_blob"], "domain_count": row["domain_count"]}
+
+
+class SQLiteSimmerIterationRepository(SimmerIterationRepository):
+    def __init__(self, conn):
+        self._conn = conn
+
+    def create_iteration(self, id, job_id, phase, iteration, scores, composite,
+                          key_change=None, asi=None, judge_mode=None, regressed=False,
+                          candidate_preview=None):
+        self._conn.execute(
+            "INSERT INTO simmer_iterations (id, job_id, phase, iteration, scores, composite, "
+            "key_change, asi, judge_mode, regressed, candidate_preview) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (id, job_id, phase, iteration, json.dumps(scores), composite,
+             key_change, asi, judge_mode, regressed, candidate_preview),
+        )
+        self._conn.commit()
+
+    def create_criterion_detail(self, id, iteration_id, criterion, score, seed_score=None,
+                                 evidence=None, improve=None):
+        self._conn.execute(
+            "INSERT INTO simmer_criterion_details (id, iteration_id, criterion, score, seed_score, evidence, improve) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (id, iteration_id, criterion, score, seed_score, evidence, improve),
+        )
+        self._conn.commit()
+
+    def get_for_job(self, job_id):
+        job = self._conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if not job:
+            return None
+
+        iters = self._conn.execute(
+            "SELECT * FROM simmer_iterations WHERE job_id = ? ORDER BY phase, iteration", (job_id,)
+        ).fetchall()
+
+        phases = {}
+        for it in iters:
+            criteria = self._conn.execute(
+                "SELECT * FROM simmer_criterion_details WHERE iteration_id = ?", (it["id"],)
+            ).fetchall()
+            phase = it["phase"]
+            if phase not in phases:
+                phases[phase] = []
+            phases[phase].append({
+                "id": it["id"], "iteration": it["iteration"],
+                "scores": json.loads(it["scores"]) if it["scores"] else {},
+                "composite": it["composite"], "key_change": it["key_change"],
+                "asi": it["asi"], "judge_mode": it["judge_mode"],
+                "regressed": bool(it["regressed"]),
+                "candidate_preview": it["candidate_preview"],
+                "criteria": [{"criterion": c["criterion"], "score": c["score"],
+                               "seed_score": c["seed_score"], "evidence": c["evidence"],
+                               "improve": c["improve"]} for c in criteria],
+            })
+
+        return {
+            "job": {"id": job["id"], "type": job["type"], "target": job["target"],
+                     "status": job["status"], "created_at": job["created_at"],
+                     "started_at": job["started_at"], "completed_at": job["completed_at"]},
+            "phases": phases,
+        }
+
+
+# ── Composite DataStore ──────────────────────────────────
+
+class SQLiteDataStore(DataStore):
+    def __init__(self, db_path: str):
+        init_db(db_path)
+        self._conn = get_connection(db_path)
+        self._documents = SQLiteDocumentRepository(self._conn)
+        self._chunks = SQLiteChunkRepository(self._conn)
+        self._domains = SQLiteDomainRepository(self._conn)
+        self._entities = SQLiteEntityRepository(self._conn)
+        self._entity_sources = SQLiteEntitySourceRepository(self._conn)
+        self._relationships = SQLiteRelationshipRepository(self._conn)
+        self._jobs = SQLiteJobRepository(self._conn)
+        self._specs = SQLiteSpecRepository(self._conn)
+        self._normalization = SQLiteNormalizationRepository(self._conn)
+        self._layout = SQLiteLayoutRepository(self._conn)
+        self._simmer_iterations = SQLiteSimmerIterationRepository(self._conn)
+
+    @property
+    def documents(self): return self._documents
+    @property
+    def chunks(self): return self._chunks
+    @property
+    def domains(self): return self._domains
+    @property
+    def entities(self): return self._entities
+    @property
+    def entity_sources(self): return self._entity_sources
+    @property
+    def relationships(self): return self._relationships
+    @property
+    def jobs(self): return self._jobs
+    @property
+    def specs(self): return self._specs
+    @property
+    def normalization(self): return self._normalization
+    @property
+    def layout(self): return self._layout
+    @property
+    def simmer_iterations(self): return self._simmer_iterations
+
+    @property
+    def conn(self):
+        """Direct connection access for legacy code during migration."""
+        return self._conn
+
+    def close(self):
+        # Don't close if this is the test store (shared across requests)
+        from .factory import _test_store
+        if _test_store is self:
+            return
+        self._conn.close()

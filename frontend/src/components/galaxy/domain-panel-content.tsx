@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
+import { getAuthToken } from "@/lib/firebase";
 
 const ENTITY_COLORS: Record<string, string> = {
   Person: "#378ADD",
@@ -67,6 +69,7 @@ interface DomainPanelContentProps {
 }
 
 export function DomainPanelContent({ data, domainColor, onNavigateEntity, onNavigateDomain }: DomainPanelContentProps) {
+  const noosphereId = useNoosphereId();
   const [topEntities, setTopEntities] = useState<TopEntity[]>([]);
   const [specStatus, setSpecStatus] = useState<SpecStatus>({ exists: false, version: null, simmeredAt: null, isRunning: false });
   const [entityCount, setEntityCount] = useState<number | null>(null);
@@ -137,7 +140,11 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity, onNavi
   useEffect(() => {
     (async () => {
       try {
-        const graphResp = await fetch(`/api/graph`);
+        const token = await getAuthToken();
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        if (noosphereId) headers["X-Workspace-Id"] = noosphereId;
+        const graphResp = await fetch(`/api/graph`, { headers });
         const graph = await graphResp.json();
         const routes = (graph.trade_routes || []).filter(
           (r: { source: string; target: string }) => r.source === data.path || r.target === data.path
@@ -156,7 +163,7 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity, onNavi
         // trade routes are optional
       }
     })();
-  }, [data.path]);
+  }, [data.path, noosphereId]);
 
   const maxCount = topEntities.length > 0 ? topEntities[0].source_count : 1;
 
@@ -235,7 +242,7 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity, onNavi
             <span style={{ color: "rgba(200,215,235,0.85)" }}>
               simmering now…{" "}
               {specStatus.jobId && (
-                <a href={`/simmer/${specStatus.jobId}`} style={{ color: "rgba(100,180,255,0.6)", textDecoration: "none" }}>
+                <a href={`/n/${noosphereId}/simmer/${specStatus.jobId}`} style={{ color: "rgba(100,180,255,0.6)", textDecoration: "none" }}>
                   view
                 </a>
               )}
@@ -361,7 +368,7 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity, onNavi
       {/* Footer */}
       <div style={{ padding: "12px 16px", display: "flex", gap: 14, alignItems: "center" }}>
         <a
-          href={`/documents?domain=${encodeURIComponent(data.path)}`}
+          href={`/n/${noosphereId}/pipeline`}
           style={{
             fontSize: 11,
             color: "rgba(100,180,255,0.7)",

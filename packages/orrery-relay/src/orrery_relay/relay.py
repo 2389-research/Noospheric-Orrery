@@ -117,7 +117,11 @@ class Relay:
             raise
 
         elapsed = (time.monotonic() - start) * 1000
-        text = raw.content[0].text if raw.content else ""
+        # Handle both TextBlock and ToolUseBlock responses
+        text = ""
+        if raw.content:
+            first = raw.content[0]
+            text = first.text if hasattr(first, "text") else ""
         input_tokens = raw.usage.input_tokens
         output_tokens = raw.usage.output_tokens
 
@@ -131,6 +135,49 @@ class Relay:
             await self._on_usage(event)
 
         return response
+
+    async def complete_structured(
+        self, model: str, messages: list[dict], max_tokens: int,
+        schema: dict, tool_name: str = "structured_output",
+        tool_description: str = "Return structured data",
+        system: str | None = None, temperature: float | None = None,
+        **kwargs: Any,
+    ) -> dict:
+        """LLM call that returns guaranteed-valid JSON matching a schema.
+
+        Uses Anthropic tool use to enforce structured output. The model
+        is forced to call the tool, and the tool input is validated
+        against the schema by the API.
+
+        Args:
+            schema: JSON Schema for the output (the tool's input_schema)
+            tool_name: Name for the synthetic tool
+            tool_description: Description to guide the model
+
+        Returns:
+            dict matching the schema — never raises JSONDecodeError.
+        """
+        tools = [{
+            "name": tool_name,
+            "description": tool_description,
+            "input_schema": schema,
+        }]
+        tool_choice = {"type": "tool", "name": tool_name}
+
+        response = await self.complete(
+            model=model, messages=messages, max_tokens=max_tokens,
+            system=system, temperature=temperature,
+            tools=tools, tool_choice=tool_choice,
+            **kwargs,
+        )
+
+        # Extract tool input from the response
+        for block in response.raw.content:
+            if block.type == "tool_use" and block.name == tool_name:
+                return block.input
+
+        # Fallback — shouldn't happen with tool_choice forced
+        return {}
 
     def complete_sync(
         self, model: str, messages: list[dict], max_tokens: int,

@@ -1,19 +1,15 @@
 """UMAP-based domain layout with persistence.
 
-- Full fit: embed all domains, run UMAP, store positions + model
-- Transform: embed new domain, use saved UMAP model to place it, store position
-- Positions are stable — existing domains don't move when new ones are added
-- Periodic re-fit when domain count doubles (resets all positions)
-- Falls back to hash-based positioning if UMAP/numba fails at runtime
+Supports both DataStore (Firestore) and raw sqlite3.Connection.
+Falls back to hash-based positioning if UMAP/numba fails at runtime.
 """
 
+from __future__ import annotations
 import hashlib
 import logging
 import pickle
 import sqlite3
 import numpy as np
-from sentence_transformers import SentenceTransformer
-import umap
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +18,43 @@ _model = None
 def _get_embed_model():
     global _model
     if _model is None:
+        from sentence_transformers import SentenceTransformer
         _model = SentenceTransformer("all-MiniLM-L6-v2")
     return _model
 
 
-def _build_domain_text(conn: sqlite3.Connection, domain_path: str) -> str:
-    """Build embedding input for a domain: path + top doc titles + top entity names."""
+def _embed_texts(texts: list[str]) -> np.ndarray:
+    """Embed texts — uses Vertex AI if available, falls back to sentence-transformers."""
+    try:
+        from ..services.embedding import embed_texts
+        embeddings = embed_texts(texts)
+        return np.array(embeddings, dtype=np.float32)
+    except Exception:
+        # Fallback to local sentence-transformers (for SQLite/local dev)
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer("all-MiniLM-L6-v2")
+        return model.encode(texts, normalize_embeddings=True)
+
+
+def _is_store(obj):
+    return hasattr(obj, 'domains') and hasattr(obj, 'layout')
+
+
+def _build_domain_text_store(store, domain_path):
+    """Build embedding input using repository methods."""
+    # Get doc titles
+    docs = store.documents.get_for_domain(domain_path)
+    titles = [d.title for d in docs[:6] if d.title]
+
+    # Get entity names
+    ents = store.entities.get_for_domain(domain_path, limit=12)
+    entity_names = [e.canonical_name for e in ents]
+
+    return f"{domain_path.replace('/', ' ')}. {' '.join(titles[:6])}. {' '.join(entity_names[:12])}"
+
+
+def _build_domain_text_conn(conn, domain_path):
+    """Build embedding input using raw SQL."""
     doc_titles = conn.execute("""
         SELECT d.title FROM documents d
         JOIN document_domains dd ON d.id = dd.document_id
@@ -49,9 +76,14 @@ def _build_domain_text(conn: sqlite3.Connection, domain_path: str) -> str:
     return f"{domain_path.replace('/', ' ')}. {' '.join(titles[:6])}. {' '.join(entities[:12])}"
 
 
+def _build_domain_text(store_or_conn, domain_path):
+    if _is_store(store_or_conn):
+        return _build_domain_text_store(store_or_conn, domain_path)
+    return _build_domain_text_conn(store_or_conn, domain_path)
+
+
 def _fallback_position(domain_path: str, stored: dict[str, dict] | None = None) -> dict:
     """Deterministic fallback position from domain path hash, near parent if possible."""
-    # Try to place near parent domain
     parent = "/".join(domain_path.split("/")[:-1])
     if stored and parent in stored:
         h = hashlib.md5(domain_path.encode()).digest()
@@ -61,39 +93,87 @@ def _fallback_position(domain_path: str, stored: dict[str, dict] | None = None) 
             "x": max(0, min(1, stored[parent]["x"] + dx)),
             "y": max(0, min(1, stored[parent]["y"] + dy)),
         }
-    # No parent — hash to full unit square
     h = hashlib.md5(domain_path.encode()).digest()
     return {"x": h[0] / 255 * 0.8 + 0.1, "y": h[1] / 255 * 0.8 + 0.1}
 
 
-def get_stored_positions(conn: sqlite3.Connection) -> dict[str, dict]:
-    """Get all stored domain positions."""
-    rows = conn.execute("SELECT domain_path, x, y FROM domain_layout").fetchall()
+def _get_domain_paths(store_or_conn):
+    if _is_store(store_or_conn):
+        domains = store_or_conn.domains.list(min_doc_count=1)
+        return [d.path for d in domains]
+    rows = store_or_conn.execute(
+        "SELECT path FROM domains WHERE document_count > 0 ORDER BY path"
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def _get_stored_positions(store_or_conn):
+    if _is_store(store_or_conn):
+        return store_or_conn.layout.get_stored_positions()
+    rows = store_or_conn.execute("SELECT domain_path, x, y FROM domain_layout").fetchall()
     return {r[0]: {"x": r[1], "y": r[2]} for r in rows}
 
 
-def full_fit(conn: sqlite3.Connection) -> dict[str, dict]:
+def _store_position(store_or_conn, domain_path, x, y, embedding=None):
+    if _is_store(store_or_conn):
+        store_or_conn.layout.store_position(domain_path, x, y, embedding)
+    else:
+        store_or_conn.execute(
+            "INSERT OR REPLACE INTO domain_layout (domain_path, x, y, embedding) VALUES (?, ?, ?, ?)",
+            (domain_path, x, y, embedding))
+        store_or_conn.commit()
+
+
+def _store_model(store_or_conn, model_blob, domain_count):
+    if _is_store(store_or_conn):
+        store_or_conn.layout.store_model(model_blob, domain_count)
+    else:
+        store_or_conn.execute(
+            "INSERT OR REPLACE INTO layout_model (id, model_blob, domain_count) VALUES (?, ?, ?)",
+            ("umap", model_blob, domain_count))
+        store_or_conn.commit()
+
+
+def _get_model(store_or_conn):
+    if _is_store(store_or_conn):
+        return store_or_conn.layout.get_model()
+    row = store_or_conn.execute("SELECT model_blob, domain_count FROM layout_model WHERE id = 'umap'").fetchone()
+    if not row or not row[0]:
+        return None
+    return {"model_blob": row[0], "domain_count": row[1]}
+
+
+def _delete_position(store_or_conn, domain_path):
+    if _is_store(store_or_conn):
+        store_or_conn.layout.delete_position(domain_path)
+    else:
+        store_or_conn.execute("DELETE FROM domain_layout WHERE domain_path = ?", (domain_path,))
+        store_or_conn.commit()
+
+
+def _get_domain_count(store_or_conn):
+    if _is_store(store_or_conn):
+        return len(store_or_conn.domains.list(min_doc_count=1))
+    return store_or_conn.execute("SELECT COUNT(*) FROM domains WHERE document_count > 0").fetchone()[0]
+
+
+def full_fit(store_or_conn):
     """Run full UMAP fit on all domains. Stores positions + model."""
-    domains = conn.execute(
-        "SELECT path FROM domains WHERE document_count > 0 ORDER BY path"
-    ).fetchall()
-    paths = [r[0] for r in domains]
+    paths = _get_domain_paths(store_or_conn)
 
     if len(paths) < 3:
-        # Not enough for UMAP — place in a line
         positions = {}
         for i, path in enumerate(paths):
             positions[path] = {"x": (i + 1) / (len(paths) + 1), "y": 0.5}
-        _store_positions(conn, positions)
+            _store_position(store_or_conn, path, positions[path]["x"], positions[path]["y"])
         return positions
 
-    # Build texts and embed
-    model = _get_embed_model()
-    texts = [_build_domain_text(conn, p) for p in paths]
-    embeddings = model.encode(texts, normalize_embeddings=True)
+    texts = [_build_domain_text(store_or_conn, p) for p in paths]
+    embeddings = _embed_texts(texts)
 
     # UMAP fit — with fallback if numba/UMAP fails at runtime
     try:
+        import umap
         n_neighbors = min(15, len(paths) - 1)
         reducer = umap.UMAP(
             n_components=2,
@@ -109,22 +189,15 @@ def full_fit(conn: sqlite3.Connection) -> dict[str, dict]:
         positions = {}
         for path in paths:
             positions[path] = _fallback_position(path, positions)
-        _store_positions(conn, positions)
-        # Store a sentinel model record so transform_new_domain finds a row
-        # and falls back gracefully instead of returning None
+            _store_position(store_or_conn, path, positions[path]["x"], positions[path]["y"])
         fallback_model_data = {
             "reducer": None,
             "mins": np.array([0.0, 0.0]),
             "ranges": np.array([1.0, 1.0]),
         }
-        conn.execute(
-            "INSERT OR REPLACE INTO layout_model (id, model_blob, domain_count) VALUES (?, ?, ?)",
-            ("umap", pickle.dumps(fallback_model_data), len(paths))
-        )
-        conn.commit()
+        _store_model(store_or_conn, pickle.dumps(fallback_model_data), len(paths))
         return positions
 
-    # Normalize to 0-1
     mins = coords.min(axis=0)
     maxs = coords.max(axis=0)
     ranges = maxs - mins
@@ -135,133 +208,76 @@ def full_fit(conn: sqlite3.Connection) -> dict[str, dict]:
         x = float((coords[i, 0] - mins[0]) / ranges[0])
         y = float((coords[i, 1] - mins[1]) / ranges[1])
         positions[path] = {"x": x, "y": y}
+        _store_position(store_or_conn, path, x, y, embeddings[i].tobytes())
 
-    # Store positions + embeddings
-    _store_positions(conn, positions)
-    for i, path in enumerate(paths):
-        conn.execute(
-            "INSERT OR REPLACE INTO domain_layout (domain_path, x, y, embedding) VALUES (?, ?, ?, ?)",
-            (path, positions[path]["x"], positions[path]["y"], embeddings[i].tobytes())
-        )
-
-    # Store the UMAP model + normalization params
-    model_data = {
-        "reducer": reducer,
-        "mins": mins,
-        "maxs": maxs,
-        "ranges": ranges,
-    }
-    conn.execute(
-        "INSERT OR REPLACE INTO layout_model (id, model_blob, domain_count) VALUES (?, ?, ?)",
-        ("umap", pickle.dumps(model_data), len(paths))
-    )
-    conn.commit()
+    model_data = {"reducer": reducer, "mins": mins, "maxs": maxs, "ranges": ranges}
+    _store_model(store_or_conn, pickle.dumps(model_data), len(paths))
 
     return positions
 
 
-def transform_new_domain(conn: sqlite3.Connection, domain_path: str) -> dict | None:
-    """Place a new domain using the saved UMAP model. Returns {"x", "y"} or None."""
-    # Load saved model
-    row = conn.execute("SELECT model_blob, domain_count FROM layout_model WHERE id = 'umap'").fetchone()
-    if not row or not row[0]:
+def transform_new_domain(store_or_conn, domain_path):
+    """Place a new domain using the saved UMAP model."""
+    model_data = _get_model(store_or_conn)
+    if not model_data or not model_data.get("model_blob"):
         return None
 
-    model_data = pickle.loads(row[0])
-    reducer = model_data["reducer"]
-    mins = model_data["mins"]
-    ranges = model_data["ranges"]
-    saved_count = row[1] or 0
+    data = pickle.loads(model_data["model_blob"])
+    saved_count = model_data.get("domain_count", 0)
+
+    reducer = data.get("reducer")
 
     # Sentinel record from failed full_fit — use fallback directly
     if reducer is None:
-        stored = get_stored_positions(conn)
+        stored = _get_stored_positions(store_or_conn)
         fallback = _fallback_position(domain_path, stored)
-        conn.execute(
-            "INSERT OR REPLACE INTO domain_layout (domain_path, x, y) VALUES (?, ?, ?)",
-            (domain_path, fallback["x"], fallback["y"])
-        )
-        conn.commit()
+        _store_position(store_or_conn, domain_path, fallback["x"], fallback["y"])
         return fallback
 
-    # Check if we should re-fit (domain count doubled)
-    current_count = conn.execute(
-        "SELECT COUNT(*) FROM domains WHERE document_count > 0"
-    ).fetchone()[0]
+    current_count = _get_domain_count(store_or_conn)
     if current_count >= saved_count * 2:
-        # Re-fit everything
-        full_fit(conn)
-        pos = conn.execute(
-            "SELECT x, y FROM domain_layout WHERE domain_path = ?", (domain_path,)
-        ).fetchone()
-        return {"x": pos[0], "y": pos[1]} if pos else None
+        full_fit(store_or_conn)
+        stored = _get_stored_positions(store_or_conn)
+        return stored.get(domain_path)
 
-    # Embed the new domain
-    embed_model = _get_embed_model()
-    text = _build_domain_text(conn, domain_path)
-    embedding = embed_model.encode([text], normalize_embeddings=True)
+    text = _build_domain_text(store_or_conn, domain_path)
+    embedding = _embed_texts([text])
 
     # Transform with saved UMAP — fallback if numba/UMAP fails
     try:
         coords = reducer.transform(embedding)
-        x = float(np.clip((coords[0, 0] - mins[0]) / ranges[0], 0, 1))
-        y = float(np.clip((coords[0, 1] - mins[1]) / ranges[1], 0, 1))
+        x = float(np.clip((coords[0, 0] - data["mins"][0]) / data["ranges"][0], 0, 1))
+        y = float(np.clip((coords[0, 1] - data["mins"][1]) / data["ranges"][1], 0, 1))
     except Exception as e:
         logger.warning("UMAP transform failed for %s (%s), using fallback", domain_path, e)
-        stored = get_stored_positions(conn)
+        stored = _get_stored_positions(store_or_conn)
         fallback = _fallback_position(domain_path, stored)
         x, y = fallback["x"], fallback["y"]
 
-    # Store
-    conn.execute(
-        "INSERT OR REPLACE INTO domain_layout (domain_path, x, y, embedding) VALUES (?, ?, ?, ?)",
-        (domain_path, x, y, embedding[0].tobytes())
-    )
-    conn.commit()
-
+    _store_position(store_or_conn, domain_path, x, y, embedding[0].tobytes())
     return {"x": x, "y": y}
 
 
-def ensure_layout(conn: sqlite3.Connection) -> dict[str, dict]:
+def ensure_layout(store_or_conn):
     """Get positions, computing if needed. Main entry point for /graph."""
-    # Get domains that need positions
-    all_domains = conn.execute(
-        "SELECT path FROM domains WHERE document_count > 0 ORDER BY path"
-    ).fetchall()
-    all_paths = set(r[0] for r in all_domains)
-
-    stored = get_stored_positions(conn)
+    all_paths = set(_get_domain_paths(store_or_conn))
+    stored = _get_stored_positions(store_or_conn)
     stored_paths = set(stored.keys())
 
-    # Remove stale positions (domains that no longer exist)
-    stale = stored_paths - all_paths
-    if stale:
-        for path in stale:
-            conn.execute("DELETE FROM domain_layout WHERE domain_path = ?", (path,))
-            del stored[path]
-        conn.commit()
+    # Remove stale
+    for path in stored_paths - all_paths:
+        _delete_position(store_or_conn, path)
+        del stored[path]
 
     missing = all_paths - stored_paths
 
     if not stored or len(missing) > len(all_paths) * 0.5:
-        # No positions or too many missing — full fit
-        return full_fit(conn)
+        return full_fit(store_or_conn)
 
     if missing:
-        # A few new domains — transform them
         for path in missing:
-            pos = transform_new_domain(conn, path)
+            pos = transform_new_domain(store_or_conn, path)
             if pos:
                 stored[path] = pos
 
     return stored
-
-
-def _store_positions(conn: sqlite3.Connection, positions: dict[str, dict]):
-    """Bulk store positions."""
-    for path, pos in positions.items():
-        conn.execute(
-            "INSERT OR REPLACE INTO domain_layout (domain_path, x, y) VALUES (?, ?, ?)",
-            (path, pos["x"], pos["y"])
-        )
-    conn.commit()

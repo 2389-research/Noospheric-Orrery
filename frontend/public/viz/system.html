@@ -65,9 +65,14 @@ const ghostDomains = [];  // neighboring domains as gravitational ghosts
 let hoveredEntityId = null;
 let labelThreshold = 0;
 
-const API_URL = '/api';
+const API_URL = new URLSearchParams(location.search).get('api') || '/api';
+const AUTH_TOKEN = new URLSearchParams(location.search).get('token') || '';
+const WORKSPACE_ID = new URLSearchParams(location.search).get('workspace') || '';
+const fetchHeaders = {};
+if (AUTH_TOKEN) fetchHeaders['Authorization'] = `Bearer ${AUTH_TOKEN}`;
+if (WORKSPACE_ID) fetchHeaders['X-Workspace-Id'] = WORKSPACE_ID;
 console.log('System view: fetching', `${API_URL}/graph`, 'domain:', focusDomainPath);
-fetch(`${API_URL}/graph`).then(r => {
+fetch(`${API_URL}/graph`, { headers: fetchHeaders }).then(r => {
   console.log('System view: got response', r.status);
   return r.json();
 }).then(data => {

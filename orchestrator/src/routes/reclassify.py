@@ -1,10 +1,10 @@
 # ABOUTME: Reclassify route — re-runs the classifier on all existing documents.
 # ABOUTME: Additive: adds new domain assignments without removing existing ones.
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from orrery_relay import Relay
 from ..config import get_settings
-from ..db import get_connection
+from ..dependencies import get_auth_store, AuthStore
 from ..pipeline.excerpt import build_classification_excerpt
 from ..pipeline.classifier import classify_document
 from ..pipeline.domain_normalizer import normalize_domain_label
@@ -13,25 +13,25 @@ router = APIRouter()
 
 
 @router.post("/reclassify")
-async def reclassify_all():
+async def reclassify_all(auth: AuthStore = Depends(get_auth_store)):
     """Re-run classification on all documents. Adds new domains without removing existing ones."""
     settings = get_settings()
-    conn = get_connection(settings.db_path)
+    store = auth.store
     relay = Relay.from_settings(settings)
 
-    docs = conn.execute("SELECT id, title, content FROM documents ORDER BY created_at").fetchall()
+    docs = store.documents.list(limit=10000, offset=0)
     results = {"docs_processed": 0, "new_domains": [], "new_assignments": 0}
 
     for doc in docs:
-        doc_id, title, content = doc[0], doc[1], doc[2]
+        doc_id = doc.id
+        title = doc.title
+        content = doc.content
 
         # Get existing assignments
-        existing = set(r[0] for r in conn.execute(
-            "SELECT domain_path FROM document_domains WHERE document_id = ?", (doc_id,)
-        ).fetchall())
+        existing = set(d.domain_path for d in store.domains.get_domains_for_document(doc_id))
 
         # Get current taxonomy
-        taxonomy = [r[0] for r in conn.execute("SELECT path FROM domains ORDER BY path").fetchall()]
+        taxonomy = store.domains.get_all_paths()
 
         # Classify
         excerpt = build_classification_excerpt(title, content)
@@ -54,16 +54,11 @@ async def reclassify_all():
 
         for domain_path in all_domains:
             if domain_path not in existing:
-                path = normalize_domain_label(conn, domain_path)
-                conn.execute(
-                    "INSERT OR IGNORE INTO document_domains (document_id, domain_path, is_primary, confidence) VALUES (?, ?, 0, 0.7)",
-                    (doc_id, path),
-                )
-                conn.execute(
-                    "UPDATE domains SET document_count = document_count + 1 WHERE path = ?", (path,)
-                )
+                path = normalize_domain_label(store, domain_path)
+                store.domains.assign_document(doc_id, path, False, 0.7)
+                store.domains.increment_doc_count(path)
                 results["new_assignments"] += 1
-                if path not in existing and path not in [d for d in results["new_domains"]]:
+                if path not in existing and path not in results["new_domains"]:
                     if path not in taxonomy:
                         results["new_domains"].append(path)
 
@@ -73,6 +68,5 @@ async def reclassify_all():
         import asyncio
         await asyncio.sleep(0.5)  # Rate limit
 
-    conn.commit()
-    conn.close()
+    store.close()
     return results
