@@ -29,16 +29,16 @@ function SimmerAction({ domain: d, jobs, onSimmer }: { domain: DomainInfo; jobs:
             v{d.spec_version}
           </Link>
         )}
-        <button onClick={() => onSimmer(d.path)} className="text-[10px] text-muted-foreground/30 hover:text-purple-400/70 transition-colors">
-          re-simmer
+        <button onClick={() => onSimmer(d.path)} aria-label={`Re-refine spec for ${d.path}`} className="text-[10px] text-muted-foreground/30 hover:text-purple-400/70 transition-colors">
+          Re-refine
         </button>
       </span>
     );
   }
 
   return (
-    <Button size="sm" variant="outline" className="h-5 text-[10px] px-2" onClick={() => onSimmer(d.path)}>
-      simmer
+    <Button size="sm" variant="outline" className="h-5 text-[10px] px-2" onClick={() => onSimmer(d.path)} aria-label={`Refine spec for ${d.path}`}>
+      Refine
     </Button>
   );
 }

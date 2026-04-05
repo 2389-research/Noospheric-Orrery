@@ -43,10 +43,14 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
   return (
     <div className="space-y-4">
       <div
-        className="border border-dashed border-border/40 rounded px-8 py-10 text-center cursor-pointer hover:border-cyan-500/30 hover:bg-card/30 transition-all"
+        role="button"
+        tabIndex={0}
+        aria-label="Upload files — drop files here or press Enter to browse"
+        className="border border-dashed border-border/40 rounded px-8 py-10 text-center cursor-pointer hover:border-cyan-500/30 hover:bg-card/30 transition-all focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/30"
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer.files); }}
         onClick={() => document.getElementById("file-input")?.click()}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); document.getElementById("file-input")?.click(); } }}
       >
         {uploading ? (
           <div className="space-y-2">
@@ -63,10 +67,10 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
         ) : (
           <>
             <p className="text-xs text-muted-foreground/90">
-              drop files here or click to browse
+              Drop files here or click to browse.
             </p>
             <p className="text-[10px] text-muted-foreground/50 mt-2">
-              .txt .md .json .csv — multiple files supported
+              .txt .md .json .csv — multiple files supported.
             </p>
           </>
         )}

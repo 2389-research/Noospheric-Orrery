@@ -3,18 +3,7 @@
 import Link from "next/link";
 import { SimmerJobDetail } from "@/lib/types";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
-
-function timeSince(dateStr: string | null | undefined): string {
-  if (!dateStr) return "—";
-  // Ensure UTC parsing — timestamps from SQLite lack timezone suffix
-  const utcStr = dateStr.includes("Z") || dateStr.includes("+") ? dateStr : dateStr + "Z";
-  const seconds = Math.floor((Date.now() - new Date(utcStr).getTime()) / 1000);
-  if (seconds < 0) return "just now";
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
-}
+import { jobTypeLabel, timeSince } from "@/lib/labels";
 
 function getStartedAt(job: SimmerJobDetail): string {
   // Try to get the earliest created_at from iterations
@@ -44,7 +33,7 @@ export function SimmerHeader({ job }: { job: SimmerJobDetail }) {
           <span className="mx-1">/</span>
           <span className="text-muted-foreground/85">{shortId}</span>
           <span className="mx-2 text-muted-foreground/85">·</span>
-          <span className="text-muted-foreground/90">{job.job_type}</span>
+          <span className="text-muted-foreground/90">{jobTypeLabel(job.job_type)}</span>
         </div>
         <div className="text-[10px] text-muted-foreground/90">
           <span>{job.target}</span>
