@@ -65,7 +65,9 @@ def get_store(db_path: str | None = None, workspace_id: str | None = None) -> Da
     elif backend == "firestore":
         from .firestore_store import FirestoreDataStore
         project_id = os.environ.get("FIREBASE_PROJECT_ID", "noospheric-orrery")
-        ws_id = workspace_id or os.environ.get("FIREBASE_WORKSPACE_ID", "default")
+        ws_id = workspace_id or os.environ.get("FIREBASE_WORKSPACE_ID")
+        if not ws_id:
+            raise ValueError("Firestore backend requires a workspace ID (X-Workspace-Id header or FIREBASE_WORKSPACE_ID env var)")
         return FirestoreDataStore(project_id=project_id, workspace_id=ws_id)
 
     else:

@@ -22,14 +22,9 @@ Canvas2D at 60fps doesn't work well as a React component — the render loop nee
 
 ## Data Persistence
 
-**CRITICAL: Data lives at `~/orrery-data/`, NOT in the repo.**
+**CRITICAL: Data lives at `~/.local/share/orrery/` (XDG), NOT in the repo.**
 
-The env script at `/tmp/run-orchestrator.sh` sets:
-```
-DB_PATH=$HOME/orrery-data/orrery.db
-DOCUMENTS_DIR=$HOME/orrery-data/documents
-SPECS_DIR=$HOME/orrery-data/specs
-```
+The default data directory follows the XDG Base Directory spec: `$XDG_DATA_HOME/orrery/` (defaults to `~/.local/share/orrery/`). Override individual paths with `DB_PATH`, `DOCUMENTS_DIR`, `SPECS_DIR` env vars.
 
 If you remove a git worktree, the data survives. If you `rm -rf` the data directory, everything is lost — simmered specs (~50 min each), embeddings, entities, all of it.
 

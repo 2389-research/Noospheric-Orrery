@@ -79,7 +79,8 @@ function ActiveJobs({ jobs, noosphereId }: { jobs: JobInfo[]; noosphereId: strin
   );
 }
 
-function timeSince(dateStr: string): string {
+function timeSince(dateStr: string | undefined): string {
+  if (!dateStr) return "unknown";
   const utcStr = dateStr.includes("Z") || dateStr.includes("+") ? dateStr : dateStr + "Z";
   const seconds = Math.floor((Date.now() - new Date(utcStr).getTime()) / 1000);
   if (seconds < 0) return "just now";
@@ -93,12 +94,6 @@ export default function PipelinePage() {
   const noosphereId = useNoosphereId();
   const isDemo = useDemoMode();
   const router = useRouter();
-
-  // Redirect demo users to orrery
-  if (isDemo) {
-    router.replace(`/n/${noosphereId}/orrery`);
-    return null;
-  }
   const [stats, setStats] = useState<Stats | null>(null);
   const [domains, setDomains] = useState<DomainInfo[]>([]);
   const [jobs, setJobs] = useState<JobInfo[]>([]);
@@ -109,6 +104,12 @@ export default function PipelinePage() {
   };
 
   useEffect(() => { refresh(); const interval = setInterval(refresh, 5000); return () => clearInterval(interval); }, []);
+
+  // Redirect demo users to orrery (after all hooks)
+  if (isDemo) {
+    router.replace(`/n/${noosphereId}/orrery`);
+    return null;
+  }
 
   const hasGeneralSimmerRunning = jobs.some(
     (j) => j.type === "simmer_general" && (j.status === "running" || j.status === "queued")
