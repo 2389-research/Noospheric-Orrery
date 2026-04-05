@@ -131,8 +131,8 @@ curl -X POST https://orrery-orchestrator-469580747258.us-central1.run.app/simmer
 ## Environment Variables on Cloud Run Job
 ```
 FIREBASE_PROJECT_ID=noospheric-orrery
-AWS_ACCESS_KEY=AKIAYLC6XTTZ2WJ32B5B
-AWS_SECRET_KEY=yVZGfPMhjsrpV8jbaEkOtbnQd3dGG/sss+7mSfV1
+AWS_ACCESS_KEY=<your-aws-access-key>
+AWS_SECRET_KEY=<your-aws-secret-key>
 AWS_REGION=us-east-1
 CLASSIFICATION_MODEL=us.anthropic.claude-sonnet-4-20250514-v1:0
 EXTRACTION_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0
