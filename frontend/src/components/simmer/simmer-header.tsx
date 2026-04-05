@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { SimmerJobDetail } from "@/lib/types";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
+import { jobTypeLabel } from "@/lib/labels";
 
 function timeSince(dateStr: string | null | undefined): string {
   if (!dateStr) return "—";
@@ -44,7 +45,7 @@ export function SimmerHeader({ job }: { job: SimmerJobDetail }) {
           <span className="mx-1">/</span>
           <span className="text-muted-foreground/85">{shortId}</span>
           <span className="mx-2 text-muted-foreground/85">·</span>
-          <span className="text-muted-foreground/90">{job.job_type}</span>
+          <span className="text-muted-foreground/90">{jobTypeLabel(job.job_type)}</span>
         </div>
         <div className="text-[10px] text-muted-foreground/90">
           <span>{job.target}</span>

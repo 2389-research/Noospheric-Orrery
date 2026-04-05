@@ -40,7 +40,7 @@ export function ExtractionHeader({ job }: ExtractionHeaderProps) {
           <span className="mx-1">/</span>
           <span className="text-muted-foreground/85">{shortId}</span>
           <span className="mx-2 text-muted-foreground/85">·</span>
-          <span className="text-muted-foreground/90">extract_batch</span>
+          <span className="text-muted-foreground/90">Batch Extraction</span>
           <span className="mx-2 text-muted-foreground/85">·</span>
           <span className="text-muted-foreground/85">{specVersion}</span>
         </div>

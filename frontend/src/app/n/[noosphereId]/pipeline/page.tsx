@@ -10,6 +10,7 @@ import { api } from "@/lib/api";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 import { useDemoMode } from "@/lib/hooks/use-demo-mode";
 import type { Stats, DomainInfo, JobInfo } from "@/lib/types";
+import { jobTypeLabel, timeSince } from "@/lib/labels";
 
 const jobStatusStyle: Record<string, string> = {
   queued: "border-yellow-500/40 text-yellow-400 animate-pulse",
@@ -43,7 +44,7 @@ function ActiveJobs({ jobs, noosphereId }: { jobs: JobInfo[]; noosphereId: strin
         const inner = (
           <div key={j.id} className={`flex items-center gap-3 border border-cyan-500/20 rounded px-3 py-2 bg-cyan-500/5 ${link ? "cursor-pointer hover:bg-cyan-500/10 transition-colors" : ""}`}>
             <Badge variant="outline" className={`text-[9px] ${jobStatusStyle[j.status]}`}>{j.status}</Badge>
-            <span className="text-xs text-foreground/90">{j.type}</span>
+            <span className="text-xs text-foreground/90">{jobTypeLabel(j.type)}</span>
             <span className="text-[10px] text-muted-foreground/85">{j.target}</span>
             {j.type.startsWith("simmer") && <span className="text-[9px] text-purple-400/60 ml-1">↗ view</span>}
             {isExtract && <span className="text-[9px] text-emerald-400/60 ml-1">↗ view extraction</span>}
@@ -62,7 +63,7 @@ function ActiveJobs({ jobs, noosphereId }: { jobs: JobInfo[]; noosphereId: strin
         const row = (
           <div className={`flex items-center gap-3 px-3 py-1.5 text-xs ${link ? "cursor-pointer hover:bg-card/50 transition-colors rounded" : ""}`}>
             <Badge variant="outline" className={`text-[9px] ${jobStatusStyle[j.status]}`}>{j.status}</Badge>
-            <span className="text-muted-foreground/90">{j.type}</span>
+            <span className="text-muted-foreground/90">{jobTypeLabel(j.type)}</span>
             <span className="text-[10px] text-muted-foreground/85">{j.target}</span>
             {j.type.startsWith("simmer") && <span className="text-[9px] text-purple-400/40">↗</span>}
             {isExtract && <span className="text-[9px] text-emerald-400/40">↗</span>}
@@ -79,16 +80,7 @@ function ActiveJobs({ jobs, noosphereId }: { jobs: JobInfo[]; noosphereId: strin
   );
 }
 
-function timeSince(dateStr: string | undefined): string {
-  if (!dateStr) return "unknown";
-  const utcStr = dateStr.includes("Z") || dateStr.includes("+") ? dateStr : dateStr + "Z";
-  const seconds = Math.floor((Date.now() - new Date(utcStr).getTime()) / 1000);
-  if (seconds < 0) return "just now";
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
-}
+// timeSince imported from @/lib/labels
 
 export default function PipelinePage() {
   const noosphereId = useNoosphereId();
