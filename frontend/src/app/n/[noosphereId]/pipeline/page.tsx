@@ -79,7 +79,8 @@ function ActiveJobs({ jobs, noosphereId }: { jobs: JobInfo[]; noosphereId: strin
   );
 }
 
-function timeSince(dateStr: string): string {
+function timeSince(dateStr: string | undefined): string {
+  if (!dateStr) return "unknown";
   const utcStr = dateStr.includes("Z") || dateStr.includes("+") ? dateStr : dateStr + "Z";
   const seconds = Math.floor((Date.now() - new Date(utcStr).getTime()) / 1000);
   if (seconds < 0) return "just now";

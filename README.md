@@ -113,9 +113,7 @@ cd frontend && npm install && cd ..
 # Set environment variables
 cp .env.example .env  # edit with your AWS creds
 export $(cat .env | xargs)
-export DB_PATH=$HOME/orrery-data/orrery.db
-export DOCUMENTS_DIR=$HOME/orrery-data/documents
-export SPECS_DIR=$HOME/orrery-data/specs
+# Data defaults to ~/.local/share/orrery/ (XDG). Override with DB_PATH, DOCUMENTS_DIR, SPECS_DIR.
 
 # Start services (each in its own terminal)
 cd orchestrator && .venv/bin/uvicorn src.main:app --host 0.0.0.0 --port 8100

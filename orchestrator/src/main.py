@@ -7,9 +7,12 @@ from .db import init_db
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import os
+    settings = get_settings()
     if os.environ.get("DB_BACKEND", "sqlite") == "sqlite":
-        settings = get_settings()
         init_db(settings.db_path)
+    # Pre-warm SentenceTransformer model so first /graph request isn't slow
+    from .pipeline.domain_layout import _get_embed_model
+    _get_embed_model()
     yield
 
 app = FastAPI(title="Noospheric Orrery", lifespan=lifespan)
