@@ -204,9 +204,9 @@ def app_client(fake_db, claims_store):
 
     with patch("src.routes.auth_routes._get_firestore_db", return_value=fake_db), \
          patch("src.routes.workspace_routes._get_firestore_db", return_value=fake_db), \
-         patch("src.routes.auth_routes.get_user_claims", fake_get_claims), \
-         patch("src.routes.auth_routes.set_user_claims", fake_set_claims), \
-         patch("src.routes.auth_routes.signal_token_refresh", fake_signal):
+         patch("src.auth_admin.get_user_claims", fake_get_claims), \
+         patch("src.auth_admin.set_user_claims", fake_set_claims), \
+         patch("src.auth_admin.signal_token_refresh", fake_signal):
 
         from src.main import app
         app.dependency_overrides[get_current_user] = fake_get_current_user

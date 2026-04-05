@@ -67,6 +67,24 @@ The `post_process` job runs silently. Pipeline page could show a
 
 ---
 
+## KNOWN ISSUES
+
+### UMAP Layout: Embedding Model Change
+If the embedding backend changes (e.g., switching from sentence-transformers
+384-dim to Vertex AI 768-dim), the stored UMAP model can't transform new
+domains because the feature dimensions don't match. Fix: detect dimension
+mismatch and trigger a full re-fit. Current workaround: delete
+`domain_layout` table / `domainLayout` collection to force re-fit.
+
+### UMAP Layout: Circular Fallback Has No Model
+When embeddings aren't available (Docker ARM without NUMBA_DISABLE_JIT,
+or no embedding backend), the layout falls back to circular positioning.
+This doesn't store a UMAP model, so `transform_new_domain()` can't
+incrementally place new domains — they get random jitter positions until
+a full re-fit happens.
+
+---
+
 ## REMAINING — Low Priority
 
 ### Viz Iframe Auth Improvement

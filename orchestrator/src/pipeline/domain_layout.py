@@ -1,39 +1,32 @@
 """UMAP-based domain layout with persistence.
 
 Supports both DataStore (Firestore) and raw sqlite3.Connection.
-Falls back to hash-based positioning if UMAP/numba fails at runtime.
 """
 
 from __future__ import annotations
-import hashlib
-import logging
 import pickle
 import sqlite3
 import numpy as np
 
-logger = logging.getLogger(__name__)
-
-_model = None
-
-def _get_embed_model():
-    global _model
-    if _model is None:
-        from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer("all-MiniLM-L6-v2")
-    return _model
-
 
 def _embed_texts(texts: list[str]) -> np.ndarray:
-    """Embed texts — uses Vertex AI if available, falls back to sentence-transformers."""
+    """Embed texts — uses Vertex AI if available, falls back to sentence-transformers.
+
+    Returns None if no embedding is available (Docker ARM compatibility).
+    """
     try:
         from ..services.embedding import embed_texts
         embeddings = embed_texts(texts)
         return np.array(embeddings, dtype=np.float32)
     except Exception:
-        # Fallback to local sentence-transformers (for SQLite/local dev)
+        pass
+
+    try:
         from sentence_transformers import SentenceTransformer
         model = SentenceTransformer("all-MiniLM-L6-v2")
         return model.encode(texts, normalize_embeddings=True)
+    except ImportError:
+        return None
 
 
 def _is_store(obj):
@@ -80,21 +73,6 @@ def _build_domain_text(store_or_conn, domain_path):
     if _is_store(store_or_conn):
         return _build_domain_text_store(store_or_conn, domain_path)
     return _build_domain_text_conn(store_or_conn, domain_path)
-
-
-def _fallback_position(domain_path: str, stored: dict[str, dict] | None = None) -> dict:
-    """Deterministic fallback position from domain path hash, near parent if possible."""
-    parent = "/".join(domain_path.split("/")[:-1])
-    if stored and parent in stored:
-        h = hashlib.md5(domain_path.encode()).digest()
-        dx = (h[0] / 255 - 0.5) * 0.15
-        dy = (h[1] / 255 - 0.5) * 0.15
-        return {
-            "x": max(0, min(1, stored[parent]["x"] + dx)),
-            "y": max(0, min(1, stored[parent]["y"] + dy)),
-        }
-    h = hashlib.md5(domain_path.encode()).digest()
-    return {"x": h[0] / 255 * 0.8 + 0.1, "y": h[1] / 255 * 0.8 + 0.1}
 
 
 def _get_domain_paths(store_or_conn):
@@ -171,32 +149,25 @@ def full_fit(store_or_conn):
     texts = [_build_domain_text(store_or_conn, p) for p in paths]
     embeddings = _embed_texts(texts)
 
-    # UMAP fit — with fallback if numba/UMAP fails at runtime
-    try:
-        import umap
-        n_neighbors = min(15, len(paths) - 1)
-        reducer = umap.UMAP(
-            n_components=2,
-            n_neighbors=n_neighbors,
-            min_dist=0.15,
-            spread=2.5,
-            metric="cosine",
-            random_state=42,
-        )
-        coords = reducer.fit_transform(embeddings)
-    except Exception as e:
-        logger.warning("UMAP fit failed (%s), using fallback positions", e)
+    if embeddings is None:
+        # No embedding available — circular layout fallback
+        import math
         positions = {}
-        for path in paths:
-            positions[path] = _fallback_position(path, positions)
-            _store_position(store_or_conn, path, positions[path]["x"], positions[path]["y"])
-        fallback_model_data = {
-            "reducer": None,
-            "mins": np.array([0.0, 0.0]),
-            "ranges": np.array([1.0, 1.0]),
-        }
-        _store_model(store_or_conn, pickle.dumps(fallback_model_data), len(paths))
+        for i, path in enumerate(paths):
+            angle = (2 * math.pi * i) / len(paths)
+            x = 0.5 + 0.35 * math.cos(angle)
+            y = 0.5 + 0.35 * math.sin(angle)
+            positions[path] = {"x": x, "y": y}
+            _store_position(store_or_conn, path, x, y)
         return positions
+
+    import umap
+    n_neighbors = min(15, len(paths) - 1)
+    reducer = umap.UMAP(
+        n_components=2, n_neighbors=n_neighbors,
+        min_dist=0.15, spread=2.5, metric="cosine", random_state=42,
+    )
+    coords = reducer.fit_transform(embeddings)
 
     mins = coords.min(axis=0)
     maxs = coords.max(axis=0)
@@ -225,15 +196,6 @@ def transform_new_domain(store_or_conn, domain_path):
     data = pickle.loads(model_data["model_blob"])
     saved_count = model_data.get("domain_count", 0)
 
-    reducer = data.get("reducer")
-
-    # Sentinel record from failed full_fit — use fallback directly
-    if reducer is None:
-        stored = _get_stored_positions(store_or_conn)
-        fallback = _fallback_position(domain_path, stored)
-        _store_position(store_or_conn, domain_path, fallback["x"], fallback["y"])
-        return fallback
-
     current_count = _get_domain_count(store_or_conn)
     if current_count >= saved_count * 2:
         full_fit(store_or_conn)
@@ -243,16 +205,17 @@ def transform_new_domain(store_or_conn, domain_path):
     text = _build_domain_text(store_or_conn, domain_path)
     embedding = _embed_texts([text])
 
-    # Transform with saved UMAP — fallback if numba/UMAP fails
-    try:
-        coords = reducer.transform(embedding)
-        x = float(np.clip((coords[0, 0] - data["mins"][0]) / data["ranges"][0], 0, 1))
-        y = float(np.clip((coords[0, 1] - data["mins"][1]) / data["ranges"][1], 0, 1))
-    except Exception as e:
-        logger.warning("UMAP transform failed for %s (%s), using fallback", domain_path, e)
-        stored = _get_stored_positions(store_or_conn)
-        fallback = _fallback_position(domain_path, stored)
-        x, y = fallback["x"], fallback["y"]
+    if embedding is None:
+        # No embedding — place at center with jitter
+        import random
+        x = 0.4 + random.uniform(0, 0.2)
+        y = 0.4 + random.uniform(0, 0.2)
+        _store_position(store_or_conn, domain_path, x, y)
+        return {"x": x, "y": y}
+
+    coords = data["reducer"].transform(embedding)
+    x = float(np.clip((coords[0, 0] - data["mins"][0]) / data["ranges"][0], 0, 1))
+    y = float(np.clip((coords[0, 1] - data["mins"][1]) / data["ranges"][1], 0, 1))
 
     _store_position(store_or_conn, domain_path, x, y, embedding[0].tobytes())
     return {"x": x, "y": y}
