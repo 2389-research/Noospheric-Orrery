@@ -117,7 +117,7 @@ cd worker && python -m src.main
 cd frontend && NEXT_PUBLIC_AUTH_MODE=noop BACKEND_URL=http://localhost:8000 npm run dev
 ```
 
-The frontend reads `NEXT_PUBLIC_API_URL` at build/runtime. In Docker, it's set to `http://localhost:8100`.
+The frontend uses `BACKEND_URL` for the Next.js API rewrite proxy. In Docker, it's set to the orchestrator service URL.
 
 ## Key Patterns
 
