@@ -93,12 +93,6 @@ export default function PipelinePage() {
   const noosphereId = useNoosphereId();
   const isDemo = useDemoMode();
   const router = useRouter();
-
-  // Redirect demo users to orrery
-  if (isDemo) {
-    router.replace(`/n/${noosphereId}/orrery`);
-    return null;
-  }
   const [stats, setStats] = useState<Stats | null>(null);
   const [domains, setDomains] = useState<DomainInfo[]>([]);
   const [jobs, setJobs] = useState<JobInfo[]>([]);
@@ -109,6 +103,12 @@ export default function PipelinePage() {
   };
 
   useEffect(() => { refresh(); const interval = setInterval(refresh, 5000); return () => clearInterval(interval); }, []);
+
+  // Redirect demo users to orrery (after all hooks)
+  if (isDemo) {
+    router.replace(`/n/${noosphereId}/orrery`);
+    return null;
+  }
 
   const hasGeneralSimmerRunning = jobs.some(
     (j) => j.type === "simmer_general" && (j.status === "running" || j.status === "queued")
