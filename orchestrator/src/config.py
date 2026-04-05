@@ -3,6 +3,7 @@
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -25,7 +26,14 @@ class Settings:
     specs_dir: str = "/data/specs"
 
 
+def _xdg_data_dir() -> str:
+    """Base data directory following XDG Base Directory spec."""
+    xdg = os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))
+    return str(Path(xdg) / "orrery")
+
+
 def get_settings() -> Settings:
+    _base = _xdg_data_dir()
     return Settings(
         anthropic_backend=os.environ.get("ANTHROPIC_BACKEND", "gateway"),
         gateway_url=os.environ.get("GATEWAY_URL", ""),
@@ -40,7 +48,7 @@ def get_settings() -> Settings:
         simmer_iterations=int(os.environ.get("SIMMER_ITERATIONS", "5")),
         chunk_size=int(os.environ.get("CHUNK_SIZE", "2000")),
         worker_poll_interval=int(os.environ.get("WORKER_POLL_INTERVAL", "5")),
-        db_path=os.environ.get("DB_PATH", "/data/orrery.db"),
-        documents_dir=os.environ.get("DOCUMENTS_DIR", "/data/documents"),
-        specs_dir=os.environ.get("SPECS_DIR", "/data/specs"),
+        db_path=os.environ.get("DB_PATH", f"{_base}/orrery.db"),
+        documents_dir=os.environ.get("DOCUMENTS_DIR", f"{_base}/documents"),
+        specs_dir=os.environ.get("SPECS_DIR", f"{_base}/specs"),
     )

@@ -71,12 +71,14 @@ frontend/
 
 ## Data Lives Outside the Repo
 
-All persistent data is at `~/orrery-data/`:
-- `~/orrery-data/orrery.db` — SQLite database
-- `~/orrery-data/documents/` — uploaded file copies
-- `~/orrery-data/specs/` — simmered spec files
+All persistent data follows the XDG Base Directory spec, defaulting to `~/.local/share/orrery/`:
+- `~/.local/share/orrery/orrery.db` — SQLite database
+- `~/.local/share/orrery/documents/` — uploaded file copies
+- `~/.local/share/orrery/specs/` — simmered spec files
 
-In Docker, this maps to the `orrery-data` volume mounted at `/data`.
+Override with `XDG_DATA_HOME` or the individual env vars (`DB_PATH`, `DOCUMENTS_DIR`, `SPECS_DIR`).
+
+In Docker, the `.env` file sets `/data/` paths and the `orrery-data` volume is mounted at `/data`.
 
 ## Starting the Services
 
@@ -93,20 +95,37 @@ Ports: orchestrator → 8100, frontend → 3100.
 
 There is an env script at `/tmp/run-orchestrator.sh` that sets all required environment variables. Source it before running either Python service.
 
+**Important:** The env script sets `AWS_ACCESS_KEY` and `AWS_SECRET_KEY` for the relay/orchestrator. The worker additionally needs these env vars for the simmer pipeline's judge board (which spawns Claude Agent SDK processes in Bedrock mode):
+
+```bash
+# These must be set in addition to sourcing the env script:
+export ANTHROPIC_BACKEND=bedrock              # Tell the relay to use Bedrock, not gateway
+export CLAUDE_CODE_USE_BEDROCK=1              # Tell Claude CLI to use Bedrock
+export ANTHROPIC_API_KEY="bedrock-mode-no-key-needed"  # Dummy — CLI requires it even in Bedrock mode
+export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY      # Standard AWS env var name (CLI expects this)
+export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_KEY  # Standard AWS env var name (CLI expects this)
+```
+
 ```bash
 # Orchestrator
 source /tmp/run-orchestrator.sh
+export ANTHROPIC_BACKEND=bedrock
 cd orchestrator && uvicorn src.main:app --reload --port 8000
 
-# Worker (separate terminal)
+# Worker (separate terminal) — needs extra env for simmer judge board
 source /tmp/run-orchestrator.sh
+export ANTHROPIC_BACKEND=bedrock
+export CLAUDE_CODE_USE_BEDROCK=1
+export ANTHROPIC_API_KEY="bedrock-mode-no-key-needed"
+export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
+export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_KEY
 cd worker && python -m src.main
 
 # Frontend (separate terminal)
-cd frontend && NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
+cd frontend && BACKEND_URL=http://localhost:8000 npm run dev
 ```
 
-The frontend reads `NEXT_PUBLIC_API_URL` at build/runtime. In Docker, it's set to `http://localhost:8100`.
+The frontend uses `BACKEND_URL` (not `NEXT_PUBLIC_API_URL`) for its Next.js rewrite proxy. In Docker, it defaults to `http://localhost:8100`.
 
 ## Key Patterns
 
@@ -160,10 +179,12 @@ result = await refine(
 )
 ```
 
-simmer-sdk is an internal dependency:
+simmer-sdk is an internal dependency (**not** the PyPI `simmer-sdk` package — that's a different project):
 - **Repo**: `https://github.com/2389-research/simmer-sdk`
-- **Docker**: clone alongside, then `cp -r simmer-sdk/ worker/simmer-sdk/` before `docker compose build`
-- **Local dev**: `git clone https://github.com/2389-research/simmer-sdk.git && pip install -e simmer-sdk/`
+- **Minimum version**: 0.2.1 (includes `get_cli_path()` fix for bundled CLI subprocess transport bug)
+- **Docker**: installed directly from GitHub in the worker Dockerfile — no manual clone needed
+- **Local dev**: `git clone https://github.com/2389-research/simmer-sdk.git && uv pip install -e simmer-sdk/`
+- **Gotcha**: `pip install simmer-sdk` from PyPI installs a completely different package (blockchain/Solana). Always install from the 2389-research repo.
 
 ### SQLite WAL Mode
 

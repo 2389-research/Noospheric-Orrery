@@ -33,11 +33,11 @@ Deep reference for anyone making structural changes to the system.
 │  Serves graph data for cosmic viz                              │
 └──────┬───────────────────────────────────────────────┬──────────┘
        │ SQLite WAL (shared volume)                    │ AWS Bedrock
-┌──────▼──────────────────────┐          ┌─────────────▼──────────┐
-│  ~/orrery-data/orrery.db    │          │  claude-sonnet-4       │
-│  ~/orrery-data/documents/   │          │  claude-haiku-4        │
-│  ~/orrery-data/specs/       │          │  (cross-region profiles)│
-└──────▲──────────────────────┘          └────────────────────────┘
+┌──────▼────────────────────────────┐     ┌─────────────▼──────────┐
+│  ~/.local/share/orrery/orrery.db  │     │  claude-sonnet-4       │
+│  ~/.local/share/orrery/documents/ │     │  claude-haiku-4        │
+│  ~/.local/share/orrery/specs/     │     │  (cross-region profiles)│
+└──────▲────────────────────────────┘     └────────────────────────┘
        │ SQLite WAL (same volume)
 ┌──────┴──────────────────────────────────────────────────────────┐
 │  worker  (Python asyncio, no HTTP port)                        │
@@ -722,8 +722,8 @@ All settings are in `orchestrator/src/config.py` and `worker/src/config.py` (ide
 | `SIMMER_ITERATIONS` | `5` | Refinement iterations per simmer phase |
 | `CHUNK_SIZE` | `2000` | Characters per extraction chunk |
 | `WORKER_POLL_INTERVAL` | `5` | Seconds between job queue polls |
-| `DB_PATH` | `/data/orrery.db` | SQLite path |
-| `DOCUMENTS_DIR` | `/data/documents` | Uploaded file copies |
-| `SPECS_DIR` | `/data/specs` | Simmered spec files |
+| `DB_PATH` | `$XDG_DATA_HOME/orrery/orrery.db` | SQLite path |
+| `DOCUMENTS_DIR` | `$XDG_DATA_HOME/orrery/documents` | Uploaded file copies |
+| `SPECS_DIR` | `$XDG_DATA_HOME/orrery/specs` | Simmered spec files |
 
-Local dev uses `~/orrery-data/` paths. The env script at `/tmp/run-orchestrator.sh` sets all of these.
+Local dev defaults to `~/.local/share/orrery/` (XDG). Docker overrides via `.env` to `/data/`. The env script at `/tmp/run-orchestrator.sh` sets credentials.
