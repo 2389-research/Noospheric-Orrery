@@ -154,6 +154,8 @@ def _run_batch_store(store, results):
 
     # Tier 2: Embedding similarity
     embeddings = embed_entities(names)
+    if embeddings is None:
+        return results  # No embedding backend available — skip similarity matching
 
     # Store embeddings
     for i, eid in enumerate(ids):
@@ -235,6 +237,9 @@ def _run_batch_conn(conn, results):
     types = [e[2] for e in entities]
 
     embeddings = embed_entities(names)
+    if embeddings is None:
+        return results  # No embedding backend available — skip similarity matching
+
     for i, eid in enumerate(ids):
         conn.execute("INSERT OR REPLACE INTO entity_embeddings (entity_id, embedding) VALUES (?, ?)",
                       (eid, embeddings[i].tobytes()))

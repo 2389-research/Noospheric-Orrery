@@ -205,6 +205,14 @@ def transform_new_domain(store_or_conn, domain_path):
     text = _build_domain_text(store_or_conn, domain_path)
     embedding = _embed_texts([text])
 
+    if embedding is None:
+        # No embedding — place at center with jitter
+        import random
+        x = 0.4 + random.uniform(0, 0.2)
+        y = 0.4 + random.uniform(0, 0.2)
+        _store_position(store_or_conn, domain_path, x, y)
+        return {"x": x, "y": y}
+
     coords = data["reducer"].transform(embedding)
     x = float(np.clip((coords[0, 0] - data["mins"][0]) / data["ranges"][0], 0, 1))
     y = float(np.clip((coords[0, 1] - data["mins"][1]) / data["ranges"][1], 0, 1))

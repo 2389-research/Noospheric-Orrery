@@ -112,7 +112,7 @@ export async function setupSession(apiUrl: string): Promise<SessionInfo | null> 
     try {
       const res = await fetch(`${apiUrl}/auth/provision`, { method: "POST" });
       if (!res.ok) {
-        // Backend might not have /auth/provision in SQLite mode — return default session
+        console.warn(`[auth] Provision failed (${res.status}), using default session`);
         return { orgId: "local", role: "admin", workspaces: [{ id: "default", name: "Default" }] };
       }
       return await res.json();

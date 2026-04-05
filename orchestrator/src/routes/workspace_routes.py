@@ -43,8 +43,17 @@ def _load_registry() -> list[dict]:
         return json.load(f)
 
 def _save_registry(workspaces: list[dict]):
-    with open(_registry_path(), "w") as f:
-        json.dump(workspaces, f, indent=2)
+    import tempfile
+    path = _registry_path()
+    # Atomic write — write to temp file then rename
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(workspaces, f, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        os.unlink(tmp)
+        raise
 
 
 # --- Models ---
