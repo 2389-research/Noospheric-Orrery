@@ -22,17 +22,15 @@ from pathlib import Path
 def parse_golden_set(text: str) -> list[tuple[str, str]]:
     """Parse golden set text into (name, type) tuples.
 
-    The golden set can be either:
-    1. A list of individual entities: JSON arrays or '- EntityName (EntityType)' lines
-    2. A type taxonomy: '- TypeName — description, examples' lines
+    Expects a JSON array of {"name": ..., "type": ...} objects embedded in the
+    golden set text (possibly inside a markdown code fence). This is the format
+    Phase 1 is instructed to produce.
 
-    For type taxonomies, we extract the type names themselves as the "entities"
-    and use "type_definition" as their type. Individual example entities mentioned
-    in parentheses are also extracted.
+    Returns an empty list if no valid JSON entities are found — the caller
+    should treat this as a fatal error.
     """
     entities: list[tuple[str, str]] = []
 
-    # Try JSON first — could be individual entities
     try:
         match = re.search(r'\[.*\]', text, re.DOTALL)
         if match:
@@ -41,53 +39,8 @@ def parse_golden_set(text: str) -> list[tuple[str, str]]:
                 for item in data:
                     if isinstance(item, dict) and "name" in item and "type" in item:
                         entities.append((item["name"].lower().strip(), item["type"].lower().strip()))
-                if entities:
-                    return entities
     except (json.JSONDecodeError, ValueError):
         pass
-
-    # Try markdown list with type in parens: '- EntityName (EntityType)'
-    paren_pattern = re.compile(r'^[-*]\s+(.+?)\s*\(([^)]+)\)\s*$', re.MULTILINE)
-    paren_matches = list(paren_pattern.finditer(text))
-
-    # Try type taxonomy: '- TypeName — description'
-    type_pattern = re.compile(r'^[-*]\s+(\w[\w\s]*?)\s*[—–]\s+(.+)$', re.MULTILINE)
-    type_matches = list(type_pattern.finditer(text))
-
-    # If we have more type-definition lines than paren lines, treat as taxonomy
-    if len(type_matches) >= len(paren_matches) and type_matches:
-        for m in type_matches:
-            type_name = m.group(1).strip().lower()
-            desc = m.group(2)
-
-            # Extract parenthesized examples like "(ai, blockchain, unix kernel)"
-            example_match = re.search(r'\(([^)]+)\)', desc)
-            if example_match:
-                examples = [e.strip().lower() for e in example_match.group(1).split(',') if e.strip()]
-                for ex in examples:
-                    entities.append((ex, type_name))
-            else:
-                # Use description terms as example entities
-                terms = [t.strip().lower() for t in re.split(r'[,;]', desc) if t.strip()]
-                for t in terms:
-                    entities.append((t, type_name))
-        if entities:
-            return entities
-
-    # Otherwise, treat paren matches as individual entities
-    if paren_matches:
-        for m in paren_matches:
-            name = m.group(1).strip().lower()
-            etype = m.group(2).strip().lower()
-            if name and etype:
-                entities.append((name, etype))
-        return entities
-
-    # Fallback: each non-empty line as an entity name with unknown type
-    for line in text.splitlines():
-        line = line.strip().lstrip('-*').strip()
-        if line and not line.startswith('#') and not line.startswith('{'):
-            entities.append((line.lower(), "unknown"))
 
     return entities
 
@@ -139,17 +92,19 @@ def diff_entities(
         else:
             false_positives.append(e)
 
-    # Find misses (golden entities not hit)
+    # Use unique hit keys to avoid double-counting case variants
     hit_keys = {(e["name"].lower().strip(), e["type"].lower().strip()) for e in hits}
     misses = [(n, t) for n, t in golden_set if (n, t) not in hit_keys]
 
     total_extracted = len(deduped)
-    precision = len(hits) / total_extracted if total_extracted > 0 else 0.0
-    recall = len(hits) / len(golden_set) if golden_set else 0.0
+    matched_count = len(hit_keys)
+    precision = matched_count / total_extracted if total_extracted > 0 else 0.0
+    recall = matched_count / len(golden_set) if golden_set else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
 
     return {
         "hits": hits,
+        "hit_keys": hit_keys,
         "misses": misses,
         "false_positives": false_positives,
         "near_misses": near_misses,
@@ -251,11 +206,13 @@ async def run_evaluation(args: argparse.Namespace) -> None:
         # Extract from each chunk, dedup per doc
         doc_entities: list[dict] = []
         seen: set[tuple[str, str]] = set()
+        chunks_succeeded = 0
         for chunk in chunks:
             try:
                 entities = await extract_chunk(
                     relay=relay, chunk_text=chunk, spec=candidate_spec, model=model
                 )
+                chunks_succeeded += 1
                 for e in entities:
                     key = (e["name"].lower().strip(), e["type"])
                     if key not in seen:
@@ -263,6 +220,10 @@ async def run_evaluation(args: argparse.Namespace) -> None:
                         doc_entities.append(e)
             except Exception as exc:
                 print(f"  Warning: Haiku extraction failed on chunk of {doc_path.name}: {exc}", file=sys.stderr)
+
+        if chunks and chunks_succeeded == 0:
+            print(f"ERROR: All {len(chunks)} chunks failed for {doc_path.name}. Auth/model/network issue.", file=sys.stderr)
+            sys.exit(1)
 
         # Write raw output
         output_file = eval_dir / f"{doc_path.stem}.json"

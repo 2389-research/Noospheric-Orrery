@@ -1,6 +1,7 @@
 # ABOUTME: General spec simmering job — iteratively refines golden set and extraction spec.
 # ABOUTME: Uses simmer-sdk for multi-phase refinement with board-mode judging.
 
+import shlex
 import uuid
 import json
 from pathlib import Path
@@ -253,10 +254,10 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         judge_model="claude-sonnet-4-6",
         clerk_model="claude-haiku-4-5",
         evaluator=(
-            f"python {evaluator_script}"
+            f"python {shlex.quote(str(evaluator_script))}"
             f" --candidate {{candidate_path}}"
-            f" --samples-dir {sample_dir}"
-            f" --golden-set {golden_set_path}"
+            f" --samples-dir {shlex.quote(str(sample_dir))}"
+            f" --golden-set {shlex.quote(str(golden_set_path))}"
             f" --output-dir {{output_dir}}"
             f" --iteration {{iteration}}"
         ),

@@ -1,6 +1,7 @@
 # ABOUTME: Domain-specific spec simmering job — refines extraction spec for a single domain.
 # ABOUTME: Starts from the general spec and adds domain-specific entity types via simmer-sdk.
 
+import shlex
 import uuid
 import json
 from pathlib import Path
@@ -198,10 +199,10 @@ Read every sample document and list ALL entities you find as a JSON array:
         judge_model="claude-sonnet-4-6",
         clerk_model="claude-haiku-4-5",
         evaluator=(
-            f"python {evaluator_script}"
+            f"python {shlex.quote(str(evaluator_script))}"
             f" --candidate {{candidate_path}}"
-            f" --samples-dir {sample_dir}"
-            f" --golden-set {golden_set_path}"
+            f" --samples-dir {shlex.quote(str(sample_dir))}"
+            f" --golden-set {shlex.quote(str(golden_set_path))}"
             f" --output-dir {{output_dir}}"
             f" --iteration {{iteration}}"
         ),

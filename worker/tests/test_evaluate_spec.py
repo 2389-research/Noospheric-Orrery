@@ -20,37 +20,8 @@ End of golden set."""
         assert ("bob", "person") in result
         assert ("mit", "organization") in result
 
-    def test_markdown_list(self):
-        text = """- Alice (Person)
-- Acme Corp (Organization)
-- Machine Learning (Topic)"""
-        result = parse_golden_set(text)
-        assert ("alice", "person") in result
-        assert ("acme corp", "organization") in result
-        assert ("machine learning", "topic") in result
-
-    def test_type_definition_lines(self):
-        text = """- Person — people, speakers, authors
-- Organization — companies, groups, teams"""
-        result = parse_golden_set(text)
-        assert any(t == "person" for _, t in result)
-        assert any(t == "organization" for _, t in result)
-
-    def test_empty_returns_empty(self):
-        assert parse_golden_set("") == []
-        assert parse_golden_set("   \n\n  ") == []
-
-    def test_comment_lines_skipped_in_fallback(self):
-        text = """# Header
-entity one
-entity two"""
-        result = parse_golden_set(text)
-        names = [n for n, _ in result]
-        assert "# header" not in names
-        assert "entity one" in names
-
-    def test_golden_set_with_taxonomy_and_json(self):
-        """JSON array takes priority even when taxonomy lines are present."""
+    def test_json_in_code_fence(self):
+        """JSON inside markdown code fence — the expected Phase 1 format."""
         text = """# Golden Set
 
 ## Entity Type Taxonomy
@@ -69,6 +40,30 @@ entity two"""
         assert ("harper reed", "person") in result
         assert ("3kvc", "organization") in result
         assert len(result) == 2  # JSON entities only, not taxonomy terms
+
+    def test_empty_returns_empty(self):
+        assert parse_golden_set("") == []
+        assert parse_golden_set("   \n\n  ") == []
+
+    def test_no_json_returns_empty(self):
+        """Non-JSON text returns empty — caller should treat as fatal."""
+        text = """- Person — people, speakers, authors
+- Organization — companies, groups, teams"""
+        result = parse_golden_set(text)
+        assert result == []
+
+    def test_malformed_json_returns_empty(self):
+        text = '[{"name": "alice", "type": }]'
+        result = parse_golden_set(text)
+        assert result == []
+
+    def test_plain_text_returns_empty(self):
+        """Plain text with no JSON should not produce fake entities."""
+        text = """# Header
+entity one
+entity two"""
+        result = parse_golden_set(text)
+        assert result == []
 
 
 class TestChunkText:
@@ -130,7 +125,8 @@ class TestDiffEntities:
         assert result["near_misses"][0]["name"] == "alice"
 
     def test_dedup_case_sensitive_type(self):
-        """Dedup uses case-sensitive type to match real pipeline."""
+        """Dedup uses case-sensitive type to match real pipeline.
+        But recall should not exceed 1.0 even with case variants."""
         extracted = [
             {"name": "alice", "type": "Person"},
             {"name": "alice", "type": "person"},  # different case = separate entity in dedup
@@ -139,6 +135,9 @@ class TestDiffEntities:
         result = diff_entities(extracted, golden)
         # Both should survive dedup since types differ in case
         assert result["total_extracted"] == 2
+        # But recall uses unique hit_keys, so can't exceed 1.0
+        assert result["recall"] <= 1.0
+        assert len(result["hit_keys"]) == 1
 
     def test_empty_golden(self):
         extracted = [{"name": "alice", "type": "Person"}]
