@@ -226,7 +226,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         criteria={
             "coverage": "When run on sample docs, the spec finds all entities from the golden set",
             "precision": "Zero false positives",
-            "format_compliance": "Output is valid JSON with name and type fields",
+            "generalizability": "The spec uses general rules and entity type definitions, not hardcoded entity names — it would work on documents it has never seen",
         },
         primary="coverage",
         iterations=settings.simmer_iterations,
@@ -243,13 +243,15 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
                 ),
             },
             {
-                "name": "Precision & Quality",
+                "name": "Precision & Generalizability",
                 "lens": (
                     "BEFORE scoring, you MUST open and read the raw extraction JSON files in the eval-* directories. "
                     "The quantitative summary is approximate — your score must be based on what you see in the actual outputs. "
                     "For each sample doc, check: are extracted entities grounded in the source text? "
-                    "Are false positives truly wrong, or reasonable entities the golden set didn't include? "
-                    "Is the spec causing Haiku to over-extract or hallucinate?"
+                    "CRITICAL: Read the spec itself. Does it define entity types with general rules and examples, "
+                    "or does it hardcode specific entity names from the sample docs? A good spec describes WHAT to look for "
+                    "(e.g., 'Person — named individuals mentioned by name'), not WHO to look for (e.g., 'extract harper reed, shana fisher'). "
+                    "Score generalizability low if the spec would fail on a new document about a different topic."
                 ),
             },
         ],

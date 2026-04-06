@@ -171,7 +171,7 @@ Read every sample document and list ALL entities you find as a JSON array:
         criteria={
             "coverage": "Finds all domain-specific entities from the golden set",
             "precision": "Zero false positives",
-            "format_compliance": "Valid JSON with name and type fields",
+            "generalizability": f"The spec uses general rules for {domain_path} entity types, not hardcoded names — it would work on new documents in this domain",
         },
         primary="coverage",
         iterations=settings.simmer_iterations,
@@ -188,13 +188,15 @@ Read every sample document and list ALL entities you find as a JSON array:
                 ),
             },
             {
-                "name": "Precision & Quality",
+                "name": "Precision & Generalizability",
                 "lens": (
                     "BEFORE scoring, you MUST open and read the raw extraction JSON files in the eval-* directories. "
                     "The quantitative summary is approximate — your score must be based on what you see in the actual outputs. "
                     "For each sample doc, check: are extracted entities grounded in the source text? "
-                    "Are false positives truly wrong, or reasonable entities the golden set didn't include? "
-                    "Is the spec causing Haiku to over-extract or hallucinate?"
+                    "CRITICAL: Read the spec itself. Does it define entity types with general rules and examples, "
+                    "or does it hardcode specific entity names from the sample docs? A good spec describes WHAT to look for "
+                    f"in {domain_path} documents, not a list of specific entities to find. "
+                    "Score generalizability low if the spec would fail on a new document in this domain."
                 ),
             },
         ],
