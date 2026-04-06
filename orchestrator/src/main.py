@@ -11,11 +11,8 @@ async def lifespan(app: FastAPI):
     if os.environ.get("DB_BACKEND", "sqlite") == "sqlite":
         init_db(settings.db_path)
     # Pre-warm SentenceTransformer model so first /graph request isn't slow
-    try:
-        from .pipeline.domain_layout import _embed_texts
-        _embed_texts(["warmup"])
-    except Exception:
-        pass  # No embedding available — circular layout fallback
+    from .pipeline.domain_layout import _get_embed_model
+    _get_embed_model()
     yield
 
 app = FastAPI(title="Noospheric Orrery", lifespan=lifespan)
