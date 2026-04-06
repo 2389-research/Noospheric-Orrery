@@ -1,0 +1,66 @@
+# ABOUTME: Build and push Docker images to GHCR when a GitHub release is published.
+# ABOUTME: Builds orchestrator, worker, and frontend images in parallel via matrix strategy.
+
+name: Release Docker Images
+
+on:
+  release:
+    types: [published]
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - service: orchestrator
+            image: orrery-orchestrator
+            dockerfile: orchestrator/Dockerfile.local
+            context: .
+          - service: worker
+            image: orrery-worker
+            dockerfile: worker/Dockerfile
+            context: .
+          - service: frontend
+            image: orrery-frontend
+            dockerfile: frontend/Dockerfile
+            context: ./frontend
+            build-args: |
+              NEXT_PUBLIC_AUTH_MODE=noop
+              BACKEND_URL=http://orchestrator:8000
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build-args }}

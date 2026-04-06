@@ -84,7 +84,7 @@ In Docker, this maps to the `orrery-data` volume mounted at `/data`.
 
 ```bash
 # Docker (recommended):
-docker-compose -f docker-compose.sqlite.yml up
+docker compose up
 
 # Requires: .env file with LLM credentials (ANTHROPIC_BACKEND, AWS_ACCESS_KEY, etc.)
 # Data persists at ./data/ on the host filesystem
@@ -96,8 +96,8 @@ docker-compose -f docker-compose.sqlite.yml up
 ### Cloud Mode (Firestore + Firebase Auth)
 
 ```bash
-docker compose up          # all three services
-docker compose up orchestrator worker   # without frontend
+docker compose -f docker-compose.firebase.yml up          # all three services
+docker compose -f docker-compose.firebase.yml up orchestrator worker   # without frontend
 ```
 
 Ports: orchestrator → 8100, frontend → 3100.

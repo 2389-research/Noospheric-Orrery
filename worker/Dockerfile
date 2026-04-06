@@ -7,7 +7,7 @@ ENV DISABLE_AUTOUPDATER=1
 ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 # Install Node.js + Claude Code CLI (for simmer-sdk judge board)
-RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm && \
+RUN apt-get update && apt-get install -y --no-install-recommends git nodejs npm && \
     npm install -g @anthropic-ai/claude-code && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -15,9 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm && \
 COPY packages/orrery-relay/ /tmp/orrery-relay/
 RUN pip install --no-cache-dir /tmp/orrery-relay/ && rm -rf /tmp/orrery-relay/
 
-# Install simmer-sdk (internal dependency)
-COPY worker/simmer-sdk/ /tmp/simmer-sdk/
-RUN pip install --no-cache-dir /tmp/simmer-sdk/ && rm -rf /tmp/simmer-sdk/
+# Install simmer-sdk v0.3.0 from GitHub (internal dep — not the PyPI package, which is unrelated)
+RUN pip install --no-cache-dir "simmer-sdk @ git+https://github.com/2389-research/simmer-sdk.git@v0.3.0"
 
 COPY worker/pyproject.toml .
 RUN pip install --no-cache-dir .

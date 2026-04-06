@@ -67,26 +67,29 @@ All three services run via `docker compose up`. Orchestrator and worker share a 
 
 - Docker and Docker Compose
 - AWS account with Bedrock access (cross-region inference enabled for `us-east-1`)
-- Access to [simmer-sdk](https://github.com/2389-research/simmer-sdk)
-
 ### Setup
 
 ```bash
-# 1. Clone repos
-git clone <noospheric-orrery-repo>
-git clone https://github.com/2389-research/simmer-sdk.git
-
-# 2. Copy simmer-sdk into worker build context
-cp -r simmer-sdk/ Noospheric-Orrery/worker/simmer-sdk/
-
-# 3. Configure environment
+# 1. Clone
+git clone https://github.com/2389-research/Noospheric-Orrery.git
 cd Noospheric-Orrery
+
+# 2. Configure environment
 cp .env.example .env
 # Edit .env with your AWS credentials
 
-# 4. Launch
+# 3. Launch
+docker compose up
+
+# Or pull pre-built images from GHCR
+docker compose pull
 docker compose up
 ```
+
+Pre-built images are published to GitHub Container Registry on each [release](https://github.com/2389-research/Noospheric-Orrery/releases):
+- `ghcr.io/2389-research/orrery-orchestrator`
+- `ghcr.io/2389-research/orrery-worker`
+- `ghcr.io/2389-research/orrery-frontend`
 
 Services start on:
 - **Frontend**: http://localhost:3100 (upload, pipeline, entities, galaxy viz)
