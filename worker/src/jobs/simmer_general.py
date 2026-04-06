@@ -227,6 +227,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
             "coverage": "When run on sample docs, the spec finds all entities from the golden set",
             "precision": "Zero false positives",
             "generalizability": "The spec uses general rules and entity type definitions, not hardcoded entity names — it would work on documents it has never seen",
+            "format_compliance": "Output is valid JSON with name and type fields",
         },
         primary="coverage",
         iterations=settings.simmer_iterations,

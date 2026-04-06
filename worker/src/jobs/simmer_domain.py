@@ -172,6 +172,7 @@ Read every sample document and list ALL entities you find as a JSON array:
             "coverage": "Finds all domain-specific entities from the golden set",
             "precision": "Zero false positives",
             "generalizability": f"The spec uses general rules for {domain_path} entity types, not hardcoded names — it would work on new documents in this domain",
+            "format_compliance": "Valid JSON with name and type fields",
         },
         primary="coverage",
         iterations=settings.simmer_iterations,
