@@ -7,7 +7,7 @@ ENV DISABLE_AUTOUPDATER=1
 ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 # Install Node.js + Claude Code CLI (for simmer-sdk judge board)
-RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm && \
+RUN apt-get update && apt-get install -y --no-install-recommends git nodejs npm && \
     npm install -g @anthropic-ai/claude-code && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 

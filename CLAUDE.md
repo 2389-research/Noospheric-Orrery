@@ -96,8 +96,8 @@ docker compose up
 ### Cloud Mode (Firestore + Firebase Auth)
 
 ```bash
-docker compose up          # all three services
-docker compose up orchestrator worker   # without frontend
+docker compose -f docker-compose.firebase.yml up          # all three services
+docker compose -f docker-compose.firebase.yml up orchestrator worker   # without frontend
 ```
 
 Ports: orchestrator → 8100, frontend → 3100.
