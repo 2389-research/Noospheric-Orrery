@@ -84,7 +84,7 @@ In Docker, this maps to the `orrery-data` volume mounted at `/data`.
 
 ```bash
 # Docker (recommended):
-docker-compose -f docker-compose.sqlite.yml up
+docker compose up
 
 # Requires: .env file with LLM credentials (ANTHROPIC_BACKEND, AWS_ACCESS_KEY, etc.)
 # Data persists at ./data/ on the host filesystem

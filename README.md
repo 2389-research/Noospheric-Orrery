@@ -78,12 +78,12 @@ cd Noospheric-Orrery
 cp .env.example .env
 # Edit .env with your AWS credentials
 
-# 3. Launch (SQLite mode — builds locally)
-docker compose -f docker-compose.sqlite.yml up
+# 3. Launch
+docker compose up
 
 # Or pull pre-built images from GHCR
-docker compose -f docker-compose.sqlite.yml pull
-docker compose -f docker-compose.sqlite.yml up
+docker compose pull
+docker compose up
 ```
 
 Pre-built images are published to GitHub Container Registry on each [release](https://github.com/2389-research/Noospheric-Orrery/releases):

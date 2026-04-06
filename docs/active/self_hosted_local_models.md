@@ -419,7 +419,7 @@ Simmering still needs cloud API (Option C hybrid).
 - `packages/orrery-relay/src/orrery_relay/relay.py` — add ollama backend
 - `packages/orrery-relay/src/orrery_relay/backends.py` — model name pass-through
 - `orchestrator/src/config.py` — add OLLAMA_URL setting
-- `docker-compose.sqlite.yml` — add ollama service or document external setup
+- `docker-compose.yml` — add ollama service or document external setup
 
 **Verification:** Upload a doc, classify with Llama 3.1 8B, extract
 entities, render orrery. Compare entity quality vs Haiku.
