@@ -164,12 +164,16 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
     seed_path.write_text(SEED_GOLDEN_SET)
     conn.close()
 
-    bedrock_kwargs = {
-        "api_provider": "bedrock",
-        "aws_access_key": settings.aws_access_key,
-        "aws_secret_key": settings.aws_secret_key,
-        "aws_region": settings.aws_region,
-    }
+    backend = settings.anthropic_backend
+    provider_kwargs = {"api_provider": backend}
+    if backend == "bedrock":
+        provider_kwargs.update({
+            "aws_access_key": settings.aws_access_key,
+            "aws_secret_key": settings.aws_secret_key,
+            "aws_region": settings.aws_region,
+        })
+    elif backend == "ollama":
+        provider_kwargs["ollama_url"] = settings.ollama_url
 
     job_id = job["id"]
     print(f"Simmering general spec (job {job_id})", flush=True)
@@ -216,7 +220,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
             f"the extraction spec finds it. Be thorough."
         ),
         on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(specs_dir / "general_golden")),
-        **bedrock_kwargs,
+        **provider_kwargs,
     )
 
     # Phase 2: Extraction spec simmering (with empirical evaluator)
@@ -280,7 +284,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
             f"Look for near-misses, type mismatches, and systematic patterns the metrics miss."
         ),
         on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path, str(specs_dir / "general_spec")),
-        **bedrock_kwargs,
+        **provider_kwargs,
     )
 
     # Store spec

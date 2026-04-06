@@ -17,7 +17,7 @@ logger = logging.getLogger("orrery_relay")
 
 
 class Relay:
-    """Shared LLM client that supports both Bedrock and Gateway backends."""
+    """Shared LLM client that supports Bedrock, Gateway, and Ollama backends."""
 
     def __init__(
         self,
@@ -27,6 +27,7 @@ class Relay:
         aws_access_key: str = "",
         aws_secret_key: str = "",
         aws_region: str = "us-east-1",
+        ollama_url: str = "http://localhost:11434",
         max_retries: int = 3,
         base_delay: float = 1.0,
         max_delay: float = 30.0,
@@ -38,6 +39,7 @@ class Relay:
         self._aws_access_key = aws_access_key
         self._aws_secret_key = aws_secret_key
         self._aws_region = aws_region
+        self._ollama_url = ollama_url
         self._max_retries = max_retries
         self._base_delay = base_delay
         self._max_delay = max_delay
@@ -45,6 +47,7 @@ class Relay:
         self._async_client = create_async_client(
             backend=backend, gateway_url=gateway_url, gateway_api_key=gateway_api_key,
             aws_access_key=aws_access_key, aws_secret_key=aws_secret_key, aws_region=aws_region,
+            ollama_url=ollama_url,
         )
         self._sync_client: Any = None
 
@@ -56,6 +59,7 @@ class Relay:
         explicit_backend = os.environ.get("ANTHROPIC_BACKEND", "")
         aws_key = os.environ.get("AWS_ACCESS_KEY", "")
         gateway_url = os.environ.get("GATEWAY_URL", "")
+        ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
         if explicit_backend:
             backend = explicit_backend
         elif aws_key:
@@ -71,6 +75,7 @@ class Relay:
             "aws_access_key": aws_key,
             "aws_secret_key": os.environ.get("AWS_SECRET_KEY", ""),
             "aws_region": os.environ.get("AWS_REGION", "us-east-1"),
+            "ollama_url": ollama_url,
             "max_retries": int(os.environ.get("RELAY_MAX_RETRIES", "3")),
             "base_delay": float(os.environ.get("RELAY_BASE_DELAY", "1.0")),
             "max_delay": float(os.environ.get("RELAY_MAX_DELAY", "30.0")),
@@ -87,6 +92,7 @@ class Relay:
             "aws_access_key": getattr(settings, "aws_access_key", ""),
             "aws_secret_key": getattr(settings, "aws_secret_key", ""),
             "aws_region": getattr(settings, "aws_region", "us-east-1"),
+            "ollama_url": getattr(settings, "ollama_url", "http://localhost:11434"),
         }
         kwargs.update(overrides)
         return cls(**kwargs)
@@ -188,6 +194,7 @@ class Relay:
             self._sync_client = create_sync_client(
                 backend=self._backend, gateway_url=self._gateway_url, gateway_api_key=self._gateway_api_key,
                 aws_access_key=self._aws_access_key, aws_secret_key=self._aws_secret_key, aws_region=self._aws_region,
+                ollama_url=self._ollama_url,
             )
         mapped_model = map_model_id(model, self._backend)
         call_kwargs: dict[str, Any] = {"model": mapped_model, "messages": messages, "max_tokens": max_tokens}

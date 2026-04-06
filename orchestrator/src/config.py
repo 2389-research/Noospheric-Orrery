@@ -1,5 +1,5 @@
 # ABOUTME: Application settings loaded from environment variables.
-# ABOUTME: Supports both gateway and bedrock backends via ANTHROPIC_BACKEND env var.
+# ABOUTME: Supports gateway, bedrock, and ollama backends via ANTHROPIC_BACKEND env var.
 
 import os
 from dataclasses import dataclass
@@ -14,6 +14,7 @@ class Settings:
     aws_access_key: str = ""
     aws_secret_key: str = ""
     aws_region: str = "us-east-1"
+    ollama_url: str = "http://localhost:11434"
     classification_model: str = "claude-sonnet-4-6"
     extraction_model: str = "claude-haiku-4-5"
     general_spec_threshold: int = 10
@@ -41,6 +42,7 @@ def get_settings() -> Settings:
         aws_access_key=os.environ.get("AWS_ACCESS_KEY", ""),
         aws_secret_key=os.environ.get("AWS_SECRET_KEY", ""),
         aws_region=os.environ.get("AWS_REGION", "us-east-1"),
+        ollama_url=os.environ.get("OLLAMA_URL", "http://localhost:11434"),
         classification_model=os.environ.get("CLASSIFICATION_MODEL", "claude-sonnet-4-6"),
         extraction_model=os.environ.get("EXTRACTION_MODEL", "claude-haiku-4-5"),
         general_spec_threshold=int(os.environ.get("GENERAL_SPEC_THRESHOLD", "10")),

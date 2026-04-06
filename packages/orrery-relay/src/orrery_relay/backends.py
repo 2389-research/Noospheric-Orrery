@@ -21,11 +21,12 @@ BEDROCK_MODEL_MAP = {
 
 def map_model_id(model: str, backend: str) -> str:
     """Translate a friendly model name to the backend-specific ID."""
-    if backend != "bedrock":
-        return model
-    if "us.anthropic." in model:
-        return model
-    return BEDROCK_MODEL_MAP.get(model, model)
+    if backend == "bedrock":
+        if "us.anthropic." in model:
+            return model
+        return BEDROCK_MODEL_MAP.get(model, model)
+    # gateway and ollama use the model name as-is
+    return model
 
 
 def create_async_client(
@@ -35,6 +36,7 @@ def create_async_client(
     aws_access_key: str = "",
     aws_secret_key: str = "",
     aws_region: str = "us-east-1",
+    ollama_url: str = "http://localhost:11434",
 ) -> AsyncAnthropic | AsyncAnthropicBedrock:
     """Create the appropriate async Anthropic client for the chosen backend."""
     if backend == "gateway":
@@ -45,8 +47,10 @@ def create_async_client(
             aws_secret_key=aws_secret_key,
             aws_region=aws_region,
         )
+    elif backend == "ollama":
+        return AsyncAnthropic(base_url=ollama_url, api_key="ollama")
     else:
-        raise ValueError(f"Unknown backend: {backend!r}. Use 'gateway' or 'bedrock'.")
+        raise ValueError(f"Unknown backend: {backend!r}. Use 'gateway', 'bedrock', or 'ollama'.")
 
 
 def create_sync_client(
@@ -56,6 +60,7 @@ def create_sync_client(
     aws_access_key: str = "",
     aws_secret_key: str = "",
     aws_region: str = "us-east-1",
+    ollama_url: str = "http://localhost:11434",
 ) -> Anthropic | AnthropicBedrock:
     """Create the appropriate sync Anthropic client for the chosen backend."""
     if backend == "gateway":
@@ -66,5 +71,7 @@ def create_sync_client(
             aws_secret_key=aws_secret_key,
             aws_region=aws_region,
         )
+    elif backend == "ollama":
+        return Anthropic(base_url=ollama_url, api_key="ollama")
     else:
-        raise ValueError(f"Unknown backend: {backend!r}. Use 'gateway' or 'bedrock'.")
+        raise ValueError(f"Unknown backend: {backend!r}. Use 'gateway', 'bedrock', or 'ollama'.")
