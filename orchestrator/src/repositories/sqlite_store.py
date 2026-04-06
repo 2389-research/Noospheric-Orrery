@@ -20,6 +20,16 @@ from .interfaces import (
 from ..db import get_connection, init_db
 
 
+def _safe_json(value):
+    """Parse JSON string, returning None if empty or not valid JSON."""
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, ValueError):
+        return {"_raw": value}
+
+
 class SQLiteDocumentRepository(DocumentRepository):
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
@@ -505,7 +515,7 @@ class SQLiteJobRepository(JobRepository):
             rows = self._conn.execute("SELECT * FROM jobs ORDER BY created_at DESC").fetchall()
         return [Job(id=r["id"], type=r["type"], target=r["target"], status=r["status"],
                      config=json.loads(r["config"]) if r["config"] else None,
-                     result=json.loads(r["result"]) if r["result"] else None,
+                     result=_safe_json(r["result"]),
                      created_at=r["created_at"], started_at=r["started_at"],
                      completed_at=r["completed_at"]) for r in rows]
 
