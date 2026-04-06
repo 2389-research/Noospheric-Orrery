@@ -148,6 +148,10 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
     specs_dir = Path(settings.specs_dir)
     specs_dir.mkdir(parents=True, exist_ok=True)
     sample_dir = specs_dir / "general_samples"
+    # Clear old samples so only this run's docs are used
+    if sample_dir.exists():
+        for old_file in sample_dir.glob("*.txt"):
+            old_file.unlink()
     sample_dir.mkdir(exist_ok=True)
 
     for doc in docs:

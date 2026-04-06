@@ -93,6 +93,10 @@ Read every sample document and list ALL entities you find as a JSON array:
     domain_dir = specs_dir / f"domain_{domain_path.replace('/', '_')}"
     domain_dir.mkdir(parents=True, exist_ok=True)
     sample_dir = domain_dir / "samples"
+    # Clear old samples so only this run's docs are used
+    if sample_dir.exists():
+        for old_file in sample_dir.glob("*.txt"):
+            old_file.unlink()
     sample_dir.mkdir(exist_ok=True)
 
     for doc in docs:

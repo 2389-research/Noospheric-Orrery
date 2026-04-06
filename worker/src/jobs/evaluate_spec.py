@@ -243,16 +243,18 @@ async def run_evaluation(args: argparse.Namespace) -> None:
     # Compute cross-doc coverage: unique golden set entities found across ALL docs
     golden_set_tuples = {(n.lower().strip(), t.lower().strip()) for n, t in golden_entities}
     all_hit_keys: set[tuple[str, str]] = set()
-    all_fp_count = 0
+    all_fp_keys: set[tuple[str, str]] = set()
     all_near_count = 0
     for r in all_doc_results:
         for e in r["hits"]:
             all_hit_keys.add((e["name"].lower().strip(), e["type"].lower().strip()))
-        all_fp_count += len(r["false_positives"])
+        for e in r["false_positives"]:
+            all_fp_keys.add((e["name"].lower().strip(), e["type"].lower().strip()))
         all_near_count += len(r["near_misses"])
 
+    unique_extracted = all_hit_keys | all_fp_keys
     corpus_recall = len(all_hit_keys) / len(golden_set_tuples) if golden_set_tuples else 0.0
-    corpus_precision = len(all_hit_keys) / (len(all_hit_keys) + all_fp_count) if (len(all_hit_keys) + all_fp_count) > 0 else 0.0
+    corpus_precision = len(all_hit_keys) / len(unique_extracted) if unique_extracted else 0.0
     corpus_f1 = 2 * corpus_precision * corpus_recall / (corpus_precision + corpus_recall) if (corpus_precision + corpus_recall) > 0 else 0.0
     corpus_missed = golden_set_tuples - all_hit_keys
 
@@ -267,7 +269,7 @@ async def run_evaluation(args: argparse.Namespace) -> None:
     print(f"  Golden set entities found: {len(all_hit_keys)}/{len(golden_set_tuples)} = {corpus_recall:.0%}")
     print(f"  Precision (across all docs): {corpus_precision:.0%}")
     print(f"  F1: {corpus_f1:.0%}")
-    print(f"  False positives total: {all_fp_count}  |  Near-misses total: {all_near_count}")
+    print(f"  Unique false positives: {len(all_fp_keys)}  |  Near-misses total: {all_near_count}")
     if corpus_missed:
         missed_str = ", ".join(f"{n} ({t})" for n, t in sorted(corpus_missed)[:15])
         extra = f" ... and {len(corpus_missed) - 15} more" if len(corpus_missed) > 15 else ""
