@@ -1,19 +1,25 @@
-FROM python:3.12-slim
-WORKDIR /app
+# ABOUTME: Docker build for the orchestrator in local/SQLite mode (full ML stack).
+# ABOUTME: Uses uv for dependency management; includes torch, sentence-transformers, UMAP, FAISS.
+
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 # Disable numba JIT — prevents SIGILL on ARM Docker
 ENV NUMBA_DISABLE_JIT=1
 
-# Install orrery-relay
-COPY packages/orrery-relay/ /tmp/orrery-relay/
-RUN pip install --no-cache-dir /tmp/orrery-relay/ && rm -rf /tmp/orrery-relay/
+# Mirror repo layout so ../packages/orrery-relay resolves from pyproject.toml
+COPY packages/orrery-relay/ /app/packages/orrery-relay/
+
+WORKDIR /app/orchestrator
+
+# Install dependencies from lockfile (all deps — local mode needs the ML stack)
+COPY orchestrator/pyproject.toml orchestrator/uv.lock ./
+RUN uv sync --frozen --no-cache
 
 # Install torch CPU-only from PyTorch index (no CUDA, ~200MB not 5GB)
-RUN pip install --no-cache-dir torch --extra-index-url https://download.pytorch.org/whl/cpu
+RUN uv pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
 
-# Install orchestrator with local deps (sentence-transformers, FAISS, UMAP)
-COPY orchestrator/pyproject.toml .
-RUN pip install --no-cache-dir '.[local]'
+# Copy application code
 COPY orchestrator/src/ src/
+
 EXPOSE 8000
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
