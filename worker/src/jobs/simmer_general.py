@@ -208,8 +208,9 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
             },
         ],
         output_dir=specs_dir / "general_golden",
-        generator_model="claude-sonnet-4-6",
-        judge_model="claude-sonnet-4-6",
+        generator_model=settings.classification_model,
+        judge_model=settings.classification_model,
+        clerk_model=settings.extraction_model,
         background=(
             f"Sample documents are in {sample_dir}. Read ALL of them.\n\n"
             f"The golden set must contain TWO things:\n"
@@ -264,9 +265,9 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
             },
         ],
         output_dir=specs_dir / "general_spec",
-        generator_model="claude-sonnet-4-6",
-        judge_model="claude-sonnet-4-6",
-        clerk_model="claude-haiku-4-5",
+        generator_model=settings.classification_model,
+        judge_model=settings.classification_model,
+        clerk_model=settings.extraction_model,
         evaluator=(
             f"python {shlex.quote(str(evaluator_script))}"
             f" --candidate {{candidate_path}}"

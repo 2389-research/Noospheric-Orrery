@@ -151,8 +151,9 @@ Read every sample document and list ALL entities you find as a JSON array:
             },
         ],
         output_dir=domain_dir / "golden",
-        generator_model="claude-sonnet-4-6",
-        judge_model="claude-sonnet-4-6",
+        generator_model=settings.classification_model,
+        judge_model=settings.classification_model,
+        clerk_model=settings.extraction_model,
         background=(
             f"Sample documents from domain '{domain_path}' are in {sample_dir}. Read ALL of them.\n\n"
             f"The golden set must contain TWO things:\n"
@@ -206,9 +207,9 @@ Read every sample document and list ALL entities you find as a JSON array:
             },
         ],
         output_dir=domain_dir / "spec",
-        generator_model="claude-sonnet-4-6",
-        judge_model="claude-sonnet-4-6",
-        clerk_model="claude-haiku-4-5",
+        generator_model=settings.classification_model,
+        judge_model=settings.classification_model,
+        clerk_model=settings.extraction_model,
         evaluator=(
             f"python {shlex.quote(str(evaluator_script))}"
             f" --candidate {{candidate_path}}"
