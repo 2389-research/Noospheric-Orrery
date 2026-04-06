@@ -65,7 +65,7 @@ If you can't parse a criterion, skip it. Return [] if unparseable."""
 
     try:
         response = await relay.complete(
-            model=settings.extraction_model,
+            model=settings.classification_model,
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )
