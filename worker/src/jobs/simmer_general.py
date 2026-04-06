@@ -45,10 +45,13 @@ async def _parse_judgment_file(judgment_text: str, seed_scores: dict[str, int], 
 
     prompt = f"""Extract per-criterion details from this judge output as JSON.
 
+IMPORTANT: Use the scores from the "BOARD CONSENSUS SCORES" section at the very top of the output.
+Do NOT use scores from the deliberation or synthesis sections below — those are individual judge scores.
+
 Seed scores for reference: {json.dumps(seed_scores)}
 
 Judge output:
-{judgment_text[:3000]}
+{judgment_text[:4000]}
 
 Return a JSON array only:
 [
@@ -65,7 +68,7 @@ If you can't parse a criterion, skip it. Return [] if unparseable."""
 
     try:
         response = await relay.complete(
-            model=settings.extraction_model,
+            model=settings.classification_model,
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )
