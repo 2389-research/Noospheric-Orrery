@@ -764,7 +764,7 @@ class SQLiteSimmerIterationRepository(SimmerIterationRepository):
                 "asi": it["asi"], "judge_mode": it["judge_mode"],
                 "regressed": bool(it["regressed"]),
                 "candidate_preview": it["candidate_preview"],
-                "criteria": [{"criterion": c["criterion"], "score": c["score"],
+                "criterion_details": [{"criterion": c["criterion"], "score": c["score"],
                                "seed_score": c["seed_score"], "evidence": c["evidence"],
                                "improve": c["improve"]} for c in criteria],
             })
