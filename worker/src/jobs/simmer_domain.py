@@ -1,6 +1,7 @@
 # ABOUTME: Domain-specific spec simmering job — refines extraction spec for a single domain.
 # ABOUTME: Starts from the general spec and adds domain-specific entity types via simmer-sdk.
 
+import shlex
 import uuid
 import json
 from pathlib import Path
@@ -44,23 +45,58 @@ async def run_simmer_domain(job: dict, db_path: str) -> None:
     ).fetchone()
 
     if general_spec:
-        seed_content = f"""Starting from the general extraction spec (extend it with domain-specific types):
+        seed_content = f"""# Golden Set — Domain: {domain_path}
+
+## Entity Type Taxonomy
+Starting from the general extraction spec, extend with domain-specific types:
 
 {general_spec[0]}
 
-Now refine this for the specific domain: {domain_path}
-Add entity types that are specific to this domain that the general spec misses.
-Keep the general types but add domain-specific ones."""
+Add entity types specific to {domain_path} that the general spec misses.
+Keep the general types but add domain-specific ones.
+
+## Reference Entities
+
+Read every sample document and list ALL entities you find. Each entity must actually
+appear in at least one sample document — do not invent entities.
+
+Format as a JSON array:
+```json
+[
+  {{"name": "entity name lowercase", "type": "EntityType"}},
+  ...
+]
+```
+
+The reference entity list is the ground truth that extraction specs will be tested against.
+Be thorough — every named person, organization, product, concept, place, and event
+mentioned in the sample documents should appear here."""
     else:
-        seed_content = f"""Entity types to extract for domain: {domain_path}
+        seed_content = f"""# Golden Set — Domain: {domain_path}
+
+## Entity Type Taxonomy
 - Discover what entity types matter for this specific domain
-- Be more specific than generic types like Person, Organization, Thing"""
+- Be more specific than generic types like Person, Organization, Thing
+
+## Reference Entities
+
+Read every sample document and list ALL entities you find as a JSON array:
+```json
+[
+  {{"name": "entity name lowercase", "type": "EntityType"}},
+  ...
+]
+```"""
 
     # Write samples and seed
     specs_dir = Path(settings.specs_dir)
     domain_dir = specs_dir / f"domain_{domain_path.replace('/', '_')}"
     domain_dir.mkdir(parents=True, exist_ok=True)
     sample_dir = domain_dir / "samples"
+    # Clear old samples so only this run's docs are used
+    if sample_dir.exists():
+        for old_file in sample_dir.glob("*.txt"):
+            old_file.unlink()
     sample_dir.mkdir(exist_ok=True)
 
     for doc in docs:
@@ -81,49 +117,110 @@ Keep the general types but add domain-specific ones."""
     job_id = job["id"]
     print(f"Simmering domain spec for: {domain_path} ({len(docs)} docs, job {job_id})", flush=True)
 
-    # Phase 1: Golden set simmering (domain-specific)
+    # Phase 1: Golden set simmering (domain-specific) — type taxonomy + reference entities
     golden_result = await refine(
         artifact=str(seed_path),
         criteria={
-            "coverage": f"Captures all entity types specific to {domain_path} that the general spec misses",
-            "precision": "No hallucinated entities, no noise — every entity is in the source text",
-            "domain_specificity": f"Types are specific to {domain_path}, not just generic categories",
+            "coverage": f"The reference entity list contains every named entity found in the {domain_path} sample documents — no entity left behind",
+            "precision": "Every entity in the reference list actually appears in at least one sample document — no hallucinated entities",
+            "domain_specificity": f"Entity types include categories specific to {domain_path} that the general spec misses — not just generic Person/Organization",
         },
         primary="coverage",
         iterations=settings.simmer_iterations,
         judge_mode="board",
         judge_panel=[
-            {"name": "Coverage & Depth", "lens": "Focus on whether the spec captures all entity types specific to this domain that the general spec misses"},
-            {"name": "Precision & Quality", "lens": "Focus on whether extracted entities are accurate, well-typed, and free of noise or hallucination"},
+            {
+                "name": "Coverage & Depth",
+                "lens": (
+                    "Read every sample document carefully. Cross-reference the reference entity JSON list against the documents. "
+                    f"Are there {domain_path}-specific entities mentioned in the docs that are missing from the list? "
+                    "The list must be exhaustive."
+                ),
+            },
+            {
+                "name": "Precision & Quality",
+                "lens": (
+                    "For each entity in the reference JSON list, verify it actually appears in at least one sample document. "
+                    "Check that entity types are correct and domain-specific where appropriate. "
+                    "Flag any hallucinated entities not grounded in the source text."
+                ),
+            },
         ],
         output_dir=domain_dir / "golden",
         generator_model="claude-sonnet-4-6",
         judge_model="claude-sonnet-4-6",
-        background=f"Sample documents from domain '{domain_path}' are in {sample_dir}. Discover entity types specific to this domain.",
+        background=(
+            f"Sample documents from domain '{domain_path}' are in {sample_dir}. Read ALL of them.\n\n"
+            f"The golden set must contain TWO things:\n"
+            f"1. An entity type taxonomy (including {domain_path}-specific types)\n"
+            f"2. A JSON array of EVERY entity found in the sample documents\n\n"
+            f"The reference entity list is the ground truth — extraction specs will be empirically "
+            f"tested against it. Be thorough."
+        ),
         on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(domain_dir / "golden")),
         **bedrock_kwargs,
     )
 
-    # Phase 2: Extraction spec simmering
+    # Phase 2: Extraction spec simmering (with empirical evaluator)
+    golden_set_path = domain_dir / "golden_set.md"
+    golden_set_path.write_text(golden_result.best_candidate)
+    evaluator_script = Path(__file__).resolve().parent / "evaluate_spec.py"
+
     spec_result = await refine(
         artifact=golden_result.best_candidate,
         criteria={
             "coverage": "Finds all domain-specific entities from the golden set",
             "precision": "Zero false positives",
+            "generalizability": f"The spec uses general rules for {domain_path} entity types, not hardcoded names — it would work on new documents in this domain",
             "format_compliance": "Valid JSON with name and type fields",
         },
         primary="coverage",
         iterations=settings.simmer_iterations,
         judge_mode="board",
         judge_panel=[
-            {"name": "Coverage & Depth", "lens": "Focus on whether the spec captures all entity types specific to this domain that the general spec misses"},
-            {"name": "Precision & Quality", "lens": "Focus on whether extracted entities are accurate, well-typed, and free of noise or hallucination"},
+            {
+                "name": "Coverage & Depth",
+                "lens": (
+                    "BEFORE scoring, you MUST open and read the raw extraction JSON files in the eval-* directories. "
+                    "The quantitative summary is approximate — your score must be based on what you see in the actual outputs. "
+                    f"For each sample doc, read the .json file and check: did Haiku find the {domain_path}-specific entities that matter? "
+                    "Are near-misses actually correct extractions with different phrasing? "
+                    "Are apparent misses due to spec wording, or are those entities genuinely absent from that document?"
+                ),
+            },
+            {
+                "name": "Precision & Generalizability",
+                "lens": (
+                    "BEFORE scoring, you MUST open and read the raw extraction JSON files in the eval-* directories. "
+                    "The quantitative summary is approximate — your score must be based on what you see in the actual outputs. "
+                    "For each sample doc, check: are extracted entities grounded in the source text? "
+                    "CRITICAL: Read the spec itself. Does it define entity types with general rules and examples, "
+                    "or does it hardcode specific entity names from the sample docs? A good spec describes WHAT to look for "
+                    f"in {domain_path} documents, not a list of specific entities to find. "
+                    "Score generalizability low if the spec would fail on a new document in this domain."
+                ),
+            },
         ],
         output_dir=domain_dir / "spec",
         generator_model="claude-sonnet-4-6",
         judge_model="claude-sonnet-4-6",
         clerk_model="claude-haiku-4-5",
-        background=f"This spec will be executed by Haiku on documents in domain '{domain_path}'. Golden set: {golden_result.best_candidate[:2000]}",
+        evaluator=(
+            f"python {shlex.quote(str(evaluator_script))}"
+            f" --candidate {{candidate_path}}"
+            f" --samples-dir {shlex.quote(str(sample_dir))}"
+            f" --golden-set {shlex.quote(str(golden_set_path))}"
+            f" --output-dir {{output_dir}}"
+            f" --iteration {{iteration}}"
+        ),
+        background=(
+            f"This spec will be executed by Haiku on documents in domain '{domain_path}'.\n"
+            f"Golden set: {golden_result.best_candidate[:2000]}\n\n"
+            f"IMPORTANT: Each iteration, the evaluator runs the candidate spec against sample docs using Haiku.\n"
+            f"Raw extraction results are written to eval-N/ directories in the output directory.\n"
+            f"READ the raw extraction JSON files — don't just trust the quantitative summary.\n"
+            f"Look for near-misses, type mismatches, and systematic patterns the metrics miss."
+        ),
         on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path, str(domain_dir / "spec")),
         **bedrock_kwargs,
     )
