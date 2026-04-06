@@ -1,0 +1,16 @@
+# ABOUTME: Excludes files from Docker build contexts to reduce image size and prevent secret leakage.
+# ABOUTME: Shared by orchestrator and worker builds (context: repo root). Frontend has its own context.
+
+.git
+.github
+.env
+.env.*
+*.db
+data/
+node_modules/
+.venv/
+__pycache__/
+.private-journal/
+.claude/
+.pytest_cache/
+*.pyc

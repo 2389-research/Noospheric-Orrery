@@ -14,6 +14,7 @@
 
 services:
   orchestrator:
+    image: ghcr.io/2389-research/orrery-orchestrator:latest
     build:
       context: .
       dockerfile: orchestrator/Dockerfile.local
@@ -31,6 +32,7 @@ services:
       # No torch in Docker — circular layout. For UMAP, run natively.
 
   worker:
+    image: ghcr.io/2389-research/orrery-worker:latest
     build:
       context: .
       dockerfile: worker/Dockerfile
@@ -45,6 +47,7 @@ services:
       - orchestrator
 
   frontend:
+    image: ghcr.io/2389-research/orrery-frontend:latest
     build:
       context: ./frontend
       args:

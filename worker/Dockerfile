@@ -15,9 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm && \
 COPY packages/orrery-relay/ /tmp/orrery-relay/
 RUN pip install --no-cache-dir /tmp/orrery-relay/ && rm -rf /tmp/orrery-relay/
 
-# Install simmer-sdk (internal dependency)
-COPY worker/simmer-sdk/ /tmp/simmer-sdk/
-RUN pip install --no-cache-dir /tmp/simmer-sdk/ && rm -rf /tmp/simmer-sdk/
+# Install simmer-sdk v0.3.0 from GitHub (internal dep — not the PyPI package, which is unrelated)
+RUN pip install --no-cache-dir "simmer-sdk @ git+https://github.com/2389-research/simmer-sdk.git@v0.3.0"
 
 COPY worker/pyproject.toml .
 RUN pip install --no-cache-dir .
