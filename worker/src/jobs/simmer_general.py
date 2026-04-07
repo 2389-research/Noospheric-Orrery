@@ -465,6 +465,52 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
     job_id = job["id"]
     print(f"Simmering general IMAGE spec (job {job_id})", flush=True)
 
+    # query_image tool — lets judges ask Haiku to look at specific images
+    async def query_image(image_path: str, question: str) -> str:
+        """Ask Haiku to look at an image and answer a question about it."""
+        img_path = Path(image_path)
+        if not img_path.exists():
+            # Try relative to sample dir
+            img_path = sample_dir / image_path
+        if not img_path.exists():
+            return f"Image not found: {image_path}"
+        try:
+            b64 = base64.b64encode(img_path.read_bytes()).decode()
+            suffix = img_path.suffix.lower()
+            media_type = "image/jpeg" if suffix in (".jpg", ".jpeg") else "image/png"
+            result = await relay.complete(
+                model=settings.extraction_model,
+                max_tokens=1024,
+                messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
+                    {"type": "text", "text": question},
+                ]}],
+            )
+            return result.text
+        except Exception as e:
+            return f"Error querying image: {e}"
+
+    image_tools = {
+        "query_image": {
+            "function": query_image,
+            "schema": {
+                "type": "function",
+                "function": {
+                    "name": "query_image",
+                    "description": "Ask Haiku vision model to look at a sample image and answer a question. Use this to verify entities, check details, or investigate what's visible. Much cheaper than reading the image directly.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "image_path": {"type": "string", "description": "Path to the image file (filename from image_samples/ dir)"},
+                            "question": {"type": "string", "description": "What to look for or verify in the image"},
+                        },
+                        "required": ["image_path", "question"],
+                    },
+                },
+            },
+        },
+    }
+
     # Phase 1: Golden set — VLLM surveys sample images
     golden_result = await refine(
         artifact=str(seed_path),
@@ -480,22 +526,23 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             {
                 "name": "Coverage & Description",
                 "lens": (
-                    "Read TWO sources of Haiku observations:\n"
-                    "1. Pre-scans in image_prescans/*.txt (initial detailed scan of each image)\n"
-                    "2. Evaluator outputs in eval-*/*.json (Haiku running the current golden set as context)\n\n"
-                    "Cross-reference the golden set against both. Are there entities Haiku sees that the golden "
-                    "set misses? Are descriptions accurate and searchable? DO NOT open .jpg files."
+                    "You have three ways to understand what's in the images:\n"
+                    "1. Pre-scans in image_prescans/*.txt (Haiku's initial observations)\n"
+                    "2. Evaluator outputs in eval-*/*.json (Haiku running the current golden set)\n"
+                    "3. The query_image tool — ask Haiku specific questions about any image\n\n"
+                    "Use query_image to investigate things the pre-scans might have missed. "
+                    "Cross-reference the golden set against all sources. DO NOT open .jpg files directly."
                 ),
             },
             {
                 "name": "Precision & Accuracy",
                 "lens": (
-                    "Read TWO sources:\n"
+                    "You have three ways to verify entities:\n"
                     "1. Pre-scans in image_prescans/*.txt\n"
-                    "2. Evaluator outputs in eval-*/*.json\n\n"
-                    "For each golden set entity, verify it appears in at least one Haiku observation. "
-                    "Flag entities the golden set claims but neither pre-scan nor evaluator confirms. "
-                    "DO NOT open .jpg files."
+                    "2. Evaluator outputs in eval-*/*.json\n"
+                    "3. The query_image tool — ask Haiku to verify specific entities in specific images\n\n"
+                    "For disputed or uncertain entities, use query_image to get a definitive answer. "
+                    "Flag entities the golden set claims but Haiku can't confirm. DO NOT open .jpg files."
                 ),
             },
         ],
@@ -526,6 +573,7 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             f"If the evaluator shows entities the golden set lists but Haiku can't find, remove or fix them."
         ),
         on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(specs_dir / "image_golden")),
+        custom_tools=image_tools,
         **provider_kwargs,
     )
 
@@ -549,20 +597,19 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             {
                 "name": "Coverage & Description Quality",
                 "lens": (
-                    "BEFORE scoring, read the raw extraction outputs in the eval-* directories. "
-                    "Check: did the VLLM find all the entities from the golden set? "
-                    "Are the generated descriptions accurate and searchable? "
-                    "Would someone searching for this content find the image from its description?"
+                    "Read eval-*/*.json for Haiku's extraction outputs. "
+                    "Use query_image to verify specific entities or check description accuracy. "
+                    "Check: did the spec guide Haiku to find all golden set entities? "
+                    "Are descriptions searchable? DO NOT open .jpg files directly."
                 ),
             },
             {
                 "name": "Precision & Generalizability",
                 "lens": (
-                    "BEFORE scoring, read the raw extraction outputs AND the spec itself. "
-                    "Check: are extracted entities actually visible in the images? Are descriptions accurate? "
-                    "CRITICAL: Does the spec use general visual observation rules, or does it hardcode "
-                    "specific objects/scenes from the sample images? A good spec works on travel photos, "
-                    "product shots, diagrams — not just these samples."
+                    "Read eval-*/*.json AND the spec itself. Use query_image to spot-check disputed entities. "
+                    "Does the spec use general rules or hardcode specific objects? "
+                    "Would it work on travel photos, not just these samples? "
+                    "DO NOT open .jpg files directly."
                 ),
             },
         ],
@@ -590,6 +637,7 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             f"Check both entity coverage AND description quality in the JSON outputs."
         ),
         on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path, str(specs_dir / "image_spec")),
+        custom_tools=image_tools,
         **provider_kwargs,
     )
 
