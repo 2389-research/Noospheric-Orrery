@@ -167,14 +167,14 @@ export function EntityPanelContent({
           docCounts[s.document_id] = (docCounts[s.document_id] || 0) + 1;
         }
         const docs = await api.getDocuments();
-        const docMap = Object.fromEntries(docs.map((d) => [d.id, { title: d.title, content_type: (d as Record<string, unknown>).content_type || "text" }]));
+        const docMap = Object.fromEntries(docs.map((d) => [d.id, { title: d.title, content_type: d.content_type || "text" }]));
         setSourceDocs(
           Object.entries(docCounts)
             .map(([id, count]) => ({
               id,
               title: docMap[id]?.title || id.slice(0, 8),
               mentions: count,
-              content_type: (docMap[id]?.content_type as string) || "text",
+              content_type: docMap[id]?.content_type || "text",
             }))
             .sort((a, b) => b.mentions - a.mentions)
         );

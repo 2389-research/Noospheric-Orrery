@@ -26,8 +26,20 @@ export function ImagePane({ documentId, onClose, onNavigateEntity }: ImagePanePr
   useEffect(() => {
     (async () => {
       try {
-        const detail = await api.getDocument(documentId);
-        setDoc(detail as unknown as ImageDocDetail);
+        const reader = await api.getDocumentReader(documentId);
+        const d = reader.document;
+        // For image docs, the "content" (description) comes from segments
+        const description = reader.segments
+          ?.filter((s: { type: string; text: string }) => s.type === "text")
+          .map((s: { text: string }) => s.text)
+          .join(" ") || "";
+        setDoc({
+          id: d.id,
+          title: d.title,
+          content: description,
+          domains: (d.domains || []).map((dp: string) => ({ domain_path: dp })),
+          entities: reader.entities || [],
+        });
       } catch {
         // fallback
       } finally {
