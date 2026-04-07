@@ -22,9 +22,9 @@ from pathlib import Path
 def parse_golden_set(text: str) -> list[tuple[str, str]]:
     """Parse golden set text into (name, type) tuples.
 
-    Expects a JSON array of {"name": ..., "type": ...} objects embedded in the
-    golden set text (possibly inside a markdown code fence). This is the format
-    Phase 1 is instructed to produce.
+    Handles two formats:
+    1. Flat: [{"name": ..., "type": ...}, ...]
+    2. Nested (image golden sets): [{"image": ..., "entities": [{"name": ..., "type": ...}]}, ...]
 
     Returns an empty list if no valid JSON entities are found — the caller
     should treat this as a fatal error.
@@ -37,8 +37,15 @@ def parse_golden_set(text: str) -> list[tuple[str, str]]:
             data = json.loads(match.group())
             if isinstance(data, list):
                 for item in data:
-                    if isinstance(item, dict) and "name" in item and "type" in item:
-                        entities.append((item["name"].lower().strip(), item["type"].lower().strip()))
+                    if isinstance(item, dict):
+                        # Flat format: {"name": ..., "type": ...}
+                        if "name" in item and "type" in item and "entities" not in item:
+                            entities.append((item["name"].lower().strip(), item["type"].lower().strip()))
+                        # Nested format: {"image": ..., "entities": [...]}
+                        elif "entities" in item and isinstance(item["entities"], list):
+                            for ent in item["entities"]:
+                                if isinstance(ent, dict) and "name" in ent and "type" in ent:
+                                    entities.append((ent["name"].lower().strip(), ent["type"].lower().strip()))
     except (json.JSONDecodeError, ValueError):
         pass
 
