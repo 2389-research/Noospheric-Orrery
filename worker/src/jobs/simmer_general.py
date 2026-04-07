@@ -318,7 +318,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         judge_model=settings.classification_model,
         clerk_model=settings.classification_model,
         evaluator=(
-            f"python {shlex.quote(str(evaluator_script))}"
+            f"uv run python {shlex.quote(str(evaluator_script))}"
             f" --candidate {{candidate_path}}"
             f" --samples-dir {shlex.quote(str(sample_dir))}"
             f" --golden-set {shlex.quote(str(golden_set_path))}"
@@ -500,7 +500,7 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
         judge_model=settings.classification_model,
         clerk_model=settings.classification_model,
         evaluator=(
-            f"python {shlex.quote(str(evaluator_script))}"
+            f"uv run python {shlex.quote(str(evaluator_script))}"
             f" --candidate {{candidate_path}}"
             f" --samples-dir {shlex.quote(str(sample_dir))}"
             f" --golden-set {shlex.quote(str(golden_set_path))}"

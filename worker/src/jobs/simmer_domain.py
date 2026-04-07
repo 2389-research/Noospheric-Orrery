@@ -211,7 +211,7 @@ Read every sample document and list ALL entities you find as a JSON array:
         judge_model=settings.classification_model,
         clerk_model=settings.classification_model,
         evaluator=(
-            f"python {shlex.quote(str(evaluator_script))}"
+            f"uv run python {shlex.quote(str(evaluator_script))}"
             f" --candidate {{candidate_path}}"
             f" --samples-dir {shlex.quote(str(sample_dir))}"
             f" --golden-set {shlex.quote(str(golden_set_path))}"
