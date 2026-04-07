@@ -1,4 +1,4 @@
-# ABOUTME: Extract entities from document chunks using an LLM and an extraction spec.
+# ABOUTME: Extract entities from document chunks (text) and images using an LLM.
 # ABOUTME: Uses tool use for guaranteed valid JSON. Takes a Relay instance.
 
 from orrery_relay import Relay
@@ -55,3 +55,67 @@ async def extract_document(relay: Relay, chunks: list[dict], spec: str, model: s
                 entity["chunk_id"] = chunk.get("id")
                 all_entities.append(entity)
     return all_entities
+
+
+# --- Image extraction ---
+
+IMAGE_EXTRACTION_PROMPT = """You are a visual entity extraction system. Follow the extraction spec below exactly.
+
+EXTRACTION SPEC:
+{spec}
+
+Look at this image and extract all entities, metadata, and descriptions according to the spec.
+Only extract what is actually visible — do not hallucinate or infer things not shown.
+Normalize names: lowercase, strip extra whitespace."""
+
+IMAGE_ENTITY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "entities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Entity name, lowercase"},
+                    "type": {"type": "string", "description": "Entity type from the spec"},
+                },
+                "required": ["name", "type"],
+            },
+        },
+        "description": {
+            "type": "string",
+            "description": "2-3 sentence description of what the image shows",
+        },
+        "tags": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Searchable tags for the image",
+        },
+        "shot_type": {
+            "type": "string",
+            "description": "single, burst, rotation, sequence, or other structural grouping signal",
+        },
+    },
+    "required": ["entities", "description", "tags"],
+}
+
+
+async def extract_entities_from_image(
+    relay: Relay,
+    image_base64: str,
+    media_type: str,
+    spec: str,
+    model: str,
+) -> dict:
+    """Extract entities, description, and tags from an image using a visual spec."""
+    content = [
+        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_base64}},
+        {"type": "text", "text": IMAGE_EXTRACTION_PROMPT.format(spec=spec)},
+    ]
+    return await relay.complete_structured(
+        model=model, max_tokens=4096,
+        messages=[{"role": "user", "content": content}],
+        schema=IMAGE_ENTITY_SCHEMA,
+        tool_name="extract_image_entities",
+        tool_description="Extract entities and metadata from an image",
+    )

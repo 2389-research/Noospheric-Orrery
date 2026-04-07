@@ -1,4 +1,4 @@
-# ABOUTME: Classify documents into domains using an LLM.
+# ABOUTME: Classify documents (text and images) into domains using an LLM.
 # ABOUTME: Uses tool use for guaranteed valid JSON. Takes a Relay instance.
 
 from orrery_relay import Relay
@@ -56,4 +56,45 @@ async def classify_document(
         schema=CLASSIFICATION_SCHEMA,
         tool_name="classify_document",
         tool_description="Classify a document into domain paths for the knowledge graph",
+    )
+
+
+IMAGE_CLASSIFICATION_PROMPT = """You are a classifier for a knowledge graph system. Look at this image and classify it into domain paths.
+
+Existing taxonomy:
+{taxonomy}
+
+Rules:
+- Use existing domains when they fit
+- Create new domain paths if the image covers a topic not in the taxonomy
+- Domain paths are hierarchical: region/parent/subdomain
+- Consider: subject matter, setting, activity, objects visible, any text in the image
+- An image can have 1 primary and 0-3 secondary domains
+"""
+
+
+async def classify_image(
+    relay: Relay,
+    image_base64: str,
+    media_type: str,
+    existing_taxonomy: list[str],
+    model: str,
+    caption: str | None = None,
+) -> dict:
+    taxonomy_str = "\n".join(f"  - {d}" for d in existing_taxonomy) if existing_taxonomy else "  (empty — propose new domains)"
+    text_prompt = IMAGE_CLASSIFICATION_PROMPT.format(taxonomy=taxonomy_str)
+    if caption:
+        text_prompt += f"\n\nUser-provided caption: {caption}"
+
+    content = [
+        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_base64}},
+        {"type": "text", "text": text_prompt},
+    ]
+
+    return await relay.complete_structured(
+        model=model, max_tokens=1024,
+        messages=[{"role": "user", "content": content}],
+        schema=CLASSIFICATION_SCHEMA,
+        tool_name="classify_document",
+        tool_description="Classify an image into domain paths for the knowledge graph",
     )
