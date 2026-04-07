@@ -480,20 +480,22 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             {
                 "name": "Coverage & Description",
                 "lens": (
-                    "Read the Haiku pre-scan files in the image_prescans/ directory. Each .txt file contains "
-                    "Haiku's detailed observations of one image: entities, description, and details. "
-                    "Cross-reference the golden set's reference list against these pre-scans. "
-                    "Are there entities in the pre-scans missing from the golden set? "
-                    "Are descriptions accurate and searchable? DO NOT open .jpg files directly."
+                    "Read TWO sources of Haiku observations:\n"
+                    "1. Pre-scans in image_prescans/*.txt (initial detailed scan of each image)\n"
+                    "2. Evaluator outputs in eval-*/*.json (Haiku running the current golden set as context)\n\n"
+                    "Cross-reference the golden set against both. Are there entities Haiku sees that the golden "
+                    "set misses? Are descriptions accurate and searchable? DO NOT open .jpg files."
                 ),
             },
             {
                 "name": "Precision & Accuracy",
                 "lens": (
-                    "Read the Haiku pre-scan files in image_prescans/. For each entity in the golden set, "
-                    "verify it appears in the corresponding pre-scan. Check descriptions for accuracy. "
-                    "Flag any entities or descriptions in the golden set that Haiku's pre-scan doesn't confirm. "
-                    "DO NOT open .jpg files directly."
+                    "Read TWO sources:\n"
+                    "1. Pre-scans in image_prescans/*.txt\n"
+                    "2. Evaluator outputs in eval-*/*.json\n\n"
+                    "For each golden set entity, verify it appears in at least one Haiku observation. "
+                    "Flag entities the golden set claims but neither pre-scan nor evaluator confirms. "
+                    "DO NOT open .jpg files."
                 ),
             },
         ],
@@ -501,16 +503,27 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
         generator_model=settings.classification_model,
         judge_model=settings.classification_model,
         clerk_model=settings.classification_model,
+        evaluator=(
+            f"uv run python {shlex.quote(str(Path(__file__).resolve().parent / 'evaluate_image_spec.py'))}"
+            f" --candidate {{candidate_path}}"
+            f" --samples-dir {shlex.quote(str(sample_dir))}"
+            f" --golden-set {{candidate_path}}"
+            f" --output-dir {{output_dir}}"
+            f" --iteration {{iteration}}"
+        ),
         background=(
             f"Haiku has pre-scanned each sample image. The pre-scan results are in {prescan_dir}/ as .txt files.\n"
             f"Each file contains: entities found, description, and detailed observations.\n\n"
-            f"DO NOT open image files (.jpg) directly — read the pre-scan .txt files instead.\n\n"
+            f"IMPORTANT: Each iteration, the evaluator also runs Haiku on the sample images with the\n"
+            f"current golden set as context. The evaluator output shows what Haiku actually finds.\n"
+            f"Read both the pre-scans AND the eval-N/*.json files for the latest Haiku observations.\n\n"
+            f"DO NOT open image files (.jpg) directly.\n\n"
             f"The golden set must contain for EACH image:\n"
             f"1. A list of visual entities (name + type)\n"
             f"2. A 2-3 sentence description\n"
             f"3. Searchable tags\n\n"
-            f"Use the pre-scans as ground truth for what's in each image.\n"
-            f"Descriptions should be accurate enough that someone searching would find the image."
+            f"If the evaluator shows Haiku found entities not in the golden set, add them.\n"
+            f"If the evaluator shows entities the golden set lists but Haiku can't find, remove or fix them."
         ),
         on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(specs_dir / "image_golden")),
         **provider_kwargs,
