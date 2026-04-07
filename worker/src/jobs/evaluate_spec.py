@@ -348,6 +348,7 @@ def main():
     parser.add_argument("--golden-set", required=True, help="Path to golden set file")
     parser.add_argument("--output-dir", required=True, help="Simmer output directory")
     parser.add_argument("--iteration", type=int, required=True, help="Iteration number")
+    parser.add_argument("--media-type", default="text", help="text or image")
     args = parser.parse_args()
     asyncio.run(run_evaluation(args))
 
