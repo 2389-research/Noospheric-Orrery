@@ -182,10 +182,21 @@ async def run_evaluation(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     sample_dir = Path(args.samples_dir)
-    sample_files = sorted(sample_dir.glob("*.txt"))
-    if not sample_files:
-        print(f"ERROR: No .txt files found in {sample_dir}", file=sys.stderr)
-        sys.exit(1)
+    media_type = getattr(args, "media_type", "text")
+
+    if media_type == "image":
+        sample_files = sorted(
+            f for f in sample_dir.iterdir()
+            if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+        )
+        if not sample_files:
+            print(f"ERROR: No image files found in {sample_dir}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        sample_files = sorted(sample_dir.glob("*.txt"))
+        if not sample_files:
+            print(f"ERROR: No .txt files found in {sample_dir}", file=sys.stderr)
+            sys.exit(1)
 
     # Create eval output directory
     eval_dir = Path(args.output_dir) / f"eval-{args.iteration}"
@@ -200,30 +211,66 @@ async def run_evaluation(args: argparse.Namespace) -> None:
     aggregate_extracted = 0
 
     for doc_path in sample_files:
-        doc_text = doc_path.read_text()
-        chunks = chunk_text(doc_text, chunk_size=chunk_size)
-
-        # Extract from each chunk, dedup per doc
         doc_entities: list[dict] = []
         seen: set[tuple[str, str]] = set()
-        chunks_succeeded = 0
-        for chunk in chunks:
+
+        if media_type == "image":
+            # Image mode: pass image to VLLM
+            import base64
+            b64 = base64.b64encode(doc_path.read_bytes()).decode()
+            suffix = doc_path.suffix.lower()
+            img_media = "image/jpeg"
+            if suffix == ".png": img_media = "image/png"
+            elif suffix == ".webp": img_media = "image/webp"
+
             try:
-                entities = await extract_chunk(
-                    relay=relay, chunk_text=chunk, spec=candidate_spec, model=model
+                result = await relay.complete_structured(
+                    model=model, max_tokens=4096,
+                    messages=[{"role": "user", "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": img_media, "data": b64}},
+                        {"type": "text", "text": f"Follow this extraction spec:\n\n{candidate_spec}\n\nExtract entities, description, and tags from this image."},
+                    ]}],
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "entities": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "type": {"type": "string"}}, "required": ["name", "type"]}},
+                            "description": {"type": "string"},
+                            "tags": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["entities", "description", "tags"],
+                    },
+                    tool_name="extract_image",
+                    tool_description="Extract entities and metadata from an image",
                 )
-                chunks_succeeded += 1
-                for e in entities:
+                for e in result.get("entities", []):
                     key = (e["name"].lower().strip(), e["type"])
                     if key not in seen:
                         seen.add(key)
                         doc_entities.append(e)
             except Exception as exc:
-                print(f"  Warning: Haiku extraction failed on chunk of {doc_path.name}: {exc}", file=sys.stderr)
+                print(f"  Warning: VLLM extraction failed for {doc_path.name}: {exc}", file=sys.stderr)
+        else:
+            # Text mode: chunk and extract
+            doc_text = doc_path.read_text()
+            chunks = chunk_text(doc_text, chunk_size=chunk_size)
+            chunks_succeeded = 0
+            for chunk in chunks:
+                try:
+                    entities = await extract_chunk(
+                        relay=relay, chunk_text=chunk, spec=candidate_spec, model=model
+                    )
+                    chunks_succeeded += 1
+                    for e in entities:
+                        key = (e["name"].lower().strip(), e["type"])
+                        if key not in seen:
+                            seen.add(key)
+                            doc_entities.append(e)
+                except Exception as exc:
+                    print(f"  Warning: Haiku extraction failed on chunk of {doc_path.name}: {exc}", file=sys.stderr)
 
-        if chunks and chunks_succeeded == 0:
-            print(f"ERROR: All {len(chunks)} chunks failed for {doc_path.name}. Auth/model/network issue.", file=sys.stderr)
-            sys.exit(1)
+            if chunks and chunks_succeeded == 0:
+                print(f"ERROR: All {len(chunks)} chunks failed for {doc_path.name}. Auth/model/network issue.", file=sys.stderr)
+                sys.exit(1)
 
         # Write raw output
         output_file = eval_dir / f"{doc_path.stem}.json"

@@ -39,6 +39,43 @@ mentioned in the sample documents should appear here.
 """
 
 
+SEED_IMAGE_GOLDEN_SET = """# Image Golden Set
+
+## Visual Entity Types
+- Subject — the primary subject of the image (person, animal, object, scene, building, etc.)
+- Object — identifiable items visible (products, tools, vehicles, furniture, food, etc.)
+- Person — anyone visible or identifiable
+- Text — any text visible in the image (signs, labels, screens, watermarks, etc.)
+- Setting — where the image was taken or what environment it depicts
+- Style — the visual style or medium (photograph, illustration, diagram, painting, screenshot, etc.)
+- Technique — visible artistic or technical methods (lighting, composition, editing, etc.)
+
+## Reference Observations
+
+Look at every sample image and for EACH image record:
+1. ALL visual entities you observe (name + type from the taxonomy above)
+2. A 2-3 sentence description of what the image shows
+3. Searchable tags
+
+Format as a JSON array — one entry per image:
+```json
+[
+  {
+    "image": "filename",
+    "entities": [{"name": "entity name lowercase", "type": "EntityType"}, ...],
+    "description": "2-3 sentence description of the image",
+    "tags": ["tag1", "tag2", ...]
+  },
+  ...
+]
+```
+
+The reference list is the ground truth. Be thorough — every identifiable subject, object,
+person, text, and setting should appear. Descriptions should be accurate and useful for
+search (someone searching for this content should find it from the description).
+"""
+
+
 async def _parse_judgment_file(judgment_text: str, seed_scores: dict[str, int], settings) -> list[dict]:
     """Use Haiku to extract per-criterion details from a judgment file."""
     relay = Relay.from_settings(settings)
@@ -301,6 +338,188 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
     conn.execute(
         "INSERT INTO jobs (id, type, target, status, config) VALUES (?, 'extract_batch', 'general', 'queued', ?)",
         (batch_job_id, json.dumps({"spec_id": spec_id, "scope": "all_classified"})),
+    )
+    conn.commit()
+    conn.close()
+
+
+async def run_simmer_general_image(job: dict, db_path: str) -> None:
+    """Simmer a general image extraction spec.
+
+    Same two-phase pattern as text simmering:
+    - Phase 1: Golden set — VLLM surveys sample images, builds reference entity/description list
+    - Phase 2: Extraction spec — iteratively refine the visual spec, evaluator runs VLLM on images
+
+    The resulting spec teaches a smaller model how to extract entities and generate
+    descriptions from any image, not just images in a specific domain.
+    """
+    settings = get_settings()
+    conn = get_connection(db_path)
+
+    # Get sample images (documents with content_type='image')
+    docs = conn.execute(
+        "SELECT id, title, image_path FROM documents WHERE content_type = 'image' AND status IN ('classified', 'extracted', 'enriched') ORDER BY RANDOM() LIMIT 10"
+    ).fetchall()
+
+    if not docs:
+        conn.close()
+        raise ValueError("No image documents available to simmer image spec")
+
+    specs_dir = Path(settings.specs_dir)
+    specs_dir.mkdir(parents=True, exist_ok=True)
+    sample_dir = specs_dir / "image_samples"
+    # Clear old samples
+    if sample_dir.exists():
+        for old_file in sample_dir.glob("*"):
+            old_file.unlink()
+    sample_dir.mkdir(exist_ok=True)
+
+    # Copy sample images (or symlink) to the sample dir
+    import shutil
+    for doc in docs:
+        src = Path(doc["image_path"])
+        if src.exists():
+            shutil.copy2(src, sample_dir / f"{doc['id']}{src.suffix}")
+
+    seed_path = specs_dir / "image_seed.md"
+    seed_path.write_text(SEED_IMAGE_GOLDEN_SET)
+    conn.close()
+
+    backend = settings.anthropic_backend
+    provider_kwargs = {"api_provider": backend}
+    if backend == "bedrock":
+        provider_kwargs.update({
+            "aws_access_key": settings.aws_access_key,
+            "aws_secret_key": settings.aws_secret_key,
+            "aws_region": settings.aws_region,
+        })
+    elif backend == "ollama":
+        provider_kwargs["ollama_url"] = settings.ollama_url
+
+    job_id = job["id"]
+    print(f"Simmering general IMAGE spec (job {job_id})", flush=True)
+
+    # Phase 1: Golden set — VLLM surveys sample images
+    golden_result = await refine(
+        artifact=str(seed_path),
+        criteria={
+            "coverage": "The reference list captures every identifiable entity visible in the sample images — nothing missed",
+            "description_quality": "Descriptions are accurate, specific, and useful for search — someone could find the image from the description alone",
+            "precision": "Every entity and description is grounded in what's actually visible — no hallucinated objects or scenes",
+        },
+        primary="coverage",
+        iterations=settings.simmer_iterations,
+        judge_mode="board",
+        judge_panel=[
+            {
+                "name": "Coverage & Description",
+                "lens": (
+                    "Look at every sample image. Cross-reference the reference list against what's visible. "
+                    "Are there objects, people, text, or settings visible in the images that are missing from the list? "
+                    "Are the descriptions accurate and searchable — could someone find this image from the description? "
+                    "The list must be exhaustive."
+                ),
+            },
+            {
+                "name": "Precision & Accuracy",
+                "lens": (
+                    "For each entity in the reference list, verify it is actually visible in the cited image. "
+                    "Check descriptions — do they accurately describe what's shown, or do they hallucinate details? "
+                    "Flag any entities or descriptions not grounded in the actual image content."
+                ),
+            },
+        ],
+        output_dir=specs_dir / "image_golden",
+        generator_model=settings.classification_model,
+        judge_model=settings.classification_model,
+        clerk_model=settings.extraction_model,
+        background=(
+            f"Sample images are in {sample_dir}. Look at ALL of them.\n\n"
+            f"The golden set must contain for EACH image:\n"
+            f"1. A list of visual entities (name + type)\n"
+            f"2. A 2-3 sentence description\n"
+            f"3. Searchable tags\n\n"
+            f"This is the ground truth for image extraction. Descriptions should be accurate enough "
+            f"that someone searching for the image content would find it."
+        ),
+        on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(specs_dir / "image_golden")),
+        **provider_kwargs,
+    )
+
+    # Phase 2: Image extraction spec
+    golden_set_path = specs_dir / "image_golden_set.md"
+    golden_set_path.write_text(golden_result.best_candidate)
+    evaluator_script = Path(__file__).resolve().parent / "evaluate_spec.py"
+
+    spec_result = await refine(
+        artifact=golden_result.best_candidate,
+        criteria={
+            "coverage": "When run on sample images, the spec captures all entities from the golden set",
+            "description_quality": "Generated descriptions are accurate, specific, and useful for search",
+            "generalizability": "The spec uses general visual observation rules — it would work on any type of image, not just these samples",
+            "precision": "No hallucinated entities or inaccurate descriptions",
+        },
+        primary="coverage",
+        iterations=settings.simmer_iterations,
+        judge_mode="board",
+        judge_panel=[
+            {
+                "name": "Coverage & Description Quality",
+                "lens": (
+                    "BEFORE scoring, read the raw extraction outputs in the eval-* directories. "
+                    "Check: did the VLLM find all the entities from the golden set? "
+                    "Are the generated descriptions accurate and searchable? "
+                    "Would someone searching for this content find the image from its description?"
+                ),
+            },
+            {
+                "name": "Precision & Generalizability",
+                "lens": (
+                    "BEFORE scoring, read the raw extraction outputs AND the spec itself. "
+                    "Check: are extracted entities actually visible in the images? Are descriptions accurate? "
+                    "CRITICAL: Does the spec use general visual observation rules, or does it hardcode "
+                    "specific objects/scenes from the sample images? A good spec works on travel photos, "
+                    "product shots, diagrams — not just these samples."
+                ),
+            },
+        ],
+        output_dir=specs_dir / "image_spec",
+        generator_model=settings.classification_model,
+        judge_model=settings.classification_model,
+        clerk_model=settings.extraction_model,
+        evaluator=(
+            f"python {shlex.quote(str(evaluator_script))}"
+            f" --candidate {{candidate_path}}"
+            f" --samples-dir {shlex.quote(str(sample_dir))}"
+            f" --golden-set {shlex.quote(str(golden_set_path))}"
+            f" --output-dir {{output_dir}}"
+            f" --iteration {{iteration}}"
+            f" --media-type image"
+        ),
+        background=(
+            f"This spec will be executed by a vision model to extract entities and descriptions from images.\n"
+            f"Golden set: {golden_result.best_candidate[:2000]}\n\n"
+            f"IMPORTANT: Each iteration, the evaluator runs the spec against sample images.\n"
+            f"Raw extraction results are in eval-N/ directories.\n"
+            f"READ the raw outputs — check both entity extraction AND description quality."
+        ),
+        on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path, str(specs_dir / "image_spec")),
+        **provider_kwargs,
+    )
+
+    # Store spec with media_type='image'
+    conn = get_connection(db_path)
+    spec_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO specs (id, domain_path, version, spec_content, golden_set, score, media_type) VALUES (?, NULL, 1, ?, ?, ?, 'image')",
+        (spec_id, spec_result.best_candidate, golden_result.best_candidate, spec_result.composite),
+    )
+
+    # Queue batch extraction for images
+    batch_job_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO jobs (id, type, target, status, config) VALUES (?, 'extract_batch_image', 'general', 'queued', ?)",
+        (batch_job_id, json.dumps({"spec_id": spec_id, "scope": "all_images"})),
     )
     conn.commit()
     conn.close()
