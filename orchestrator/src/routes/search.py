@@ -12,13 +12,14 @@ router = APIRouter()
 
 
 @router.get("/search")
-async def search_query(q: str, top_k: int = 20, expand: bool = True, auth: AuthStore = Depends(get_auth_store)):
+async def search_query(q: str, top_k: int = 20, expand: bool = True, include_images: bool = False, auth: AuthStore = Depends(get_auth_store)):
     """Search the knowledge graph.
 
     Full 5-stage pipeline: expansion → retrieval → entity-boost → fusion → response.
     On Firestore: uses Vertex AI vector search for retrieval.
     On SQLite: uses FAISS for retrieval.
     expand=false skips LLM query expansion (faster, for UI autocomplete).
+    include_images=true adds parallel image search results.
     """
     settings = get_settings()
     store = auth.store
@@ -41,6 +42,10 @@ async def search_query(q: str, top_k: int = 20, expand: bool = True, auth: AuthS
             "total_chunks": result.total_chunks,
         }
 
+    # Parallel image search (opt-in)
+    if include_images and db_backend != "firestore":
+        response["images"] = _search_images(store.conn, q, top_k=top_k)
+
     store.close()
 
     # Broadcast to viz
@@ -49,6 +54,49 @@ async def search_query(q: str, top_k: int = 20, expand: bool = True, auth: AuthS
         await broadcast_search(q, entity_names)
 
     return response
+
+
+def _search_images(conn, query: str, top_k: int = 10) -> list[dict]:
+    """Search image documents by embedding similarity on descriptions.
+
+    Uses sentence-transformers for now (same index as text).
+    Future: SigLIP image index for native cross-modal search.
+    """
+    import numpy as np
+
+    try:
+        from ..pipeline.search.retrieval import _get_model
+        model = _get_model()
+    except ImportError:
+        return []
+
+    query_embedding = model.encode([query], normalize_embeddings=True)[0]
+
+    # Get image chunks with embeddings
+    rows = conn.execute("""
+        SELECT c.id, c.text, c.embedding, d.id as doc_id, d.title, d.image_path, d.thumbnail_path
+        FROM chunks c JOIN documents d ON c.document_id = d.id
+        WHERE d.content_type = 'image' AND c.embedding IS NOT NULL
+    """).fetchall()
+
+    if not rows:
+        return []
+
+    results = []
+    for row in rows:
+        emb = np.frombuffer(row["embedding"], dtype=np.float32)
+        score = float(np.dot(query_embedding, emb))
+        results.append({
+            "document_id": row["doc_id"],
+            "title": row["title"],
+            "description": row["text"][:200] if row["text"] else "",
+            "image_path": row["image_path"],
+            "thumbnail_path": row["thumbnail_path"],
+            "score": round(score, 4),
+        })
+
+    results.sort(key=lambda x: -x["score"])
+    return results[:top_k]
 
 
 async def _firestore_search(store, query: str, top_k: int, expand: bool, settings):
