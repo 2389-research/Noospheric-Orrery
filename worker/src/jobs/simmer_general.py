@@ -187,6 +187,8 @@ def _make_iteration_recorder(job_id: str, phase: str, db_path: str, output_dir: 
 
 async def run_simmer_general(job: dict, db_path: str) -> None:
     settings = get_settings()
+    config = json.loads(job["config"]) if job.get("config") else {}
+    iterations = config.get("iterations", settings.simmer_iterations)
     conn = get_connection(db_path)
 
     docs = conn.execute(
@@ -236,7 +238,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
             "taxonomy_quality": "Entity types are meaningful, consistent, and correctly assigned — each entity has the right type",
         },
         primary="coverage",
-        iterations=settings.simmer_iterations,
+        iterations=iterations,
         judge_mode="board",
         judge_panel=[
             {
@@ -287,7 +289,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
             "format_compliance": "Output is valid JSON with name and type fields",
         },
         primary="coverage",
-        iterations=settings.simmer_iterations,
+        iterations=iterations,
         judge_mode="board",
         judge_panel=[
             {
@@ -366,6 +368,8 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
     descriptions from any image, not just images in a specific domain.
     """
     settings = get_settings()
+    config = json.loads(job["config"]) if job.get("config") else {}
+    iterations = config.get("iterations", settings.simmer_iterations)
     conn = get_connection(db_path)
 
     # Get sample images (documents with content_type='image')
@@ -520,7 +524,7 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             "precision": "Every entity and description is grounded in what's actually visible — no hallucinated objects or scenes",
         },
         primary="coverage",
-        iterations=settings.simmer_iterations,
+        iterations=iterations,
         judge_mode="board",
         judge_panel=[
             {
@@ -591,7 +595,7 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             "precision": "No hallucinated entities or inaccurate descriptions",
         },
         primary="coverage",
-        iterations=settings.simmer_iterations,
+        iterations=iterations,
         judge_mode="board",
         judge_panel=[
             {
