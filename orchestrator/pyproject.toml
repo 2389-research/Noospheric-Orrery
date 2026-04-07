@@ -12,6 +12,7 @@ dependencies = [
     "numpy>=1.26.0,<2.1",
     "faiss-cpu>=1.7.0",
     "mcp>=1.0.0",
+    "torch>=2.0.0",
     "Pillow>=10.0.0",
     "orrery-relay",
     "firebase-admin>=6.0.0",
@@ -33,8 +34,14 @@ dev = [
     "httpx>=0.27",
 ]
 
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.uv.sources]
 orrery-relay = { path = "../packages/orrery-relay" }
+torch = { index = "pytorch-cpu" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

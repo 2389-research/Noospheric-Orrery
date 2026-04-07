@@ -1,5 +1,5 @@
 # ABOUTME: Docker build for the orchestrator in local/SQLite mode (full ML stack).
-# ABOUTME: Uses uv for dependency management; includes torch, sentence-transformers, UMAP, FAISS.
+# ABOUTME: Uses uv for dependency management; torch CPU-only via pyproject.toml index config.
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
@@ -11,12 +11,9 @@ COPY packages/orrery-relay/ /app/packages/orrery-relay/
 
 WORKDIR /app/orchestrator
 
-# Install dependencies from lockfile (all deps — local mode needs the ML stack)
+# Install dependencies from lockfile (torch resolves CPU-only via pyproject.toml index config)
 COPY orchestrator/pyproject.toml orchestrator/uv.lock ./
 RUN uv sync --frozen --no-cache
-
-# Install torch CPU-only from PyTorch index (no CUDA, ~200MB not 5GB)
-RUN uv pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Copy application code
 COPY orchestrator/src/ src/
