@@ -164,12 +164,16 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
     seed_path.write_text(SEED_GOLDEN_SET)
     conn.close()
 
-    bedrock_kwargs = {
-        "api_provider": "bedrock",
-        "aws_access_key": settings.aws_access_key,
-        "aws_secret_key": settings.aws_secret_key,
-        "aws_region": settings.aws_region,
-    }
+    backend = settings.anthropic_backend
+    provider_kwargs = {"api_provider": backend}
+    if backend == "bedrock":
+        provider_kwargs.update({
+            "aws_access_key": settings.aws_access_key,
+            "aws_secret_key": settings.aws_secret_key,
+            "aws_region": settings.aws_region,
+        })
+    elif backend == "ollama":
+        provider_kwargs["ollama_url"] = settings.ollama_url
 
     job_id = job["id"]
     print(f"Simmering general spec (job {job_id})", flush=True)
@@ -204,8 +208,9 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
             },
         ],
         output_dir=specs_dir / "general_golden",
-        generator_model="claude-sonnet-4-6",
-        judge_model="claude-sonnet-4-6",
+        generator_model=settings.classification_model,
+        judge_model=settings.classification_model,
+        clerk_model=settings.extraction_model,
         background=(
             f"Sample documents are in {sample_dir}. Read ALL of them.\n\n"
             f"The golden set must contain TWO things:\n"
@@ -216,7 +221,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
             f"the extraction spec finds it. Be thorough."
         ),
         on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(specs_dir / "general_golden")),
-        **bedrock_kwargs,
+        **provider_kwargs,
     )
 
     # Phase 2: Extraction spec simmering (with empirical evaluator)
@@ -260,9 +265,9 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
             },
         ],
         output_dir=specs_dir / "general_spec",
-        generator_model="claude-sonnet-4-6",
-        judge_model="claude-sonnet-4-6",
-        clerk_model="claude-haiku-4-5",
+        generator_model=settings.classification_model,
+        judge_model=settings.classification_model,
+        clerk_model=settings.extraction_model,
         evaluator=(
             f"python {shlex.quote(str(evaluator_script))}"
             f" --candidate {{candidate_path}}"
@@ -280,7 +285,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
             f"Look for near-misses, type mismatches, and systematic patterns the metrics miss."
         ),
         on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path, str(specs_dir / "general_spec")),
-        **bedrock_kwargs,
+        **provider_kwargs,
     )
 
     # Store spec

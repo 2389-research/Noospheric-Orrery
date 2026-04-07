@@ -137,22 +137,38 @@ response = await relay.complete(
 text = response.text
 ```
 
-The relay supports two backends controlled by `ANTHROPIC_BACKEND` env var:
-- `gateway` (default): Routes through the Bedrock Gateway proxy at the configured `GATEWAY_URL`
-- `bedrock`: Direct AWS Bedrock access with `AWS_ACCESS_KEY`/`AWS_SECRET_KEY`
+The relay supports three backends controlled by `ANTHROPIC_BACKEND` env var:
+- `gateway` (default): Direct Anthropic API or proxy at `GATEWAY_URL`
+- `bedrock`: AWS Bedrock with `AWS_ACCESS_KEY`/`AWS_SECRET_KEY`
+- `ollama`: Local models via Ollama at `OLLAMA_URL` (default `http://localhost:11434`)
 
 The `orrery-relay` package lives at `packages/orrery-relay/` and is a dependency of both orchestrator and worker via `[tool.uv.sources]` path reference.
 
 ### Model Names
 
 Use friendly model names everywhere in config and code:
-```
+```text
+# Cloud (Bedrock/Gateway)
 claude-sonnet-4-6
 claude-haiku-4-5
 claude-opus-4-6
+
+# Local (Ollama) — set CLASSIFICATION_MODEL and EXTRACTION_MODEL in .env
+gemma4:26b      # classification, judging, generation (MoE, 4B active)
+gemma4:e4b      # extraction, clerk (8B dense, good at structured output)
 ```
 
-The relay handles translation to Bedrock inference profile IDs (`us.anthropic.claude-sonnet-4-20250514-v1:0`, etc.) when running in bedrock mode. Check `packages/orrery-relay/src/orrery_relay/backends.py` for the current mapping.
+The relay handles translation to Bedrock inference profile IDs when running in bedrock mode. For ollama, model names are passed through as-is. Check `packages/orrery-relay/src/orrery_relay/backends.py` for the current mapping.
+
+### Three Deployment Tiers
+
+| Tier | Backend | Models | Auth | Embeddings |
+|------|---------|--------|------|------------|
+| Cloud | `bedrock` or `gateway` | Sonnet/Haiku | Firebase Auth | Vertex AI |
+| Local with API | `bedrock` or `gateway` | Sonnet/Haiku | noop | sentence-transformers |
+| Fully local | `ollama` | gemma4:26b/e4b | noop | sentence-transformers |
+
+Simmer jobs read `CLASSIFICATION_MODEL` for judge/generator and `EXTRACTION_MODEL` for clerk/extraction. All model references come from config — no hardcoded model names in the pipeline code.
 
 ### simmer-sdk for Iterative Refinement
 

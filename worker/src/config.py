@@ -20,6 +20,7 @@ class Settings:
     domain_spec_threshold: int = 20
     simmer_iterations: int = 5
     chunk_size: int = 2000
+    ollama_url: str = "http://localhost:11434"
     worker_poll_interval: int = 5
     db_path: str = "/data/orrery.db"
     documents_dir: str = "/data/documents"
@@ -47,6 +48,7 @@ def get_settings() -> Settings:
         domain_spec_threshold=int(os.environ.get("DOMAIN_SPEC_THRESHOLD", "20")),
         simmer_iterations=int(os.environ.get("SIMMER_ITERATIONS", "5")),
         chunk_size=int(os.environ.get("CHUNK_SIZE", "2000")),
+        ollama_url=os.environ.get("OLLAMA_URL", "http://localhost:11434"),
         worker_poll_interval=int(os.environ.get("WORKER_POLL_INTERVAL", "5")),
         db_path=os.environ.get("DB_PATH", f"{_base}/orrery.db"),
         documents_dir=os.environ.get("DOCUMENTS_DIR", f"{_base}/documents"),

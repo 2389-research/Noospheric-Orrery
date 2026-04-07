@@ -66,7 +66,10 @@ All three services run via `docker compose up`. Orchestrator and worker share a 
 ### Prerequisites
 
 - Docker and Docker Compose
-- AWS account with Bedrock access (cross-region inference enabled for `us-east-1`)
+- **One of:**
+  - AWS account with Bedrock access (cross-region inference for `us-east-1`) — cloud mode
+  - Anthropic API key — cloud mode via direct API
+  - [Ollama](https://ollama.com) with local models — fully local, no API keys needed
 ### Setup
 
 ```bash
@@ -104,6 +107,53 @@ Data persists in the `orrery-data` Docker volume.
 2. The pipeline automatically: classifies into domains, extracts entities, indexes for search
 3. Go to `/viz` to see the galaxy map — zoom in for sector detail, double-click entities for star view
 4. Use `/pipeline` to monitor jobs, trigger simmering, run normalization
+
+### Fully Local Mode (Ollama, No Cloud APIs)
+
+Run the entire pipeline with local models via [Ollama](https://ollama.com). No API keys, no cloud dependencies — just Docker + Ollama.
+
+**1. Install Ollama and pull models:**
+
+```bash
+# Install Ollama: https://ollama.com/download
+ollama pull gemma4:26b    # 17GB — classification, judging, generation (MoE, 4B active)
+ollama pull gemma4:e4b    # 9.6GB — extraction, clerk tasks (8B dense, follows structured prompts)
+```
+
+**2. Configure `.env`:**
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
+```
+ANTHROPIC_BACKEND=ollama
+OLLAMA_URL=http://host.docker.internal:11434
+CLASSIFICATION_MODEL=gemma4:26b
+EXTRACTION_MODEL=gemma4:e4b
+```
+
+> `host.docker.internal` lets Docker containers reach Ollama on your host machine. If running without Docker, use `http://localhost:11434`.
+
+**3. Launch:**
+
+```bash
+docker compose up
+```
+
+**Model selection notes:**
+- **gemma4:26b** (MoE, 4B active params) — best balance of quality and speed for judging/generation. The judges read sample docs via tool calls and produce detailed scoring.
+- **gemma4:e4b** (8B dense) — outperforms larger MoE models for extraction because dense params follow structured prompts more reliably.
+- **gemma4:31b** (31B dense, 19GB) — higher quality but slower. Use if you have the VRAM and patience.
+- Scores are lower than cloud Sonnet (5-7/10 vs 8-9/10 typical) but the iterative refinement still works — specs improve across iterations.
+
+**Tested configurations:**
+
+| Role | Model | Why |
+|------|-------|-----|
+| Classification + Judging + Generation | `gemma4:26b` | Good tool use, reads docs thoroughly, produces structured scores |
+| Extraction + Clerk | `gemma4:e4b` | Follows JSON schemas reliably, fast for per-chunk extraction |
 
 ### Running Without Docker (Dev Mode)
 

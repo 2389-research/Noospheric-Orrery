@@ -106,13 +106,17 @@ Read every sample document and list ALL entities you find as a JSON array:
     seed_path.write_text(seed_content)
     conn.close()
 
-    # Bedrock config
-    bedrock_kwargs = {
-        "api_provider": "bedrock",
-        "aws_access_key": settings.aws_access_key,
-        "aws_secret_key": settings.aws_secret_key,
-        "aws_region": settings.aws_region,
-    }
+    # LLM provider config
+    backend = settings.anthropic_backend
+    provider_kwargs = {"api_provider": backend}
+    if backend == "bedrock":
+        provider_kwargs.update({
+            "aws_access_key": settings.aws_access_key,
+            "aws_secret_key": settings.aws_secret_key,
+            "aws_region": settings.aws_region,
+        })
+    elif backend == "ollama":
+        provider_kwargs["ollama_url"] = settings.ollama_url
 
     job_id = job["id"]
     print(f"Simmering domain spec for: {domain_path} ({len(docs)} docs, job {job_id})", flush=True)
@@ -147,8 +151,9 @@ Read every sample document and list ALL entities you find as a JSON array:
             },
         ],
         output_dir=domain_dir / "golden",
-        generator_model="claude-sonnet-4-6",
-        judge_model="claude-sonnet-4-6",
+        generator_model=settings.classification_model,
+        judge_model=settings.classification_model,
+        clerk_model=settings.extraction_model,
         background=(
             f"Sample documents from domain '{domain_path}' are in {sample_dir}. Read ALL of them.\n\n"
             f"The golden set must contain TWO things:\n"
@@ -158,7 +163,7 @@ Read every sample document and list ALL entities you find as a JSON array:
             f"tested against it. Be thorough."
         ),
         on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(domain_dir / "golden")),
-        **bedrock_kwargs,
+        **provider_kwargs,
     )
 
     # Phase 2: Extraction spec simmering (with empirical evaluator)
@@ -202,9 +207,9 @@ Read every sample document and list ALL entities you find as a JSON array:
             },
         ],
         output_dir=domain_dir / "spec",
-        generator_model="claude-sonnet-4-6",
-        judge_model="claude-sonnet-4-6",
-        clerk_model="claude-haiku-4-5",
+        generator_model=settings.classification_model,
+        judge_model=settings.classification_model,
+        clerk_model=settings.extraction_model,
         evaluator=(
             f"python {shlex.quote(str(evaluator_script))}"
             f" --candidate {{candidate_path}}"
@@ -222,7 +227,7 @@ Read every sample document and list ALL entities you find as a JSON array:
             f"Look for near-misses, type mismatches, and systematic patterns the metrics miss."
         ),
         on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path, str(domain_dir / "spec")),
-        **bedrock_kwargs,
+        **provider_kwargs,
     )
 
     # Store spec
