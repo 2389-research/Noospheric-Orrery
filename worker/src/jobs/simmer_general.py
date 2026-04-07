@@ -508,11 +508,15 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             f" --iteration {{iteration}}"
         ),
         background=(
-            f"This spec will be executed by a vision model to extract entities and descriptions from images.\n"
+            f"This spec will be executed by a vision model (Haiku) to extract entities and descriptions from images.\n"
             f"Golden set: {golden_result.best_candidate[:2000]}\n\n"
-            f"IMPORTANT: Each iteration, the evaluator runs the spec against sample images.\n"
-            f"Raw extraction results are in eval-N/ directories.\n"
-            f"READ the raw outputs — check both entity extraction AND description quality."
+            f"IMPORTANT: Each iteration, the evaluator runs the spec against sample images using Haiku.\n"
+            f"The evaluator's raw extraction results are in eval-N/ directories as JSON files.\n"
+            f"These JSON files contain what Haiku saw in each image — entities, descriptions, and tags.\n\n"
+            f"DO NOT open the image files directly (they are binary .jpg files).\n"
+            f"Instead, read the eval-N/*.json files — these are Haiku's observations.\n"
+            f"Score the spec based on whether Haiku's extractions match the golden set.\n"
+            f"Check both entity coverage AND description quality in the JSON outputs."
         ),
         on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path, str(specs_dir / "image_spec")),
         **provider_kwargs,
