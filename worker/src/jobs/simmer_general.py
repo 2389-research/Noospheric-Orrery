@@ -370,7 +370,7 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
 
     # Get sample images (documents with content_type='image')
     docs = conn.execute(
-        "SELECT id, title, image_path FROM documents WHERE content_type = 'image' AND status IN ('classified', 'extracted', 'enriched') ORDER BY RANDOM() LIMIT 10"
+        "SELECT id, title, image_path FROM documents WHERE content_type = 'image' AND status IN ('classified', 'extracted', 'enriched') ORDER BY RANDOM() LIMIT 5"
     ).fetchall()
 
     if not docs:
@@ -386,12 +386,66 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             old_file.unlink()
     sample_dir.mkdir(exist_ok=True)
 
-    # Copy sample images (or symlink) to the sample dir
+    # Copy sample images to the sample dir
     import shutil
     for doc in docs:
         src = Path(doc["image_path"])
         if src.exists():
             shutil.copy2(src, sample_dir / f"{doc['id']}{src.suffix}")
+
+    # Pre-scan: Haiku describes each image → text files for judges to read
+    # Judges read these descriptions instead of opening image files (much cheaper)
+    prescan_dir = specs_dir / "image_prescans"
+    if prescan_dir.exists():
+        for old_file in prescan_dir.glob("*"):
+            old_file.unlink()
+    prescan_dir.mkdir(exist_ok=True)
+
+    relay = Relay.from_settings(settings)
+    print(f"  Pre-scanning {len(docs)} images with Haiku...", flush=True)
+    import base64
+    for img_file in sorted(sample_dir.glob("*.jpg")) + sorted(sample_dir.glob("*.png")):
+        try:
+            b64 = base64.b64encode(img_file.read_bytes()).decode()
+            suffix = img_file.suffix.lower()
+            media_type = "image/jpeg" if suffix in (".jpg", ".jpeg") else "image/png"
+
+            prescan = await relay.complete_structured(
+                model=settings.extraction_model,
+                max_tokens=2048,
+                messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
+                    {"type": "text", "text": (
+                        "Describe this image thoroughly for a knowledge graph. Include:\n"
+                        "1. What the image shows (medium, subject, setting)\n"
+                        "2. Every identifiable entity (people, objects, text, materials, colors, techniques)\n"
+                        "3. A 2-3 sentence searchable description\n"
+                        "Be exhaustive — list everything visible."
+                    )},
+                ]}],
+                schema={
+                    "type": "object",
+                    "properties": {
+                        "entities": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "type": {"type": "string"}}, "required": ["name", "type"]}},
+                        "description": {"type": "string"},
+                        "details": {"type": "string", "description": "Detailed inventory of everything visible"},
+                    },
+                    "required": ["entities", "description", "details"],
+                },
+                tool_name="prescan",
+                tool_description="Pre-scan an image for the golden set judges",
+            )
+            # Write as readable text file
+            prescan_path = prescan_dir / f"{img_file.stem}.txt"
+            lines = [f"IMAGE: {img_file.name}", f"DESCRIPTION: {prescan.get('description', '')}", "", "ENTITIES:"]
+            for e in prescan.get("entities", []):
+                lines.append(f"  - {e['name']} ({e['type']})")
+            lines.extend(["", "DETAILS:", prescan.get("details", "")])
+            prescan_path.write_text("\n".join(lines))
+        except Exception as exc:
+            print(f"  Warning: pre-scan failed for {img_file.name}: {exc}", flush=True)
+
+    print(f"  Pre-scans written to {prescan_dir}", flush=True)
 
     seed_path = specs_dir / "image_seed.md"
     seed_path.write_text(SEED_IMAGE_GOLDEN_SET)
@@ -426,18 +480,20 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             {
                 "name": "Coverage & Description",
                 "lens": (
-                    "Look at every sample image. Cross-reference the reference list against what's visible. "
-                    "Are there objects, people, text, or settings visible in the images that are missing from the list? "
-                    "Are the descriptions accurate and searchable — could someone find this image from the description? "
-                    "The list must be exhaustive."
+                    "Read the Haiku pre-scan files in the image_prescans/ directory. Each .txt file contains "
+                    "Haiku's detailed observations of one image: entities, description, and details. "
+                    "Cross-reference the golden set's reference list against these pre-scans. "
+                    "Are there entities in the pre-scans missing from the golden set? "
+                    "Are descriptions accurate and searchable? DO NOT open .jpg files directly."
                 ),
             },
             {
                 "name": "Precision & Accuracy",
                 "lens": (
-                    "For each entity in the reference list, verify it is actually visible in the cited image. "
-                    "Check descriptions — do they accurately describe what's shown, or do they hallucinate details? "
-                    "Flag any entities or descriptions not grounded in the actual image content."
+                    "Read the Haiku pre-scan files in image_prescans/. For each entity in the golden set, "
+                    "verify it appears in the corresponding pre-scan. Check descriptions for accuracy. "
+                    "Flag any entities or descriptions in the golden set that Haiku's pre-scan doesn't confirm. "
+                    "DO NOT open .jpg files directly."
                 ),
             },
         ],
@@ -446,13 +502,15 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
         judge_model=settings.classification_model,
         clerk_model=settings.classification_model,
         background=(
-            f"Sample images are in {sample_dir}. Look at ALL of them.\n\n"
+            f"Haiku has pre-scanned each sample image. The pre-scan results are in {prescan_dir}/ as .txt files.\n"
+            f"Each file contains: entities found, description, and detailed observations.\n\n"
+            f"DO NOT open image files (.jpg) directly — read the pre-scan .txt files instead.\n\n"
             f"The golden set must contain for EACH image:\n"
             f"1. A list of visual entities (name + type)\n"
             f"2. A 2-3 sentence description\n"
             f"3. Searchable tags\n\n"
-            f"This is the ground truth for image extraction. Descriptions should be accurate enough "
-            f"that someone searching for the image content would find it."
+            f"Use the pre-scans as ground truth for what's in each image.\n"
+            f"Descriptions should be accurate enough that someone searching would find the image."
         ),
         on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(specs_dir / "image_golden")),
         **provider_kwargs,
