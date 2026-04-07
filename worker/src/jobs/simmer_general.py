@@ -461,7 +461,7 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
     # Phase 2: Image extraction spec
     golden_set_path = specs_dir / "image_golden_set.md"
     golden_set_path.write_text(golden_result.best_candidate)
-    evaluator_script = Path(__file__).resolve().parent / "evaluate_spec.py"
+    evaluator_script = Path(__file__).resolve().parent / "evaluate_image_spec.py"
 
     spec_result = await refine(
         artifact=golden_result.best_candidate,
@@ -506,7 +506,6 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             f" --golden-set {shlex.quote(str(golden_set_path))}"
             f" --output-dir {{output_dir}}"
             f" --iteration {{iteration}}"
-            f" --media-type image"
         ),
         background=(
             f"This spec will be executed by a vision model to extract entities and descriptions from images.\n"
