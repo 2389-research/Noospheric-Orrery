@@ -202,6 +202,7 @@ function buildStarView(graph) {
       id: d.id,
       kind: 'document',
       title: d.title || 'Untitled',
+      content_type: d.content_type || 'text',
       radius: 8,
       x: dx, y: dy,
       _px: dx, _py: dy,
@@ -354,7 +355,7 @@ canvas.addEventListener('mouseup', e => {
       } else if (hit.kind === 'document') {
         window.parent.postMessage({
           type: 'node_selected', nodeType: 'document',
-          data: { id: hit.id, title: hit.title }
+          data: { id: hit.id, title: hit.title, content_type: hit.content_type || 'text' }
         }, '*');
       } else if (hit.kind === 'central') {
         window.parent.postMessage({

@@ -437,12 +437,12 @@ class SQLiteRelationshipRepository(RelationshipRepository):
 
         # Documents
         doc_rows = self._conn.execute("""
-            SELECT DISTINCT d.id, d.title FROM entity_sources es
+            SELECT DISTINCT d.id, d.title, d.content_type FROM entity_sources es
             JOIN documents d ON es.document_id = d.id WHERE es.entity_id = ?
             ORDER BY d.title
         """, (entity_id,)).fetchall()
         doc_ids = [r["id"] for r in doc_rows]
-        documents = [{"id": r["id"], "title": r["title"]} for r in doc_rows]
+        documents = [{"id": r["id"], "title": r["title"], "content_type": r["content_type"] or "text"} for r in doc_rows]
 
         # Co-entities
         co_rows = self._conn.execute("""
