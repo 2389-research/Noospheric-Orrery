@@ -19,9 +19,7 @@ from ..pipeline.domain_normalizer import assign_document_domains
 from ..pipeline.extractor import extract_document
 from ..pipeline.normalizer import normalize_entity
 from ..pipeline.cooccurrence import compute_cooccurrence_edges
-from ..pipeline.image_prep import is_image_file, image_to_base64, make_thumbnail
-from ..pipeline.classifier import classify_image
-from ..pipeline.extractor import extract_entities_from_image
+from ..pipeline.image_prep import is_image_file
 
 router = APIRouter()
 
@@ -208,6 +206,10 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
 
 async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -> dict:
     """Ingest an image: classify via VLLM, extract entities/description, store."""
+    from ..pipeline.image_prep import image_to_base64, make_thumbnail
+    from ..pipeline.classifier import classify_image
+    from ..pipeline.extractor import extract_entities_from_image
+
     settings = get_settings()
     relay = Relay.from_settings(settings)
 

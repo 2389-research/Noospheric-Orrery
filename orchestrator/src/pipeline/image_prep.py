@@ -4,7 +4,6 @@
 import base64
 from io import BytesIO
 from pathlib import Path
-from PIL import Image
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
@@ -14,8 +13,9 @@ def is_image_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in IMAGE_EXTENSIONS
 
 
-def resize_image(path: Path, max_edge: int = 1024) -> Image.Image:
+def resize_image(path: Path, max_edge: int = 1024):
     """Resize image so longest edge is at most max_edge, preserving aspect ratio."""
+    from PIL import Image
     img = Image.open(path)
     if max(img.size) <= max_edge:
         return img
@@ -26,6 +26,7 @@ def resize_image(path: Path, max_edge: int = 1024) -> Image.Image:
 
 def make_thumbnail(path: Path, output_path: Path, max_edge: int = 256) -> Path:
     """Create a thumbnail for UI display."""
+    from PIL import Image
     img = Image.open(path)
     img.thumbnail((max_edge, max_edge), Image.LANCZOS)
     img.save(output_path, quality=80)
