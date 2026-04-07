@@ -22,8 +22,8 @@ WORKDIR /app/worker
 COPY worker/pyproject.toml worker/uv.lock ./
 RUN uv sync --frozen --no-cache --no-dev
 
-# Install simmer-sdk v0.3.0 from GitHub (internal dep — not the PyPI package, which is unrelated)
-RUN uv pip install --no-cache-dir "simmer-sdk @ git+https://github.com/2389-research/simmer-sdk.git@v0.3.0"
+# Install simmer-sdk from GitHub main (includes custom_tools for image pipeline)
+RUN uv pip install --no-cache-dir "simmer-sdk @ git+https://github.com/2389-research/simmer-sdk.git@main"
 
 # Copy application code
 COPY worker/src/ src/
