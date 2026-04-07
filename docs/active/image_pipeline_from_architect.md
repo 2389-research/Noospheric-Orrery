@@ -89,17 +89,23 @@ For photography domains, the photo triage spec is simmered here too — shoot ty
 
 ### 5. Embedding
 
-Two embeddings per image, stored separately:
+Three embeddings per image, all in the image index via the multimodal model:
 
-| | Model (Cloud) | Model (Local) | Index |
-|---|---|---|---|
-| **Image pixel embedding** | `multimodalembedding@001` (image path) | SigLIP (image path) | Image index |
-| **Image description embedding** | `multimodalembedding@001` (text path) | SigLIP (text path) | Image index |
-| **Text doc embedding** | `gemini-embedding-001` | `all-MiniLM-L6-v2` (existing) | Text index |
+| Artifact | Model (Cloud) | Model (Local) | Index |
+|----------|---|---|---|
+| **Image pixels** | `multimodalembedding@001` (image path) | SigLIP (image path) | Image index |
+| **Generated description** | `multimodalembedding@001` (text path) | SigLIP (text path) | Image index |
+| **Entity names** | `multimodalembedding@001` (text path) | SigLIP (text path) | Image index |
 
-Both cloud and local use a single specialist model for images — `multimodalembedding@001` and SigLIP respectively — which produce image and text embeddings in the same shared semantic space. A text query embedded through the multimodal model's text path can find images because both modalities live in the same latent space.
+Text documents stay in their own index:
 
-The extracted description is embedded through the image model (not the text model), keeping it in the image index's semantic space.
+| Artifact | Model (Cloud) | Model (Local) | Index |
+|----------|---|---|---|
+| **Text chunks** | `gemini-embedding-001` | `all-MiniLM-L6-v2` (existing) | Text index |
+
+Both cloud and local use a single specialist model for images — `multimodalembedding@001` and SigLIP respectively — which produce image and text embeddings in the same shared semantic space. A text query embedded through the multimodal model's text path can find images, descriptions, and entities because all three live in the same latent space.
+
+No cross-pollination between indexes. Each specialist model handles its own modality.
 
 ---
 
@@ -113,15 +119,16 @@ The extracted description is embedded through the image model (not the text mode
 - Serves: text search across text documents
 
 **Image index** (new):
-- Contains: image pixel embeddings + image description embeddings
-- Model: `multimodalembedding@001` (cloud) / SigLIP (local)
-- Serves: text→image search (text query embedded via multimodal text path), image→image similarity
+- Contains: image pixel embeddings + description embeddings + entity name embeddings
+- All embedded via `multimodalembedding@001` (cloud) / SigLIP (local)
+- Serves: text→image search, image→image similarity
 - Firestore vector field, 1408 dims, well within 2048 limit
 
 **At query time:**
-- **Text search**: queries both indexes in parallel. Text index returns text docs, image index returns images (via multimodal text path). Results displayed together as two lists.
-- **Image similarity search**: query image index with an image embedding. Returns visually similar images.
-- **Cross-modal fusion** (deferred): combining/reranking scores across both indexes into a single ranked list — built later when there's a real use case.
+- **Default**: text search only (existing behavior, unchanged)
+- **Image search** (user opt-in): query image index via SigLIP text path, returns images ranked by relevance
+- **Image similarity search**: query image index with an image embedding, returns visually similar images
+- **Cross-domain search** (deferred): query both indexes, fuse results — built later when there's a real use case
 
 ---
 
@@ -130,15 +137,10 @@ The extracted description is embedded through the image model (not the text mode
 Image documents appear as nodes in the knowledge graph exactly like text documents. Entities extracted from images create the same co-occurrence edges.
 
 Node additions:
-- `content_type: 'image'` flag
+- `content_type: 'image'` flag on document nodes
 - Thumbnail stored for UI display
-- `shoot_type` tag for photography content
 
-Edge types added:
-- `depicts` — image node → entity it contains
-- `same_shoot` — links images from the same session/rotation set (shared parent or manual grouping)
-
-The galaxy viz shows image-sourced entities identically to text-sourced entities. Document nodes get a small visual indicator (icon or thumbnail) showing they're images.
+Entities extracted from images are just entities — same table, same co-occurrence edges, same graph representation. No special edge types. The galaxy viz shows image-sourced entities identically to text-sourced entities. Document nodes get a small visual indicator (icon or thumbnail) showing they're images.
 
 ---
 
