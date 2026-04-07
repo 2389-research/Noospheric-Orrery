@@ -296,16 +296,45 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
             )
         store.documents.update_status(doc_id, "extracted")
 
-    # Embed description + entities inline (SQLite mode)
-    if entity_count > 0:
-        import os as _os
-        if _os.environ.get("DB_BACKEND", "sqlite").lower() != "firestore":
-            try:
-                from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
-                embed_new_entities(store.conn)
-                embed_new_chunks(store.conn)
-            except Exception as e:
-                print(f"Search index update after image ingest: {e}")
+    # Embed for search — both text (sentence-transformers) and image (SigLIP)
+    import os as _os
+    if _os.environ.get("DB_BACKEND", "sqlite").lower() != "firestore":
+        # Text embeddings (sentence-transformers) for text search compatibility
+        try:
+            from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
+            embed_new_entities(store.conn)
+            embed_new_chunks(store.conn)
+        except Exception as e:
+            print(f"Text embedding after image ingest: {e}")
+
+        # SigLIP embeddings (image + description) for native image search
+        try:
+            from ..pipeline.image_embedding import embed_image, embed_image_text
+            import numpy as np
+
+            # Embed the image pixels
+            img_emb = embed_image(Path(image_path))
+            if img_emb is not None:
+                store.conn.execute(
+                    "UPDATE chunks SET image_embedding = ? WHERE id = ?",
+                    (img_emb.astype(np.float32).tobytes(), chunk_id),
+                )
+
+            # Embed the description via SigLIP text path (same latent space as image)
+            if description:
+                desc_emb = embed_image_text(description)
+                if desc_emb is not None:
+                    # Store as a second embedding — could use a separate column or append
+                    # For now, if image_embedding is empty, store the description embedding there
+                    if img_emb is None:
+                        store.conn.execute(
+                            "UPDATE chunks SET image_embedding = ? WHERE id = ?",
+                            (desc_emb.astype(np.float32).tobytes(), chunk_id),
+                        )
+
+            store.conn.commit()
+        except Exception as e:
+            print(f"SigLIP embedding after image ingest: {e}")
 
     # Queue image simmer if threshold hit
     jobs_queued = []

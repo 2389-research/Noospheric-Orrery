@@ -57,34 +57,71 @@ async def search_query(q: str, top_k: int = 20, expand: bool = True, include_ima
 
 
 def _search_images(conn, query: str, top_k: int = 10) -> list[dict]:
-    """Search image documents by embedding similarity on descriptions.
+    """Search image documents using SigLIP cross-modal embeddings.
 
-    Uses sentence-transformers for now (same index as text).
-    Future: SigLIP image index for native cross-modal search.
+    Embeds the text query via SigLIP text encoder, searches against
+    image_embedding column (SigLIP image/description embeddings).
+    Falls back to sentence-transformers text embeddings if SigLIP unavailable.
     """
     import numpy as np
 
+    # Try SigLIP first (native cross-modal search)
+    query_embedding = None
+    embedding_col = "image_embedding"
     try:
-        from ..pipeline.search.retrieval import _get_model
-        model = _get_model()
+        from ..pipeline.image_embedding import embed_image_text
+        emb = embed_image_text(query)
+        if emb is not None:
+            query_embedding = emb
     except ImportError:
-        return []
+        pass
 
-    query_embedding = model.encode([query], normalize_embeddings=True)[0]
+    # Fall back to sentence-transformers
+    if query_embedding is None:
+        embedding_col = "embedding"
+        try:
+            from ..pipeline.search.retrieval import _get_model
+            model = _get_model()
+            query_embedding = model.encode([query], normalize_embeddings=True)[0]
+        except ImportError:
+            return []
 
-    # Get image chunks with embeddings
-    rows = conn.execute("""
-        SELECT c.id, c.text, c.embedding, d.id as doc_id, d.title, d.image_path, d.thumbnail_path
+    # Get image chunks with the appropriate embeddings
+    rows = conn.execute(f"""
+        SELECT c.id, c.text, c.{embedding_col}, d.id as doc_id, d.title, d.image_path, d.thumbnail_path
         FROM chunks c JOIN documents d ON c.document_id = d.id
-        WHERE d.content_type = 'image' AND c.embedding IS NOT NULL
+        WHERE d.content_type = 'image' AND c.{embedding_col} IS NOT NULL
     """).fetchall()
+
+    if not rows:
+        # If no SigLIP embeddings, try text embeddings
+        if embedding_col == "image_embedding":
+            rows = conn.execute("""
+                SELECT c.id, c.text, c.embedding, d.id as doc_id, d.title, d.image_path, d.thumbnail_path
+                FROM chunks c JOIN documents d ON c.document_id = d.id
+                WHERE d.content_type = 'image' AND c.embedding IS NOT NULL
+            """).fetchall()
+            if rows:
+                # Re-embed query with sentence-transformers for text matching
+                try:
+                    from ..pipeline.search.retrieval import _get_model
+                    model = _get_model()
+                    query_embedding = model.encode([query], normalize_embeddings=True)[0]
+                    embedding_col = "embedding"
+                except ImportError:
+                    return []
 
     if not rows:
         return []
 
     results = []
     for row in rows:
-        emb = np.frombuffer(row["embedding"], dtype=np.float32)
+        emb_data = row[embedding_col] if embedding_col in row.keys() else row[2]
+        if not emb_data:
+            continue
+        emb = np.frombuffer(emb_data, dtype=np.float32)
+        if emb.shape[0] != query_embedding.shape[0]:
+            continue  # dimension mismatch (SigLIP vs sentence-transformers)
         score = float(np.dot(query_embedding, emb))
         results.append({
             "document_id": row["doc_id"],
