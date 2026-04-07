@@ -153,7 +153,7 @@ Read every sample document and list ALL entities you find as a JSON array:
         output_dir=domain_dir / "golden",
         generator_model=settings.classification_model,
         judge_model=settings.classification_model,
-        clerk_model=settings.extraction_model,
+        clerk_model=settings.classification_model,
         background=(
             f"Sample documents from domain '{domain_path}' are in {sample_dir}. Read ALL of them.\n\n"
             f"The golden set must contain TWO things:\n"
@@ -209,7 +209,7 @@ Read every sample document and list ALL entities you find as a JSON array:
         output_dir=domain_dir / "spec",
         generator_model=settings.classification_model,
         judge_model=settings.classification_model,
-        clerk_model=settings.extraction_model,
+        clerk_model=settings.classification_model,
         evaluator=(
             f"python {shlex.quote(str(evaluator_script))}"
             f" --candidate {{candidate_path}}"

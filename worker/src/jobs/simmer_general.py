@@ -259,7 +259,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         output_dir=specs_dir / "general_golden",
         generator_model=settings.classification_model,
         judge_model=settings.classification_model,
-        clerk_model=settings.extraction_model,
+        clerk_model=settings.classification_model,
         background=(
             f"Sample documents are in {sample_dir}. Read ALL of them.\n\n"
             f"The golden set must contain TWO things:\n"
@@ -316,7 +316,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         output_dir=specs_dir / "general_spec",
         generator_model=settings.classification_model,
         judge_model=settings.classification_model,
-        clerk_model=settings.extraction_model,
+        clerk_model=settings.classification_model,
         evaluator=(
             f"python {shlex.quote(str(evaluator_script))}"
             f" --candidate {{candidate_path}}"
@@ -444,7 +444,7 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
         output_dir=specs_dir / "image_golden",
         generator_model=settings.classification_model,
         judge_model=settings.classification_model,
-        clerk_model=settings.extraction_model,
+        clerk_model=settings.classification_model,
         background=(
             f"Sample images are in {sample_dir}. Look at ALL of them.\n\n"
             f"The golden set must contain for EACH image:\n"
@@ -498,7 +498,7 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
         output_dir=specs_dir / "image_spec",
         generator_model=settings.classification_model,
         judge_model=settings.classification_model,
-        clerk_model=settings.extraction_model,
+        clerk_model=settings.classification_model,
         evaluator=(
             f"python {shlex.quote(str(evaluator_script))}"
             f" --candidate {{candidate_path}}"
