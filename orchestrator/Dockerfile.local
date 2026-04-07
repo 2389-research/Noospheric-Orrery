@@ -12,11 +12,9 @@ COPY packages/orrery-relay/ /app/packages/orrery-relay/
 WORKDIR /app/orchestrator
 
 # Install dependencies from lockfile (deps only — project not yet copied)
+# Torch resolves to CPU-only wheels via [tool.uv.index] in pyproject.toml
 COPY orchestrator/pyproject.toml orchestrator/uv.lock ./
 RUN uv sync --frozen --no-cache --no-install-project
-
-# Install torch CPU-only from PyTorch index (no CUDA, ~200MB not 5GB)
-RUN uv pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Copy application code, then install the project itself
 COPY orchestrator/src/ src/
