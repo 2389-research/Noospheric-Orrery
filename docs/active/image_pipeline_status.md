@@ -117,13 +117,12 @@ If it fails, update the lockfile: `cd orchestrator && uv lock` and rebuild.
 
 ---
 
-## Open PRs to Merge First
+## PRs (all merged)
 
-Before creating the image pipeline PR, merge these:
-- **PR #13**: Judgment parser fixes (approved)
-- **PR #14**: Ollama backend (reviewed, fixes applied)
+- **PR #13**: Judgment parser fixes — merged
+- **PR #14**: Ollama backend — merged
 
-Then create image pipeline PR from `feat/image-pipeline`.
+Next: rebase `feat/image-pipeline` onto main, create PR.
 
 ---
 
