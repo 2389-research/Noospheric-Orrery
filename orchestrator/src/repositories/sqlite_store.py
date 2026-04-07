@@ -55,6 +55,9 @@ class SQLiteDocumentRepository(DocumentRepository):
             id=row["id"], title=row["title"], content=row["content"],
             content_hash=row["content_hash"], source_path=row["source_path"],
             status=row["status"], created_at=row["created_at"],
+            content_type=row["content_type"] if "content_type" in row.keys() else "text",
+            image_path=row["image_path"] if "image_path" in row.keys() else None,
+            thumbnail_path=row["thumbnail_path"] if "thumbnail_path" in row.keys() else None,
         )
 
     def list(self, limit=50, offset=0):
@@ -94,13 +97,15 @@ class SQLiteDocumentRepository(DocumentRepository):
 
     def get_recent(self, limit=50):
         rows = self._conn.execute(
-            "SELECT d.id, d.title, GROUP_CONCAT(dd.domain_path) as domains "
+            "SELECT d.id, d.title, d.content_type, d.thumbnail_path, GROUP_CONCAT(dd.domain_path) as domains "
             "FROM documents d LEFT JOIN document_domains dd ON d.id = dd.document_id "
             "GROUP BY d.id ORDER BY d.created_at DESC LIMIT ?", (limit,)
         ).fetchall()
         result = []
         for r in rows:
-            doc = Document(id=r["id"], title=r["title"])
+            doc = Document(id=r["id"], title=r["title"],
+                           content_type=r["content_type"] or "text",
+                           thumbnail_path=r["thumbnail_path"])
             doc.domains = r["domains"].split(",") if r["domains"] else []
             result.append(doc)
         return result

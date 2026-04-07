@@ -267,7 +267,10 @@ def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
     # Recent documents
     recent_docs = store.documents.get_recent(limit=50)
     videos = [{"id": d.id, "title": d.title, "domains": d.domains,
-               "primary": d.domains[0] if d.domains else None} for d in recent_docs]
+               "primary": d.domains[0] if d.domains else None,
+               "content_type": getattr(d, "content_type", "text"),
+               "thumbnail_path": getattr(d, "thumbnail_path", None),
+               } for d in recent_docs]
 
     # Domain specs
     domain_specs = {}
