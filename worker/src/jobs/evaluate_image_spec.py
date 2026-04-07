@@ -35,24 +35,48 @@ def parse_image_golden_set(text: str) -> list[dict]:
     ]
     """
     try:
-        match = re.search(r'\[.*\]', text, re.DOTALL)
-        if match:
-            data = json.loads(match.group())
-            if isinstance(data, list):
-                entries = []
-                for item in data:
-                    if isinstance(item, dict) and "entities" in item:
-                        entries.append({
-                            "image": item.get("image", ""),
-                            "entities": [
-                                (e["name"].lower().strip(), e["type"].lower().strip())
-                                for e in item.get("entities", [])
-                                if isinstance(e, dict) and "name" in e and "type" in e
-                            ],
-                            "description": item.get("description", ""),
-                            "tags": item.get("tags", []),
-                        })
-                return entries
+        # Find all [...] blocks and try each from last to first.
+        # Golden sets may have a template example before the real data array.
+        data = None
+        for match in reversed(list(re.finditer(r'\[', text))):
+            start = match.start()
+            # Find the matching ] by scanning from the end
+            remainder = text[start:]
+            depth = 0
+            end = -1
+            for i, ch in enumerate(remainder):
+                if ch == '[': depth += 1
+                elif ch == ']': depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+            if end > 0:
+                try:
+                    candidate = json.loads(remainder[:end])
+                    if isinstance(candidate, list) and len(candidate) > 0:
+                        # Check if this looks like an image golden set (has 'entities' key per item)
+                        # vs just an inner entity array
+                        if isinstance(candidate[0], dict) and "entities" in candidate[0]:
+                            data = candidate
+                            break
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+        if data and isinstance(data, list):
+            entries = []
+            for item in data:
+                if isinstance(item, dict) and "entities" in item:
+                    entries.append({
+                        "image": item.get("image", ""),
+                        "entities": [
+                            (e["name"].lower().strip(), e["type"].lower().strip())
+                            for e in item.get("entities", [])
+                            if isinstance(e, dict) and "name" in e and "type" in e
+                        ],
+                        "description": item.get("description", ""),
+                        "tags": item.get("tags", []),
+                    })
+            return entries
     except (json.JSONDecodeError, ValueError):
         pass
     return []
