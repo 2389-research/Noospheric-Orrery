@@ -84,16 +84,24 @@ IMAGE_ENTITY_SCHEMA = {
         },
         "description": {
             "type": "string",
-            "description": "2-3 sentence description of what the image shows",
+            "description": "2-3 sentences: first = medium + subject, second = visual details, third = context",
         },
         "tags": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Searchable tags for the image",
+            "description": "Searchable tags — categories, mood, use-case (not just entity name repeats)",
+        },
+        "medium": {
+            "type": "string",
+            "description": "photograph, painting, illustration, diagram, screenshot, render, or other",
         },
         "shot_type": {
             "type": "string",
-            "description": "single, burst, rotation, sequence, or other structural grouping signal",
+            "description": "product shot, close-up, wide angle, macro, portrait, candid, aerial, flat lay, or other",
+        },
+        "representation": {
+            "type": "string",
+            "description": "direct (real scene) or what the depicted object is (painted miniature, oil painting, scale model, etc.)",
         },
     },
     "required": ["entities", "description", "tags"],

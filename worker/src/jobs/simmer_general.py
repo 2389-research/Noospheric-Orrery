@@ -42,20 +42,29 @@ mentioned in the sample documents should appear here.
 SEED_IMAGE_GOLDEN_SET = """# Image Golden Set
 
 ## Visual Entity Types
-- Subject — the primary subject of the image (person, animal, object, scene, building, etc.)
-- Object — identifiable items visible (products, tools, vehicles, furniture, food, etc.)
+
+- Subject — the primary focus of the image. For representations (paintings, miniatures, sculptures, screenshots), the subject is the representation itself. For multi-subject images, extract each distinct subject separately.
+- Object — identifiable items visible (tools, products, vehicles, furniture, clothing, food, instruments, etc.)
 - Person — anyone visible or identifiable
-- Text — any text visible in the image (signs, labels, screens, watermarks, etc.)
-- Setting — where the image was taken or what environment it depicts
-- Style — the visual style or medium (photograph, illustration, diagram, painting, screenshot, etc.)
-- Technique — visible artistic or technical methods (lighting, composition, editing, etc.)
+- Text — any readable text (signs, labels, watermarks, captions, handwriting, screens)
+- Setting — the environment or location depicted or where the image was taken
+- Material — visible materials, textures, or surfaces (metal, wood, fabric, glass, stone, water, paint, resin, etc.)
+- Color — dominant or notable colors (use descriptive names: "cobalt blue", "burnished gold", not just "blue"). Extract 2-4 most prominent.
+
+## Extraction Rules
+
+- Extract ONLY what is actually visible — do not infer or hallucinate
+- Distinguish what the image SHOWS (content) from what it IS (medium/context)
+- Be specific ("cherry blossom tree" not "tree", "banksia flower" not "flower")
+- For groups: extract the group AND notable individual items if distinguishable
 
 ## Reference Observations
 
 Look at every sample image and for EACH image record:
-1. ALL visual entities you observe (name + type from the taxonomy above)
-2. A 2-3 sentence description of what the image shows
-3. Searchable tags
+1. ALL visual entities (name + type from taxonomy above)
+2. A 2-3 sentence description: first sentence = medium + subject, second = visual details, third = context
+3. Searchable tags (categories, mood, use-case — not just entity name repeats)
+4. medium, shot_type, and representation
 
 Format as a JSON array — one entry per image:
 ```json
@@ -63,16 +72,19 @@ Format as a JSON array — one entry per image:
   {
     "image": "filename",
     "entities": [{"name": "entity name lowercase", "type": "EntityType"}, ...],
-    "description": "2-3 sentence description of the image",
-    "tags": ["tag1", "tag2", ...]
+    "description": "2-3 sentence description",
+    "tags": ["category", "mood", "use-case"],
+    "medium": "photograph | painting | illustration | diagram | screenshot | other",
+    "shot_type": "product shot | close-up | wide angle | macro | portrait | candid | aerial | other",
+    "representation": "direct | painted miniature | oil painting | scale model | other"
   },
   ...
 ]
 ```
 
-The reference list is the ground truth. Be thorough — every identifiable subject, object,
-person, text, and setting should appear. Descriptions should be accurate and useful for
-search (someone searching for this content should find it from the description).
+The reference list is the ground truth for image extraction. Be thorough — every identifiable
+subject, object, person, text, and setting should appear. Descriptions must be accurate enough
+that someone searching for the image content would find it from the description alone.
 """
 
 
