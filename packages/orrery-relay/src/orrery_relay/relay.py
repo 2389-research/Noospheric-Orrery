@@ -60,12 +60,15 @@ class Relay:
         aws_key = os.environ.get("AWS_ACCESS_KEY", "")
         gateway_url = os.environ.get("GATEWAY_URL", "")
         ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+        has_explicit_ollama_url = "OLLAMA_URL" in os.environ
         if explicit_backend:
             backend = explicit_backend
         elif aws_key:
             backend = "bedrock"
         elif gateway_url:
             backend = "gateway"
+        elif has_explicit_ollama_url:
+            backend = "ollama"
         else:
             backend = "gateway"
         kwargs: dict[str, Any] = {

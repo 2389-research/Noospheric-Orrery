@@ -147,7 +147,7 @@ The `orrery-relay` package lives at `packages/orrery-relay/` and is a dependency
 ### Model Names
 
 Use friendly model names everywhere in config and code:
-```
+```text
 # Cloud (Bedrock/Gateway)
 claude-sonnet-4-6
 claude-haiku-4-5
