@@ -15,10 +15,10 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
   const handleFiles = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     const fileArr = Array.from(files).filter(f =>
-      [".txt", ".md", ".json", ".csv"].some(ext => f.name.endsWith(ext))
+      [".txt", ".md", ".json", ".csv", ".jpg", ".jpeg", ".png", ".webp", ".gif"].some(ext => f.name.toLowerCase().endsWith(ext))
     );
     if (fileArr.length === 0) {
-      onError("No supported files found (.txt, .md, .json, .csv)");
+      onError("No supported files found (.txt, .md, .json, .csv, .jpg, .png, .webp)");
       return;
     }
 
@@ -70,7 +70,7 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
               Drop files here or click to browse.
             </p>
             <p className="text-[10px] text-muted-foreground/50 mt-2">
-              .txt .md .json .csv — multiple files supported.
+              .txt .md .json .csv .jpg .png .webp — multiple files supported.
             </p>
           </>
         )}
@@ -78,7 +78,7 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
           id="file-input"
           type="file"
           multiple
-          accept=".txt,.md,.json,.csv"
+          accept=".txt,.md,.json,.csv,.jpg,.jpeg,.png,.webp,.gif"
           className="hidden"
           onChange={(e) => handleFiles(e.target.files)}
         />

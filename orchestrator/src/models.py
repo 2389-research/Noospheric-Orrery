@@ -64,6 +64,7 @@ class IngestResult(BaseModel):
     domains: list[str]
     entity_count: int
     jobs_queued: list[str]
+    content_type: str = "text"
 
 class DirectoryIngestRequest(BaseModel):
     path: str

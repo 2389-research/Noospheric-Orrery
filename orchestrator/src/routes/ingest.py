@@ -19,6 +19,9 @@ from ..pipeline.domain_normalizer import assign_document_domains
 from ..pipeline.extractor import extract_document
 from ..pipeline.normalizer import normalize_entity
 from ..pipeline.cooccurrence import compute_cooccurrence_edges
+from ..pipeline.image_prep import is_image_file, image_to_base64, make_thumbnail
+from ..pipeline.classifier import classify_image
+from ..pipeline.extractor import extract_entities_from_image
 
 router = APIRouter()
 
@@ -38,6 +41,7 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
             "domains": domains,
             "entity_count": 0,
             "jobs_queued": [],
+            "content_type": "text",
         }
 
     doc_id = str(uuid.uuid4())
@@ -198,23 +202,151 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
         "domains": domains,
         "entity_count": entity_count,
         "jobs_queued": jobs_queued,
+        "content_type": "text",
+    }
+
+
+async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -> dict:
+    """Ingest an image: classify via VLLM, extract entities/description, store."""
+    settings = get_settings()
+    relay = Relay.from_settings(settings)
+
+    # Dedup by content hash
+    content_hash = hashlib.sha256(file_bytes).hexdigest()
+    existing = store.documents.get_by_hash(content_hash)
+    if existing:
+        domains = [d.domain_path for d in store.domains.get_domains_for_document(existing.id)]
+        return {
+            "document_id": existing.id, "title": title, "domains": domains,
+            "entity_count": 0, "jobs_queued": [], "content_type": "image",
+        }
+
+    # Encode for VLLM
+    b64, media_type = image_to_base64(Path(image_path))
+
+    # Generate thumbnail
+    thumb_dir = Path(settings.documents_dir) / "thumbnails"
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    thumb_path = str(make_thumbnail(Path(image_path), thumb_dir / f"{Path(image_path).stem}_thumb.jpg"))
+
+    doc_id = str(uuid.uuid4())
+
+    # Classify
+    taxonomy = store.domains.get_all_paths()
+    classification = await classify_image(
+        relay=relay, image_base64=b64, media_type=media_type,
+        existing_taxonomy=taxonomy, model=settings.classification_model,
+    )
+    domains = assign_document_domains(store, doc_id, classification)
+
+    # Extract entities + description
+    image_spec = store.specs.get_general(media_type="image")
+    spec_content = image_spec.spec_content if image_spec else (
+        "Extract: subject, objects, people, visible text, setting, style, shot_type. "
+        "Output entities with name (lowercase) and type."
+    )
+    extraction = await extract_entities_from_image(
+        relay=relay, image_base64=b64, media_type=media_type,
+        spec=spec_content, model=settings.extraction_model,
+    )
+
+    description = extraction.get("description", "")
+    tags = extraction.get("tags", [])
+
+    # Store document — description becomes the searchable content
+    store.documents.create(
+        doc_id, title, description, content_hash, image_path,
+        content_type="image", image_path=image_path, thumbnail_path=thumb_path,
+    )
+    store.documents.update_status(doc_id, "classified")
+
+    # Store single chunk (the image description)
+    from ..repositories.interfaces import Chunk
+    chunk_id = str(uuid.uuid4())
+    store.chunks.create_batch([Chunk(
+        id=chunk_id, document_id=doc_id, chunk_index=0,
+        text=description, offset=0, length=len(description),
+    )])
+
+    # Normalize and store entities
+    entity_count = 0
+    chunk_entities: dict[str, list[str]] = {}
+    for entity in extraction.get("entities", []):
+        name = entity.get("name", "").lower().strip()
+        etype = entity.get("type", "Object")
+        if not name:
+            continue
+        entity_id = normalize_entity(store, name, etype)
+        store.entity_sources.create(
+            entity_id=entity_id, document_id=doc_id, chunk_id=chunk_id,
+            extraction_pass="image_general",
+            spec_version=image_spec.version if image_spec else 0,
+        )
+        chunk_entities.setdefault(chunk_id, []).append(entity_id)
+        entity_count += 1
+
+    # Co-occurrence edges
+    if chunk_entities:
+        edges = compute_cooccurrence_edges(chunk_entities)
+        for edge in edges:
+            store.relationships.upsert_cooccurrence(
+                edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
+            )
+        store.documents.update_status(doc_id, "extracted")
+
+    # Embed description + entities inline (SQLite mode)
+    if entity_count > 0:
+        import os as _os
+        if _os.environ.get("DB_BACKEND", "sqlite").lower() != "firestore":
+            try:
+                from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
+                embed_new_entities(store.conn)
+                embed_new_chunks(store.conn)
+            except Exception as e:
+                print(f"Search index update after image ingest: {e}")
+
+    # Queue image simmer if threshold hit
+    jobs_queued = []
+    if not image_spec:
+        existing_job = store.jobs.get_existing("simmer_general_image", "general", ["queued", "running"])
+        if not existing_job:
+            # Check if we have enough images
+            img_count = store.conn.execute(
+                "SELECT COUNT(*) FROM documents WHERE content_type = 'image'"
+            ).fetchone()[0]
+            if img_count >= settings.general_spec_threshold:
+                job_id = str(uuid.uuid4())
+                store.jobs.create(job_id, "simmer_general_image", "general")
+                jobs_queued.append(job_id)
+
+    return {
+        "document_id": doc_id, "title": title, "domains": domains,
+        "entity_count": entity_count, "jobs_queued": jobs_queued, "content_type": "image",
     }
 
 
 @router.post("/ingest", response_model=IngestResult)
 async def ingest_file(file: UploadFile = File(...), auth: AuthStore = Depends(get_auth_store)):
-    content = (await file.read()).decode("utf-8")
+    file_bytes = await file.read()
     title = file.filename or "untitled"
-
     settings = get_settings()
     os.makedirs(settings.documents_dir, exist_ok=True)
-    doc_path = os.path.join(settings.documents_dir, f"{uuid.uuid4()}_{title}")
-    with open(doc_path, "w") as f:
-        f.write(content)
 
     store = auth.store
     try:
-        result = await _ingest_document(store, title, content, doc_path)
+        if is_image_file(title):
+            # Save image as binary
+            doc_path = os.path.join(settings.documents_dir, f"{uuid.uuid4()}_{title}")
+            with open(doc_path, "wb") as f:
+                f.write(file_bytes)
+            result = await _ingest_image(store, title, file_bytes, doc_path)
+        else:
+            # Text file — existing path
+            content = file_bytes.decode("utf-8")
+            doc_path = os.path.join(settings.documents_dir, f"{uuid.uuid4()}_{title}")
+            with open(doc_path, "w") as f:
+                f.write(content)
+            result = await _ingest_document(store, title, content, doc_path)
     finally:
         store.close()
     return result
@@ -229,10 +361,19 @@ async def ingest_directory(request: DirectoryIngestRequest, auth: AuthStore = De
     store = auth.store
     results = []
     try:
+        text_exts = {".txt", ".md", ".json", ".csv"}
+        image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
         for file_path in sorted(dir_path.rglob("*")):
-            if file_path.is_file() and file_path.suffix in (".txt", ".md", ".json", ".csv"):
+            if not file_path.is_file():
+                continue
+            suffix = file_path.suffix.lower()
+            if suffix in text_exts:
                 content = file_path.read_text(errors="replace")
                 result = await _ingest_document(store, file_path.stem, content, str(file_path))
+                results.append(result)
+            elif suffix in image_exts:
+                file_bytes = file_path.read_bytes()
+                result = await _ingest_image(store, file_path.name, file_bytes, str(file_path))
                 results.append(result)
     finally:
         store.close()

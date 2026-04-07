@@ -37,10 +37,12 @@ class SQLiteDocumentRepository(DocumentRepository):
     def count(self):
         return self._conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
 
-    def create(self, id, title, content, content_hash, source_path=None):
+    def create(self, id, title, content, content_hash, source_path=None,
+               content_type="text", image_path=None, thumbnail_path=None):
         self._conn.execute(
-            "INSERT INTO documents (id, title, content, content_hash, source_path, status) VALUES (?, ?, ?, ?, ?, 'pending')",
-            (id, title, content, content_hash, source_path),
+            "INSERT INTO documents (id, title, content, content_hash, source_path, status, content_type, image_path, thumbnail_path) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+            (id, title, content, content_hash, source_path, content_type, image_path, thumbnail_path),
         )
         self._conn.commit()
         return id
@@ -568,9 +570,10 @@ class SQLiteSpecRepository(SpecRepository):
         )
         self._conn.commit()
 
-    def get_general(self):
+    def get_general(self, media_type="text"):
         row = self._conn.execute(
-            "SELECT * FROM specs WHERE domain_path IS NULL ORDER BY version DESC LIMIT 1"
+            "SELECT * FROM specs WHERE domain_path IS NULL AND (media_type = ? OR media_type IS NULL) ORDER BY version DESC LIMIT 1",
+            (media_type,),
         ).fetchone()
         if not row:
             return None
