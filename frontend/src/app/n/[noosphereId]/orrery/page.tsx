@@ -144,6 +144,7 @@ export default function VizPage() {
             activeRef.current?.contentWindow?.postMessage({
               type: "search_result",
               entities: data.entities,
+              doc_ids: data.doc_ids || [],
             }, "*");
           }
         } catch { /* ignore */ }
