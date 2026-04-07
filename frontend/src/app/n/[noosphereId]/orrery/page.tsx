@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { GalaxyPanel } from "@/components/galaxy/galaxy-panel";
 import { ReaderPane } from "@/components/reader/reader-pane";
+import { ImagePane } from "@/components/image-pane";
 import { api } from "@/lib/api";
 import { getAuthToken } from "@/lib/firebase";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
@@ -34,6 +35,7 @@ export default function VizPage() {
   const [starEntityName, setStarEntityName] = useState<string>("");
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
+  const [selectedDocType, setSelectedDocType] = useState<string>("text");
   const [domainColors, setDomainColors] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult | null>(null);
@@ -102,6 +104,7 @@ export default function VizPage() {
       if (e.data?.type === "node_selected") {
         if (e.data.nodeType === "document") {
           setSelectedDocId(e.data.data.id as string);
+          setSelectedDocType((e.data.data.content_type as string) || "text");
           setSelectedNode(null);
         } else {
           setSelectedNode({ nodeType: e.data.nodeType, data: e.data.data });
@@ -357,14 +360,25 @@ export default function VizPage() {
           borderRight: "1px solid rgba(100,200,180,0.12)",
           overflowY: "auto",
         }}>
-          <ReaderPane
-            documentId={selectedDocId!}
-            onClose={() => setSelectedDocId(null)}
-            onNavigateEntity={(entityId) => {
-              setSelectedDocId(null);
-              enterStarView(entityId, "");
-            }}
-          />
+          {selectedDocType === "image" ? (
+            <ImagePane
+              documentId={selectedDocId!}
+              onClose={() => setSelectedDocId(null)}
+              onNavigateEntity={(entityId) => {
+                setSelectedDocId(null);
+                enterStarView(entityId, "");
+              }}
+            />
+          ) : (
+            <ReaderPane
+              documentId={selectedDocId!}
+              onClose={() => setSelectedDocId(null)}
+              onNavigateEntity={(entityId) => {
+                setSelectedDocId(null);
+                enterStarView(entityId, "");
+              }}
+            />
+          )}
         </div>
       )}
 

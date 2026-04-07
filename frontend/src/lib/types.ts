@@ -5,6 +5,8 @@ export interface DocumentSummary {
   created_at: string;
   domains: string[];
   entity_count: number;
+  content_type?: "text" | "image";
+  thumbnail_path?: string;
 }
 
 export interface DomainInfo {
