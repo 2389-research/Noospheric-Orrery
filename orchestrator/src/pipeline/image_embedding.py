@@ -30,10 +30,10 @@ def embed_image(path: Path) -> np.ndarray | None:
         image = Image.open(path).convert("RGB")
         inputs = processor(images=image, return_tensors="pt")
         with torch.no_grad():
-            outputs = model.get_image_features(**inputs)
-        embedding = outputs[0].numpy()
+            outputs = model.vision_model(**{k: v for k, v in inputs.items() if k != "input_ids" and k != "attention_mask"})
+        embedding = outputs.pooler_output[0].numpy()
         return embedding / np.linalg.norm(embedding)
-    except ImportError:
+    except (ImportError, Exception):
         return None
 
 
@@ -47,12 +47,13 @@ def embed_image_text(text: str) -> np.ndarray | None:
         import torch
 
         model, processor = _get_siglip()
-        inputs = processor(text=[text], return_tensors="pt", padding=True)
+        inputs = processor(text=[text], return_tensors="pt", padding=True, truncation=True)
+        text_inputs = {k: v for k, v in inputs.items() if k != "pixel_values"}
         with torch.no_grad():
-            outputs = model.get_text_features(**inputs)
-        embedding = outputs[0].numpy()
+            outputs = model.text_model(**text_inputs)
+        embedding = outputs.pooler_output[0].numpy()
         return embedding / np.linalg.norm(embedding)
-    except ImportError:
+    except (ImportError, Exception):
         return None
 
 
