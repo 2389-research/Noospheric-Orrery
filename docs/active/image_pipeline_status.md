@@ -1,31 +1,30 @@
-# Image Pipeline — Current Status
+# Image Pipeline — Status
 
-**Date:** 2026-04-07
-**Branch:** `feat/image-pipeline`
+**Date:** 2026-04-08
+**Branch:** `feat/image-pipeline` — ready for PR
 
-## What's Working
+## Working End-to-End
 
-- Upload images via POST /ingest — auto-detects, classifies, extracts entities/description
-- Text search finds images via embedded descriptions
-- Parallel search with `include_images=true`
+- Upload images via UI → classify into domains (no extraction until spec exists)
+- Simmer triggers after batch upload completes (frontend calls POST /simmer/general/image)
+- Single-stage domain simmer: general spec seed → add domain context → evaluate with Haiku → 2.7→7.3
+- Batch extraction with simmered spec: 87 entities across 5 images
+- Text + image search with toggle (📷 on/off)
+- Image results show thumbnails at top of search results
+- Clicking image opens ImagePane with photo + entities + description
+- Star view shows image docs with co-occurrence entities
 - Image serving endpoint: GET /images/{document_id}
-- Orrery viz: star view shows image docs, clicking opens ImagePane with actual photo
-- ImagePane: shows image + grouped entities (clickable navigation) + domains + description
-- Co-occurrence edges computed for image entities
-- Star view passes content_type for correct panel routing
-- Image simmering job type wired into worker
-- Simmered seed spec (9.0/10) with representation layer, color entities, medium/shot_type fields
-- CPU-only torch via pyproject.toml index config (200MB vs 5GB)
-- Sonnet as clerk model for reliable score parsing
 
-## Currently Running
+## Architecture
 
-Image simmer job — Phase 1 golden set in progress. Previous run completed Phase 1 (7.7 best) but Phase 2 failed due to missing --media-type argument in evaluator. That's now fixed.
+- **Text pipeline**: 2-stage simmer (golden set → extraction spec) — entity types vary by domain
+- **Image pipeline**: 1-stage simmer (general spec + domain context) — entity types are stable, domain context adds recognition
+- **Search**: Two specialist indexes (sentence-transformers for text, SigLIP for images)
+- **Judges**: Sonnet reasons, Haiku does vision (query_image tool + pre-scans + evaluator)
 
-## Remaining
+## Remaining Polish
 
-- Verify Phase 2 completes with the evaluator fix
-- SigLIP native image embeddings (module written, not tested in Docker)
-- Domain-specific image simmering (not built yet — same pattern as text)
-- Thumbnail generation on ingest (code exists but not integrated into Docker Pillow)
-- Test with diverse image types (portfolio photos via the UI)
+- Frontend rebuild needed for latest search UI fixes
+- SigLIP embeddings not computed during batch extraction (falls back to sentence-transformers)
+- Domain-specific image simmering not wired into worker dispatch (POC tested)
+- Default iteration count should be 3 (seed + 3)
