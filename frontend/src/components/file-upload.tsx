@@ -36,6 +36,18 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
       }
     }
 
+    // After all uploads complete, trigger image simmer if images were uploaded
+    const hadImages = fileArr.some(f =>
+      [".jpg", ".jpeg", ".png", ".webp", ".gif"].some(ext => f.name.toLowerCase().endsWith(ext))
+    );
+    if (hadImages) {
+      try {
+        await api.triggerImageSimmer();
+      } catch {
+        // Already running or no images — fine
+      }
+    }
+
     setUploading(false);
     setProgress({ current: 0, total: 0 });
   }, [onResult, onError]);

@@ -334,18 +334,9 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
         except Exception as e:
             print(f"SigLIP embedding after image ingest: {e}")
 
-    # Queue image simmer when enough images exist (threshold = 5)
+    # Image simmer is user-triggered via POST /simmer/general/image
+    # (no auto-trigger — user uploads batch first, then decides to simmer)
     jobs_queued = []
-    if not image_spec:
-        existing_job = store.jobs.get_existing("simmer_general_image", "general", ["queued", "running"])
-        if not existing_job:
-            img_count = store.conn.execute(
-                "SELECT COUNT(*) FROM documents WHERE content_type = 'image'"
-            ).fetchone()[0]
-            if img_count >= 5:
-                job_id = str(uuid.uuid4())
-                store.jobs.create(job_id, "simmer_general_image", "general")
-                jobs_queued.append(job_id)
 
     return {
         "document_id": doc_id, "title": title, "domains": domains,
