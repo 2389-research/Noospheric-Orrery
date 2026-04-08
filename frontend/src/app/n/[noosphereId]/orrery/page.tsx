@@ -197,7 +197,16 @@ export default function VizPage() {
       console.error("Search failed:", e);
     }
     setSearching(false);
-  }, [searchQuery, viewMode]);
+  }, [searchQuery, viewMode, includeImages]);
+
+  // Re-search when image toggle changes (if there's an active search)
+  const includeImagesRef = useRef(includeImages);
+  useEffect(() => {
+    if (includeImagesRef.current !== includeImages && searchQuery.trim()) {
+      includeImagesRef.current = includeImages;
+      handleSearch();
+    }
+  }, [includeImages, searchQuery, handleSearch]);
 
   // Click search result → navigate to it
   const flyToEntity = useCallback((entityId: string) => {
@@ -266,8 +275,8 @@ export default function VizPage() {
           {searching ? "..." : "search"}
         </button>
         <button
-          onClick={() => setIncludeImages(!includeImages)}
-          title={includeImages ? "Showing text + images" : "Showing text only"}
+          onClick={() => setIncludeImages(prev => !prev)}
+          title={includeImages ? "Click to search text only" : "Click to include image results"}
           style={{
             padding: "8px 10px", fontSize: 11,
             fontFamily: "'Courier New', monospace",
@@ -278,7 +287,7 @@ export default function VizPage() {
             cursor: "pointer",
           }}
         >
-          {includeImages ? "txt+img" : "txt"}
+          {includeImages ? "📷 on" : "📷 off"}
         </button>
       </div>
 
