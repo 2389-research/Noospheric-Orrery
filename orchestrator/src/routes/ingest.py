@@ -241,60 +241,58 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
     )
     domains = assign_document_domains(store, doc_id, classification)
 
-    # Extract entities + description
-    image_spec = store.specs.get_general(media_type="image")
-    spec_content = image_spec.spec_content if image_spec else (
-        "Extract: subject, objects, people, visible text, setting, style, shot_type. "
-        "Output entities with name (lowercase) and type."
-    )
-    extraction = await extract_entities_from_image(
-        relay=relay, image_base64=b64, media_type=media_type,
-        spec=spec_content, model=settings.extraction_model,
-    )
-
-    description = extraction.get("description", "")
-    tags = extraction.get("tags", [])
-
-    # Store document — description becomes the searchable content
+    # Store document — classify only, no extraction until spec exists
     store.documents.create(
-        doc_id, title, description, content_hash, image_path,
+        doc_id, title, "", content_hash, image_path,
         content_type="image", image_path=image_path, thumbnail_path=thumb_path,
     )
     store.documents.update_status(doc_id, "classified")
 
-    # Store single chunk (the image description)
+    # Store single chunk (empty for now — batch extraction fills in description + entities)
     from ..repositories.interfaces import Chunk
     chunk_id = str(uuid.uuid4())
     store.chunks.create_batch([Chunk(
         id=chunk_id, document_id=doc_id, chunk_index=0,
-        text=description, offset=0, length=len(description),
+        text="", offset=0, length=0,
     )])
 
-    # Normalize and store entities
+    # Extract only if image spec exists (same pattern as text)
     entity_count = 0
-    chunk_entities: dict[str, list[str]] = {}
-    for entity in extraction.get("entities", []):
-        name = entity.get("name", "").lower().strip()
-        etype = entity.get("type", "Object")
-        if not name:
-            continue
-        entity_id = normalize_entity(store, name, etype)
-        store.entity_sources.create(
-            entity_id=entity_id, document_id=doc_id, chunk_id=chunk_id,
-            extraction_pass="image_general",
-            spec_version=image_spec.version if image_spec else 0,
+    image_spec = store.specs.get_general(media_type="image")
+    if image_spec:
+        extraction = await extract_entities_from_image(
+            relay=relay, image_base64=b64, media_type=media_type,
+            spec=image_spec.spec_content, model=settings.extraction_model,
         )
-        chunk_entities.setdefault(chunk_id, []).append(entity_id)
-        entity_count += 1
 
-    # Co-occurrence edges
-    if chunk_entities:
-        edges = compute_cooccurrence_edges(chunk_entities)
-        for edge in edges:
-            store.relationships.upsert_cooccurrence(
-                edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
+        description = extraction.get("description", "")
+
+        # Update document content with description
+        store.conn.execute("UPDATE documents SET content = ? WHERE id = ?", (description, doc_id))
+        store.conn.execute("UPDATE chunks SET text = ?, length = ? WHERE id = ?", (description, len(description), chunk_id))
+
+        chunk_entities: dict[str, list[str]] = {}
+        for entity in extraction.get("entities", []):
+            name = entity.get("name", "").lower().strip()
+            etype = entity.get("type", "Object")
+            if not name:
+                continue
+            entity_id = normalize_entity(store, name, etype)
+            store.entity_sources.create(
+                entity_id=entity_id, document_id=doc_id, chunk_id=chunk_id,
+                extraction_pass="image_general",
+                spec_version=image_spec.version,
             )
-        store.documents.update_status(doc_id, "extracted")
+            chunk_entities.setdefault(chunk_id, []).append(entity_id)
+            entity_count += 1
+
+        if chunk_entities:
+            edges = compute_cooccurrence_edges(chunk_entities)
+            for edge in edges:
+                store.relationships.upsert_cooccurrence(
+                    edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
+                )
+            store.documents.update_status(doc_id, "extracted")
 
     # Embed for search — both text (sentence-transformers) and image (SigLIP)
     import os as _os
