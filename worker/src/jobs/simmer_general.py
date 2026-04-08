@@ -443,7 +443,10 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             prescan_path = prescan_dir / f"{img_file.stem}.txt"
             lines = [f"IMAGE: {img_file.name}", f"DESCRIPTION: {prescan.get('description', '')}", "", "ENTITIES:"]
             for e in prescan.get("entities", []):
-                lines.append(f"  - {e['name']} ({e['type']})")
+                if isinstance(e, dict) and "name" in e:
+                    lines.append(f"  - {e['name']} ({e.get('type', 'Unknown')})")
+                elif isinstance(e, str):
+                    lines.append(f"  - {e}")
             lines.extend(["", "DETAILS:", prescan.get("details", "")])
             prescan_path.write_text("\n".join(lines))
         except Exception as exc:
