@@ -436,6 +436,49 @@ export default function VizPage() {
             </div>
           </div>
 
+          {/* Image results — shown first when present */}
+          {searchResults.images && searchResults.images.length > 0 && (
+            <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(100,200,180,0.15)" }}>
+              <div style={{ fontSize: 9, color: "rgba(100,200,180,0.6)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+                Image Results · {searchResults.images.length}
+              </div>
+              {searchResults.images.slice(0, 5).map((img, i) => (
+                <button
+                  key={i}
+                  onClick={() => {
+                    setSelectedDocId(img.document_id);
+                    setSelectedDocType("image");
+                  }}
+                  style={{
+                    display: "block", width: "100%", textAlign: "left",
+                    padding: 0, marginBottom: 8,
+                    background: "none", border: "none", cursor: "pointer",
+                    fontFamily: "'Courier New', monospace",
+                  }}
+                >
+                  <div style={{
+                    borderRadius: 4, overflow: "hidden",
+                    border: "1px solid rgba(100,200,180,0.2)",
+                    background: "rgba(100,200,180,0.03)",
+                  }}>
+                    <img
+                      src={`/api/images/${img.document_id}`}
+                      alt={img.title}
+                      style={{ width: "100%", height: 120, objectFit: "cover", display: "block" }}
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
+                    <div style={{ padding: "6px 10px" }}>
+                      <div style={{ fontSize: 10, color: "rgba(100,200,180,0.7)", display: "flex", alignItems: "center", gap: 4 }}>
+                        {img.title}
+                        <span style={{ marginLeft: "auto", fontSize: 9, color: "rgba(100,200,180,0.4)" }}>{img.score.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Entity results — clickable → fly to */}
           <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(100,180,255,0.08)" }}>
             <div style={{ fontSize: 9, color: "rgba(140,200,255,0.6)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
@@ -467,53 +510,6 @@ export default function VizPage() {
               </div>
             ))}
           </div>
-
-          {/* Image results — shown first when present */}
-          {searchResults.images && searchResults.images.length > 0 && (
-            <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(100,200,180,0.15)" }}>
-              <div style={{ fontSize: 9, color: "rgba(100,200,180,0.6)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
-                Image Results · {searchResults.images.length}
-              </div>
-              {searchResults.images.slice(0, 5).map((img, i) => (
-                <button
-                  key={i}
-                  onClick={() => {
-                    setSelectedDocId(img.document_id);
-                    setSelectedDocType("image");
-                    setSearchResults(null);
-                  }}
-                  style={{
-                    display: "block", width: "100%", textAlign: "left",
-                    padding: 0, marginBottom: 8,
-                    background: "none", border: "none", cursor: "pointer",
-                    fontFamily: "'Courier New', monospace",
-                  }}
-                >
-                  <div style={{
-                    borderRadius: 4, overflow: "hidden",
-                    border: "1px solid rgba(100,200,180,0.2)",
-                    background: "rgba(100,200,180,0.03)",
-                  }}>
-                    <img
-                      src={`/api/images/${img.document_id}`}
-                      alt={img.title}
-                      style={{ width: "100%", height: 120, objectFit: "cover", display: "block" }}
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                    />
-                    <div style={{ padding: "6px 10px" }}>
-                      <div style={{ fontSize: 10, color: "rgba(100,200,180,0.7)", display: "flex", alignItems: "center", gap: 4 }}>
-                        {img.title}
-                        <span style={{ marginLeft: "auto", fontSize: 9, color: "rgba(100,200,180,0.4)" }}>{img.score.toFixed(2)}</span>
-                      </div>
-                      <div style={{ fontSize: 10, color: "rgba(200,215,235,0.6)", lineHeight: 1.4, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const }}>
-                        {img.description}
-                      </div>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
 
           {/* Document excerpts — text docs only */}
           <div style={{ padding: "12px 16px" }}>
