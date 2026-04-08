@@ -358,21 +358,23 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
 
 
 async def run_simmer_general_image(job: dict, db_path: str) -> None:
-    """Simmer a general image extraction spec.
+    """Simmer an image extraction spec — single-stage domain context approach.
 
-    Same two-phase pattern as text simmering:
-    - Phase 1: Golden set — VLLM surveys sample images, builds reference entity/description list
-    - Phase 2: Extraction spec — iteratively refine the visual spec, evaluator runs VLLM on images
+    Unlike text (2-stage: golden set → extraction spec), images use one loop:
+    - Seed = general image spec (entity types, format, rules)
+    - Simmering adds domain-specific recognition context
+    - Evaluator runs Haiku on sample images each iteration
+    - Judges propose domain context additions via ASI
 
-    The resulting spec teaches a smaller model how to extract entities and generate
-    descriptions from any image, not just images in a specific domain.
+    The general spec handles structure. Domain context adds recognition
+    (type vocabulary, naming conventions, domain knowledge).
     """
     settings = get_settings()
     config = json.loads(job["config"]) if job.get("config") else {}
     iterations = config.get("iterations", settings.simmer_iterations)
     conn = get_connection(db_path)
 
-    # Get sample images (documents with content_type='image')
+    # Get sample images
     docs = conn.execute(
         "SELECT id, title, image_path FROM documents WHERE content_type = 'image' AND status IN ('classified', 'extracted', 'enriched') ORDER BY RANDOM() LIMIT 5"
     ).fetchall()
@@ -384,21 +386,20 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
     specs_dir = Path(settings.specs_dir)
     specs_dir.mkdir(parents=True, exist_ok=True)
     sample_dir = specs_dir / "image_samples"
-    # Clear old samples
     if sample_dir.exists():
         for old_file in sample_dir.glob("*"):
             old_file.unlink()
     sample_dir.mkdir(exist_ok=True)
 
-    # Copy sample images to the sample dir
     import shutil
     for doc in docs:
         src = Path(doc["image_path"])
         if src.exists():
             shutil.copy2(src, sample_dir / f"{doc['id']}{src.suffix}")
 
-    # Pre-scan: Haiku describes each image → text files for judges to read
-    # Judges read these descriptions instead of opening image files (much cheaper)
+    conn.close()
+
+    # Pre-scan with Haiku
     prescan_dir = specs_dir / "image_prescans"
     if prescan_dir.exists():
         for old_file in prescan_dir.glob("*"):
@@ -406,58 +407,54 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
     prescan_dir.mkdir(exist_ok=True)
 
     relay = Relay.from_settings(settings)
-    print(f"  Pre-scanning {len(docs)} images with Haiku...", flush=True)
     import base64
+    print(f"  Pre-scanning {len(docs)} images with Haiku...", flush=True)
     for img_file in sorted(sample_dir.glob("*.jpg")) + sorted(sample_dir.glob("*.png")):
         try:
             b64 = base64.b64encode(img_file.read_bytes()).decode()
-            suffix = img_file.suffix.lower()
-            media_type = "image/jpeg" if suffix in (".jpg", ".jpeg") else "image/png"
-
+            media_type = "image/jpeg" if img_file.suffix.lower() in (".jpg", ".jpeg") else "image/png"
             prescan = await relay.complete_structured(
-                model=settings.extraction_model,
-                max_tokens=2048,
+                model=settings.extraction_model, max_tokens=2048,
                 messages=[{"role": "user", "content": [
                     {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
-                    {"type": "text", "text": (
-                        "Describe this image thoroughly for a knowledge graph. Include:\n"
-                        "1. What the image shows (medium, subject, setting)\n"
-                        "2. Every identifiable entity (people, objects, text, materials, colors, techniques)\n"
-                        "3. A 2-3 sentence searchable description\n"
-                        "Be exhaustive — list everything visible."
-                    )},
+                    {"type": "text", "text": "Describe everything visible. List entities, materials, colors, techniques, setting. Be exhaustive."},
                 ]}],
-                schema={
-                    "type": "object",
-                    "properties": {
-                        "entities": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "type": {"type": "string"}}, "required": ["name", "type"]}},
-                        "description": {"type": "string"},
-                        "details": {"type": "string", "description": "Detailed inventory of everything visible"},
-                    },
-                    "required": ["entities", "description", "details"],
-                },
-                tool_name="prescan",
-                tool_description="Pre-scan an image for the golden set judges",
+                schema={"type": "object", "properties": {
+                    "entities": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "type": {"type": "string"}}, "required": ["name", "type"]}},
+                    "description": {"type": "string"},
+                    "details": {"type": "string"},
+                }, "required": ["entities", "description", "details"]},
+                tool_name="prescan", tool_description="Pre-scan image",
             )
-            # Write as readable text file
-            prescan_path = prescan_dir / f"{img_file.stem}.txt"
             lines = [f"IMAGE: {img_file.name}", f"DESCRIPTION: {prescan.get('description', '')}", "", "ENTITIES:"]
             for e in prescan.get("entities", []):
                 if isinstance(e, dict) and "name" in e:
                     lines.append(f"  - {e['name']} ({e.get('type', 'Unknown')})")
-                elif isinstance(e, str):
-                    lines.append(f"  - {e}")
             lines.extend(["", "DETAILS:", prescan.get("details", "")])
-            prescan_path.write_text("\n".join(lines))
+            (prescan_dir / f"{img_file.stem}.txt").write_text("\n".join(lines))
         except Exception as exc:
             print(f"  Warning: pre-scan failed for {img_file.name}: {exc}", flush=True)
-
     print(f"  Pre-scans written to {prescan_dir}", flush=True)
 
-    seed_path = specs_dir / "image_seed.md"
-    seed_path.write_text(SEED_IMAGE_GOLDEN_SET)
-    conn.close()
+    # Build golden set from pre-scans for evaluator
+    golden_entries = []
+    for txt_file in sorted(prescan_dir.glob("*.txt")):
+        content = txt_file.read_text()
+        entities = []
+        for line in content.split("\n"):
+            line = line.strip()
+            if line.startswith("- ") and "(" in line:
+                name = line[2:line.rfind("(")].strip()
+                etype = line[line.rfind("(")+1:line.rfind(")")].strip()
+                entities.append({"name": name.lower(), "type": etype.lower()})
+        desc_match = content.split("DESCRIPTION: ", 1)
+        desc = desc_match[1].split("\n")[0] if len(desc_match) > 1 else ""
+        golden_entries.append({"image": txt_file.stem, "entities": entities, "description": desc, "tags": []})
 
+    golden_path = specs_dir / "image_golden_from_prescans.md"
+    golden_path.write_text("# Golden Set\n\n```json\n" + json.dumps(golden_entries, indent=2) + "\n```\n")
+
+    # Provider config
     backend = settings.anthropic_backend
     provider_kwargs = {"api_provider": backend}
     if backend == "bedrock":
@@ -472,22 +469,18 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
     job_id = job["id"]
     print(f"Simmering general IMAGE spec (job {job_id})", flush=True)
 
-    # query_image tool — lets judges ask Haiku to look at specific images
+    # query_image tool
     async def query_image(image_path: str, question: str) -> str:
-        """Ask Haiku to look at an image and answer a question about it."""
         img_path = Path(image_path)
         if not img_path.exists():
-            # Try relative to sample dir
             img_path = sample_dir / image_path
         if not img_path.exists():
             return f"Image not found: {image_path}"
         try:
             b64 = base64.b64encode(img_path.read_bytes()).decode()
-            suffix = img_path.suffix.lower()
-            media_type = "image/jpeg" if suffix in (".jpg", ".jpeg") else "image/png"
+            media_type = "image/jpeg" if img_path.suffix.lower() in (".jpg", ".jpeg") else "image/png"
             result = await relay.complete(
-                model=settings.extraction_model,
-                max_tokens=1024,
+                model=settings.extraction_model, max_tokens=1024,
                 messages=[{"role": "user", "content": [
                     {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
                     {"type": "text", "text": question},
@@ -495,7 +488,7 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             )
             return result.text
         except Exception as e:
-            return f"Error querying image: {e}"
+            return f"Error: {e}"
 
     image_tools = {
         "query_image": {
@@ -504,12 +497,12 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
                 "type": "function",
                 "function": {
                     "name": "query_image",
-                    "description": "Ask Haiku vision model to look at a sample image and answer a question. Use this to verify entities, check details, or investigate what's visible. Much cheaper than reading the image directly.",
+                    "description": "Ask Haiku to look at an image and answer a question.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "image_path": {"type": "string", "description": "Path to the image file (filename from image_samples/ dir)"},
-                            "question": {"type": "string", "description": "What to look for or verify in the image"},
+                            "image_path": {"type": "string"},
+                            "question": {"type": "string"},
                         },
                         "required": ["image_path", "question"],
                     },
@@ -518,105 +511,37 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
         },
     }
 
-    # Phase 1: Golden set — VLLM surveys sample images
-    golden_result = await refine(
-        artifact=str(seed_path),
-        criteria={
-            "coverage": "The reference list captures every identifiable entity visible in the sample images — nothing missed",
-            "description_quality": "Descriptions are accurate, specific, and useful for search — someone could find the image from the description alone",
-            "precision": "Every entity and description is grounded in what's actually visible — no hallucinated objects or scenes",
-        },
-        primary="coverage",
-        iterations=iterations,
-        judge_mode="board",
-        judge_panel=[
-            {
-                "name": "Coverage & Description",
-                "lens": (
-                    "You have three ways to understand what's in the images:\n"
-                    "1. Pre-scans in image_prescans/*.txt (Haiku's initial observations)\n"
-                    "2. Evaluator outputs in eval-*/*.json (Haiku running the current golden set)\n"
-                    "3. The query_image tool — ask Haiku specific questions about any image\n\n"
-                    "Use query_image to investigate things the pre-scans might have missed. "
-                    "Cross-reference the golden set against all sources. DO NOT open .jpg files directly."
-                ),
-            },
-            {
-                "name": "Precision & Accuracy",
-                "lens": (
-                    "You have three ways to verify entities:\n"
-                    "1. Pre-scans in image_prescans/*.txt\n"
-                    "2. Evaluator outputs in eval-*/*.json\n"
-                    "3. The query_image tool — ask Haiku to verify specific entities in specific images\n\n"
-                    "For disputed or uncertain entities, use query_image to get a definitive answer. "
-                    "Flag entities the golden set claims but Haiku can't confirm. DO NOT open .jpg files."
-                ),
-            },
-        ],
-        output_dir=specs_dir / "image_golden",
-        generator_model=settings.classification_model,
-        judge_model=settings.classification_model,
-        clerk_model=settings.classification_model,
-        evaluator=(
-            f"uv run python {shlex.quote(str(Path(__file__).resolve().parent / 'evaluate_image_spec.py'))}"
-            f" --candidate {{candidate_path}}"
-            f" --samples-dir {shlex.quote(str(sample_dir))}"
-            f" --golden-set {{candidate_path}}"
-            f" --output-dir {{output_dir}}"
-            f" --iteration {{iteration}}"
-        ),
-        background=(
-            f"Haiku has pre-scanned each sample image. The pre-scan results are in {prescan_dir}/ as .txt files.\n"
-            f"Each file contains: entities found, description, and detailed observations.\n\n"
-            f"IMPORTANT: Each iteration, the evaluator also runs Haiku on the sample images with the\n"
-            f"current golden set as context. The evaluator output shows what Haiku actually finds.\n"
-            f"Read both the pre-scans AND the eval-N/*.json files for the latest Haiku observations.\n\n"
-            f"DO NOT open image files (.jpg) directly.\n\n"
-            f"The golden set must contain for EACH image:\n"
-            f"1. A list of visual entities (name + type)\n"
-            f"2. A 2-3 sentence description\n"
-            f"3. Searchable tags\n\n"
-            f"If the evaluator shows Haiku found entities not in the golden set, add them.\n"
-            f"If the evaluator shows entities the golden set lists but Haiku can't find, remove or fix them."
-        ),
-        on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(specs_dir / "image_golden")),
-        custom_tools=image_tools,
-        **provider_kwargs,
-    )
+    # Write seed — general image spec with empty domain context
+    seed_path = specs_dir / "image_seed.md"
+    seed_path.write_text(SEED_IMAGE_GOLDEN_SET)
 
-    # Phase 2: Image extraction spec
-    golden_set_path = specs_dir / "image_golden_set.md"
-    golden_set_path.write_text(golden_result.best_candidate)
     evaluator_script = Path(__file__).resolve().parent / "evaluate_image_spec.py"
 
+    # Single-stage simmer: general spec seed → add domain context
     spec_result = await refine(
-        artifact=golden_result.best_candidate,
+        artifact=str(seed_path),
         criteria={
-            "coverage": "When run on sample images, the spec captures all entities from the golden set",
-            "description_quality": "Generated descriptions are accurate, specific, and useful for search",
-            "generalizability": "The spec uses general visual observation rules — it would work on any type of image, not just these samples",
-            "precision": "No hallucinated entities or inaccurate descriptions",
+            "extraction_quality": "When run on sample images, the spec + domain context produces accurate, specific entities",
+            "description_quality": "Descriptions are accurate, specific, and searchable — improved by domain knowledge",
+            "domain_specificity": "The domain context helps Haiku recognize domain-specific things it would miss with the general spec alone",
         },
-        primary="coverage",
+        primary="extraction_quality",
         iterations=iterations,
         judge_mode="board",
         judge_panel=[
             {
-                "name": "Coverage & Description Quality",
+                "name": "Extraction & Description",
                 "lens": (
-                    "Read eval-*/*.json for Haiku's extraction outputs. "
-                    "Use query_image to verify specific entities or check description accuracy. "
-                    "Check: did the spec guide Haiku to find all golden set entities? "
-                    "Are descriptions searchable? DO NOT open .jpg files directly."
+                    "Read eval-*/*.json for Haiku extractions. Compare to pre-scans in image_prescans/*.txt. "
+                    "Use query_image to verify specifics. Does the domain context help Haiku be more specific?"
                 ),
             },
             {
-                "name": "Precision & Generalizability",
+                "name": "Generalizability & Domain Fit",
                 "lens": (
-                    "Read eval-*/*.json AND the spec itself. Use query_image to spot-check disputed entities. "
-                    "Does the spec use general rules or hardcode specific objects? "
-                    "Would it work on travel photos, not just these samples? "
-                    "DO NOT open .jpg files directly."
+                    "Read the spec itself. Is the domain context accurate and helpful? "
+                    "Does it add real recognition value or just repeat the general spec? "
+                    "Would it cause hallucinations on images outside this domain?"
                 ),
             },
         ],
@@ -628,32 +553,31 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             f"uv run python {shlex.quote(str(evaluator_script))}"
             f" --candidate {{candidate_path}}"
             f" --samples-dir {shlex.quote(str(sample_dir))}"
-            f" --golden-set {shlex.quote(str(golden_set_path))}"
+            f" --golden-set {shlex.quote(str(golden_path))}"
             f" --output-dir {{output_dir}}"
             f" --iteration {{iteration}}"
         ),
         background=(
-            f"This spec will be executed by a vision model (Haiku) to extract entities and descriptions from images.\n"
-            f"Golden set: {golden_result.best_candidate[:2000]}\n\n"
-            f"IMPORTANT: Each iteration, the evaluator runs the spec against sample images using Haiku.\n"
-            f"The evaluator's raw extraction results are in eval-N/ directories as JSON files.\n"
-            f"These JSON files contain what Haiku saw in each image — entities, descriptions, and tags.\n\n"
-            f"DO NOT open the image files directly (they are binary .jpg files).\n"
-            f"Instead, read the eval-N/*.json files — these are Haiku's observations.\n"
-            f"Score the spec based on whether Haiku's extractions match the golden set.\n"
-            f"Check both entity coverage AND description quality in the JSON outputs."
+            f"This is an image spec simmer. The seed is the general image extraction spec.\n"
+            f"Your job: add domain-specific recognition context to help Haiku extract better.\n\n"
+            f"Pre-scans (Haiku's raw observations) are in {prescan_dir}/*.txt\n"
+            f"Evaluator runs Haiku with the spec each iteration — results in eval-N/*.json\n"
+            f"Use query_image to investigate specific images.\n"
+            f"DO NOT open .jpg files directly.\n\n"
+            f"The general spec structure (entity types, rules, output format) should stay intact.\n"
+            f"Add domain knowledge that helps Haiku recognize what it's looking at."
         ),
-        on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path, str(specs_dir / "image_spec")),
+        on_iteration=_make_iteration_recorder(job_id, "domain_spec", db_path, str(specs_dir / "image_spec")),
         custom_tools=image_tools,
         **provider_kwargs,
     )
 
-    # Store spec with media_type='image'
+    # Store spec
     conn = get_connection(db_path)
     spec_id = str(uuid.uuid4())
     conn.execute(
         "INSERT INTO specs (id, domain_path, version, spec_content, golden_set, score, media_type) VALUES (?, NULL, 1, ?, ?, ?, 'image')",
-        (spec_id, spec_result.best_candidate, golden_result.best_candidate, spec_result.composite),
+        (spec_id, spec_result.best_candidate, "", spec_result.composite),
     )
 
     # Queue batch extraction for images
