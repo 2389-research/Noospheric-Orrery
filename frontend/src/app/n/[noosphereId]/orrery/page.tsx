@@ -17,6 +17,7 @@ interface SearchResult {
   query: string;
   entities: { id: string; name: string; type: string; source_count: number; score: number; paths: string[] }[];
   chunks: { chunk_id: string; document_id: string; document_title: string; text: string; score: number }[];
+  images?: { document_id: string; title: string; description: string; score: number }[];
   total_entities: number;
   total_chunks: number;
 }
@@ -40,6 +41,7 @@ export default function VizPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult | null>(null);
   const [searching, setSearching] = useState(false);
+  const [includeImages, setIncludeImages] = useState(true);
   const [fading, setFading] = useState(false);
   const [authToken, setAuthToken] = useState<string>("");
   const galaxyRef = useRef<HTMLIFrameElement>(null);
@@ -179,7 +181,7 @@ export default function VizPage() {
       if (token) headers["Authorization"] = `Bearer ${token}`;
       if (noosphereId) headers["X-Workspace-Id"] = noosphereId;
 
-      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20&expand=false`, { headers });
+      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20&expand=false&include_images=${includeImages}`, { headers });
       const results: SearchResult = await resp.json();
       setSearchResults(results);
 
@@ -262,6 +264,21 @@ export default function VizPage() {
           }}
         >
           {searching ? "..." : "search"}
+        </button>
+        <button
+          onClick={() => setIncludeImages(!includeImages)}
+          title={includeImages ? "Showing text + images" : "Showing text only"}
+          style={{
+            padding: "8px 10px", fontSize: 11,
+            fontFamily: "'Courier New', monospace",
+            background: includeImages ? "rgba(100,200,180,0.15)" : "rgba(100,180,255,0.05)",
+            color: includeImages ? "rgba(100,200,180,0.8)" : "rgba(100,180,255,0.4)",
+            border: `1px solid ${includeImages ? "rgba(100,200,180,0.3)" : "rgba(100,180,255,0.15)"}`,
+            borderRadius: 6,
+            cursor: "pointer",
+          }}
+        >
+          {includeImages ? "txt+img" : "txt"}
         </button>
       </div>
 
@@ -462,6 +479,41 @@ export default function VizPage() {
               </div>
             ))}
           </div>
+
+          {/* Image results */}
+          {searchResults.images && searchResults.images.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 9, color: "rgba(100,200,180,0.6)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+                Image Results
+              </div>
+              {searchResults.images.slice(0, 5).map((img, i) => (
+                <button
+                  key={i}
+                  onClick={() => {
+                    setSelectedDocId(img.document_id);
+                    setSelectedDocType("image");
+                    setSearchResults(null);
+                  }}
+                  style={{
+                    display: "block", width: "100%", textAlign: "left",
+                    padding: "8px 10px", marginBottom: 8,
+                    borderLeft: "2px solid rgba(100,200,180,0.4)",
+                    background: "rgba(100,200,180,0.03)", borderRadius: "0 3px 3px 0",
+                    border: "none", cursor: "pointer",
+                    fontFamily: "'Courier New', monospace",
+                  }}
+                >
+                  <div style={{ fontSize: 10, color: "rgba(100,200,180,0.7)", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
+                    <span>📷</span> {img.title}
+                    <span style={{ marginLeft: "auto", fontSize: 9, color: "rgba(100,200,180,0.4)" }}>{img.score.toFixed(2)}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "rgba(200,215,235,0.75)", lineHeight: 1.5 }}>
+                    {img.description}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
