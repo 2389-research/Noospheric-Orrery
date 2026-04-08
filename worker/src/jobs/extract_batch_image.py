@@ -123,3 +123,42 @@ async def run_extract_batch_image(job: dict, db_path: str) -> None:
         print(f"  Extracted {docs_processed}/{len(docs)}: {doc['title']} — {len(result.get('entities', []))} entities", flush=True)
 
     print(f"Image batch extraction: {docs_processed} docs, {total_entities} entities ({new_entities} new)", flush=True)
+
+    # Embed descriptions + entities for search
+    print("  Embedding descriptions and entities...", flush=True)
+    conn = get_connection(db_path)
+    try:
+        from sentence_transformers import SentenceTransformer
+        import numpy as np
+        model = SentenceTransformer("all-MiniLM-L6-v2")
+
+        # Embed image descriptions (chunks)
+        chunks = conn.execute("""
+            SELECT c.id, c.text FROM chunks c JOIN documents d ON c.document_id = d.id
+            WHERE d.content_type = 'image' AND c.text != '' AND (c.embedding IS NULL OR length(c.embedding) = 0)
+        """).fetchall()
+        if chunks:
+            texts = [c["text"] for c in chunks]
+            embeddings = model.encode(texts, normalize_embeddings=True)
+            for i, chunk in enumerate(chunks):
+                conn.execute("UPDATE chunks SET embedding = ? WHERE id = ?",
+                    (embeddings[i].astype(np.float32).tobytes(), chunk["id"]))
+            print(f"  Embedded {len(chunks)} image descriptions", flush=True)
+
+        # Embed new entities
+        ents = conn.execute("""
+            SELECT id, canonical_name FROM entities WHERE embedding IS NULL
+        """).fetchall()
+        if ents:
+            names = [e["canonical_name"] for e in ents]
+            embeddings = model.encode(names, normalize_embeddings=True)
+            for i, ent in enumerate(ents):
+                conn.execute("UPDATE entities SET embedding = ? WHERE id = ?",
+                    (embeddings[i].astype(np.float32).tobytes(), ent["id"]))
+            print(f"  Embedded {len(ents)} entities", flush=True)
+
+        conn.commit()
+    except Exception as e:
+        print(f"  Embedding failed: {e}", flush=True)
+    finally:
+        conn.close()
