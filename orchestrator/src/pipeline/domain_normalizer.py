@@ -1,4 +1,20 @@
+import re
 import uuid
+
+
+def _sanitize_domain_path(path: str) -> str:
+    """Normalize a domain path to canonical format: lowercase, hyphens, no special chars."""
+    path = path.lower().strip().strip("/")
+    # Replace underscores with hyphens
+    path = path.replace("_", "-")
+    # Remove anything that isn't a-z, 0-9, hyphen, or /
+    path = re.sub(r"[^a-z0-9\-/]", "", path)
+    # Collapse multiple hyphens or slashes
+    path = re.sub(r"-+", "-", path)
+    path = re.sub(r"/+", "/", path)
+    # Strip leading/trailing hyphens from each segment
+    path = "/".join(seg.strip("-") for seg in path.split("/") if seg.strip("-"))
+    return path
 
 
 def normalize_domain_label(store_or_conn, label: str) -> str:
@@ -6,6 +22,7 @@ def normalize_domain_label(store_or_conn, label: str) -> str:
 
     Accepts either a DataStore or raw sqlite3.Connection.
     """
+    label = _sanitize_domain_path(label)
     if hasattr(store_or_conn, 'domains'):
         store = store_or_conn
         target = store.domains.get_merge_target(label)

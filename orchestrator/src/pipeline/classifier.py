@@ -18,6 +18,13 @@ Rules:
 - A document can have 1 primary and 0-3 secondary domains
 - Be specific — prefer "region/parent/specific_topic" over just "region/parent"
 - New domains are automatically added to the taxonomy, so don't hesitate to propose them
+
+Format rules for domain paths:
+- All lowercase
+- Use hyphens for multi-word segments: "machine-learning" not "machine_learning"
+- Only a-z, 0-9, and hyphens within each segment
+- 2-4 levels separated by /: e.g. business/strategy or business/strategy/competitive-analysis
+- No trailing slashes, no spaces
 """
 
 CLASSIFICATION_SCHEMA = {
@@ -70,6 +77,13 @@ Rules:
 - Domain paths are hierarchical: region/parent/subdomain
 - Consider: subject matter, setting, activity, objects visible, any text in the image
 - An image can have 1 primary and 0-3 secondary domains
+
+Format rules for domain paths:
+- All lowercase
+- Use hyphens for multi-word segments: "miniature-painting" not "miniature_painting"
+- Only a-z, 0-9, and hyphens within each segment
+- 2-4 levels separated by /: e.g. business/strategy or business/strategy/competitive-analysis
+- No trailing slashes, no spaces
 """
 
 
