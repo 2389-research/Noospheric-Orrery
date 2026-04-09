@@ -761,13 +761,16 @@ class FirestoreNormalizationRepository(NormalizationRepository):
         }
 
     def get_merge_map_entry(self, name):
-        doc = self._merge_col.document(name).get()
+        # Firestore doc IDs can't contain '/' — encode it
+        safe_name = name.replace("/", "__SLASH__")
+        doc = self._merge_col.document(safe_name).get()
         if doc.exists:
             return doc.to_dict().get("toEntityId")
         return None
 
     def create_merge_map_entry(self, from_name, to_entity_id):
-        self._merge_col.document(from_name).set({"toEntityId": to_entity_id})
+        safe_name = from_name.replace("/", "__SLASH__")
+        self._merge_col.document(safe_name).set({"toEntityId": to_entity_id})
 
     def get_merge_history(self, entity_id):
         results = self._merge_col.where("toEntityId", "==", entity_id).stream()
