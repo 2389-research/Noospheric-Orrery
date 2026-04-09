@@ -7,6 +7,7 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     "anthropic[bedrock]>=0.40.0",
     "python-multipart>=0.0.9",
+    "torch>=2.0.0",
     "sentence-transformers>=3.0.0",
     "umap-learn>=0.5.0",
     "numpy>=1.26.0,<2.1",
@@ -34,6 +35,12 @@ dev = [
 
 [tool.uv.sources]
 orrery-relay = { path = "../packages/orrery-relay" }
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

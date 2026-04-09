@@ -18,15 +18,16 @@ COPY packages/orrery-relay/ /app/packages/orrery-relay/
 
 WORKDIR /app/worker
 
-# Install dependencies from lockfile
+# Install dependencies from lockfile (deps only — project not yet copied)
 COPY worker/pyproject.toml worker/uv.lock ./
-RUN uv sync --frozen --no-cache --no-dev
+RUN uv sync --frozen --no-cache --no-dev --no-install-project
 
 # Install simmer-sdk v0.3.0 from GitHub (internal dep — not the PyPI package, which is unrelated)
 RUN uv pip install --no-cache-dir "simmer-sdk @ git+https://github.com/2389-research/simmer-sdk.git@v0.3.0"
 
-# Copy application code
+# Copy application code, then install the project itself
 COPY worker/src/ src/
+RUN uv sync --frozen --no-cache --no-dev
 
 # Non-root user (Claude CLI refuses --dangerously-skip-permissions as root)
 RUN useradd -m -s /bin/bash worker
@@ -34,6 +35,6 @@ ENV HOME=/home/worker
 RUN mkdir -p /home/worker/.claude /data && \
     echo '{"hasCompletedOnboarding":true}' > /home/worker/.claude.json && \
     chown -R worker:worker /home/worker /app /data
-USER worker
+COPY worker/entrypoint.sh /entrypoint.sh
 
-CMD ["uv", "run", "python", "-m", "src.main"]
+ENTRYPOINT ["/entrypoint.sh"]
