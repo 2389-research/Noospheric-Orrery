@@ -351,7 +351,9 @@ canvas.addEventListener('mouseup', e => {
     const hit = hitTest(w.x, w.y);
     if (hit) {
       if (hit.kind === 'co_entity') {
-        window.location.search = `?entity=${encodeURIComponent(hit.id)}`;
+        const params = new URLSearchParams(location.search);
+        params.set('entity', hit.id);
+        window.location.search = params.toString();
       } else if (hit.kind === 'document') {
         window.parent.postMessage({
           type: 'node_selected', nodeType: 'document',
