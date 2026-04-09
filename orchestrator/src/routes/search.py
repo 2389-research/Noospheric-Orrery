@@ -12,13 +12,14 @@ router = APIRouter()
 
 
 @router.get("/search")
-async def search_query(q: str, top_k: int = 20, expand: bool = True, auth: AuthStore = Depends(get_auth_store)):
+async def search_query(q: str, top_k: int = 20, expand: bool = True, include_images: bool = False, auth: AuthStore = Depends(get_auth_store)):
     """Search the knowledge graph.
 
     Full 5-stage pipeline: expansion → retrieval → entity-boost → fusion → response.
     On Firestore: uses Vertex AI vector search for retrieval.
     On SQLite: uses FAISS for retrieval.
     expand=false skips LLM query expansion (faster, for UI autocomplete).
+    include_images=true adds parallel image search results.
     """
     settings = get_settings()
     store = auth.store
@@ -41,6 +42,13 @@ async def search_query(q: str, top_k: int = 20, expand: bool = True, auth: AuthS
             "total_chunks": result.total_chunks,
         }
 
+    # Parallel image search (opt-in)
+    if include_images:
+        if db_backend == "firestore":
+            response["images"] = _firestore_search_images(store, q, top_k=top_k)
+        else:
+            response["images"] = _search_images(store.conn, q, top_k=top_k)
+
     store.close()
 
     # Broadcast to viz
@@ -49,6 +57,138 @@ async def search_query(q: str, top_k: int = 20, expand: bool = True, auth: AuthS
         await broadcast_search(q, entity_names)
 
     return response
+
+
+def _search_images(conn, query: str, top_k: int = 10) -> list[dict]:
+    """Search image documents using SigLIP cross-modal embeddings.
+
+    Embeds the text query via SigLIP text encoder, searches against
+    image_embedding column (SigLIP image/description embeddings).
+    Falls back to sentence-transformers text embeddings if SigLIP unavailable.
+    """
+    import numpy as np
+
+    # Try SigLIP first (native cross-modal search)
+    query_embedding = None
+    embedding_col = "image_embedding"
+    try:
+        from ..pipeline.image_embedding import embed_image_text
+        emb = embed_image_text(query)
+        if emb is not None:
+            query_embedding = emb
+    except ImportError:
+        pass
+
+    # Fall back to sentence-transformers
+    if query_embedding is None:
+        embedding_col = "embedding"
+        try:
+            from ..pipeline.search.retrieval import _get_model
+            model = _get_model()
+            query_embedding = model.encode([query], normalize_embeddings=True)[0]
+        except ImportError:
+            return []
+
+    # Get image chunks with the appropriate embeddings
+    rows = conn.execute(f"""
+        SELECT c.id, c.text, c.{embedding_col}, d.id as doc_id, d.title, d.image_path, d.thumbnail_path
+        FROM chunks c JOIN documents d ON c.document_id = d.id
+        WHERE d.content_type = 'image' AND c.{embedding_col} IS NOT NULL
+    """).fetchall()
+
+    if not rows:
+        # If no SigLIP embeddings, try text embeddings
+        if embedding_col == "image_embedding":
+            rows = conn.execute("""
+                SELECT c.id, c.text, c.embedding, d.id as doc_id, d.title, d.image_path, d.thumbnail_path
+                FROM chunks c JOIN documents d ON c.document_id = d.id
+                WHERE d.content_type = 'image' AND c.embedding IS NOT NULL
+            """).fetchall()
+            if rows:
+                # Re-embed query with sentence-transformers for text matching
+                try:
+                    from ..pipeline.search.retrieval import _get_model
+                    model = _get_model()
+                    query_embedding = model.encode([query], normalize_embeddings=True)[0]
+                    embedding_col = "embedding"
+                except ImportError:
+                    return []
+
+    if not rows:
+        return []
+
+    results = []
+    for row in rows:
+        emb_data = row[embedding_col] if embedding_col in row.keys() else row[2]
+        if not emb_data:
+            continue
+        emb = np.frombuffer(emb_data, dtype=np.float32)
+        if emb.shape[0] != query_embedding.shape[0]:
+            continue  # dimension mismatch (SigLIP vs sentence-transformers)
+        score = float(np.dot(query_embedding, emb))
+        results.append({
+            "document_id": row["doc_id"],
+            "title": row["title"],
+            "score": round(score, 4),
+        })
+
+    results.sort(key=lambda x: -x["score"])
+    return results[:top_k]
+
+
+def _firestore_search_images(store, query: str, top_k: int = 10) -> list[dict]:
+    """Search image documents on Firestore using Vertex AI embeddings on descriptions."""
+    from ..services.embedding import embed_text
+    from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
+    from google.cloud.firestore_v1.vector import Vector
+
+    # Get image documents that have descriptions (content) and embeddings
+    doc_col = store._db.collection("workspaces").document(store._workspace_id).collection("documents")
+    chunk_col = store._db.collection("workspaces").document(store._workspace_id).collection("chunks")
+
+    # Embed query
+    try:
+        query_embedding = embed_text(query)
+    except Exception:
+        return []
+
+    # Vector search on chunks that belong to image documents
+    # Since Firestore doesn't support cross-collection joins, get image doc IDs first
+    image_docs = list(doc_col.where("contentType", "==", "image").stream())
+    if not image_docs:
+        return []
+
+    image_doc_ids = {doc.id for doc in image_docs}
+    image_doc_map = {doc.id: doc.to_dict() for doc in image_docs}
+
+    # Search chunks with embeddings
+    try:
+        vector_query = chunk_col.find_nearest(
+            vector_field="embedding",
+            query_vector=Vector(query_embedding),
+            distance_measure=DistanceMeasure.COSINE,
+            limit=top_k * 3,  # over-fetch then filter to image docs
+        )
+        results = []
+        seen = set()
+        for doc in vector_query.stream():
+            d = doc.to_dict()
+            doc_id = d.get("documentId", "")
+            if doc_id not in image_doc_ids or doc_id in seen:
+                continue
+            seen.add(doc_id)
+            img_data = image_doc_map.get(doc_id, {})
+            results.append({
+                "document_id": doc_id,
+                "title": img_data.get("title", ""),
+                "score": round(1.0 / (len(results) + 1), 4),  # RRF-style
+            })
+            if len(results) >= top_k:
+                break
+        return results
+    except Exception as e:
+        print(f"Firestore image search failed: {e}", flush=True)
+        return []
 
 
 async def _firestore_search(store, query: str, top_k: int, expand: bool, settings):

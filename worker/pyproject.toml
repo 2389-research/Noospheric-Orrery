@@ -7,6 +7,7 @@ dependencies = [
     "sentence-transformers>=3.0.0",
     # simmer-sdk: install from PyPI or local path (see worker/Dockerfile)
     # "simmer-sdk>=0.2.0",
+    "torch>=2.0.0",
     "orrery-relay",
 ]
 
@@ -16,8 +17,14 @@ dev = [
     "pytest-asyncio>=0.24",
 ]
 
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.uv.sources]
 orrery-relay = { path = "../packages/orrery-relay" }
+torch = { index = "pytorch-cpu" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

@@ -17,6 +17,19 @@ def trigger_general_simmer(auth: AuthStore = Depends(get_auth_store)):
     store.close()
     return {"job_id": job_id, "status": "queued"}
 
+@router.post("/simmer/general/image")
+def trigger_general_image_simmer(auth: AuthStore = Depends(get_auth_store)):
+    store = auth.store
+    existing = store.jobs.get_existing("simmer_general_image", "general", ["queued", "running"])
+    if existing:
+        store.close()
+        raise HTTPException(status_code=409, detail="Image simmer already in progress")
+    job_id = str(uuid.uuid4())
+    store.jobs.create(job_id, "simmer_general_image", "general")
+    store.close()
+    return {"job_id": job_id, "status": "queued"}
+
+
 @router.post("/simmer/{domain_path:path}")
 def trigger_domain_simmer(domain_path: str, auth: AuthStore = Depends(get_auth_store)):
     store = auth.store
