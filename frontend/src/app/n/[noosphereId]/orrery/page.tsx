@@ -49,9 +49,14 @@ export default function VizPage() {
   const starRef = useRef<HTMLIFrameElement>(null);
 
   // Get auth token for iframe API calls
+  const isNoop = process.env.NEXT_PUBLIC_AUTH_MODE === "noop";
   useEffect(() => {
+    if (isNoop) {
+      setAuthToken("noop");  // sentinel — iframes render, no auth header sent
+      return;
+    }
     getAuthToken().then(t => { if (t) setAuthToken(t); }).catch(() => {});
-  }, []);
+  }, [isNoop]);
 
   // Check if workspace has images (to show/hide toggle)
   useEffect(() => {
@@ -344,22 +349,22 @@ export default function VizPage() {
       }} />
 
       {/* Galaxy/Sector iframe (always mounted, hidden when in star mode) */}
-      <iframe
+      {authToken && <iframe
         ref={galaxyRef}
-        src={`/viz/index.html?api=${encodeURIComponent("/api")}${authToken ? `&token=${encodeURIComponent(authToken)}` : ""}&workspace=${encodeURIComponent(noosphereId)}`}
+        src={`/viz/index.html?api=${encodeURIComponent("/api")}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}`}
         style={{
           width: "100%", height: "100%", border: "none",
           position: "absolute", top: 0, left: 0,
           display: viewMode === "galaxy" ? "block" : "none",
         }}
         title="Galaxy View"
-      />
+      />}
 
-      {/* Star iframe (mounted when in star mode) */}
-      {viewMode === "star" && starEntityId && (
+      {/* Star iframe (mounted when in star mode, only after auth token is ready) */}
+      {viewMode === "star" && starEntityId && authToken && (
         <iframe
           ref={starRef}
-          src={`/viz/star.html?entity=${encodeURIComponent(starEntityId)}&api=${encodeURIComponent("/api")}${authToken ? `&token=${encodeURIComponent(authToken)}` : ""}&workspace=${encodeURIComponent(noosphereId)}`}
+          src={`/viz/star.html?entity=${encodeURIComponent(starEntityId)}&api=${encodeURIComponent("/api")}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}`}
           style={{
             width: "100%", height: "100%", border: "none",
             position: "absolute", top: 0, left: 0,
