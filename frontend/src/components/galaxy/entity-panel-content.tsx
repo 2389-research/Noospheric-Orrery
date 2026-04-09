@@ -150,7 +150,7 @@ export function EntityPanelContent({
   const [loadingCooc, setLoadingCooc] = useState(true);
   const [coocError, setCoocError] = useState(false);
   const [snippetError, setSnippetError] = useState(false);
-  const [sourceDocs, setSourceDocs] = useState<{id: string; title: string; mentions: number; content_type: string}[]>([]);
+  const [sourceDocs, setSourceDocs] = useState<{id: string; title: string; mentions: number}[]>([]);
 
   const entityColor = getEntityColor(data.type);
 
@@ -167,15 +167,10 @@ export function EntityPanelContent({
           docCounts[s.document_id] = (docCounts[s.document_id] || 0) + 1;
         }
         const docs = await api.getDocuments();
-        const docMap = Object.fromEntries(docs.map((d) => [d.id, { title: d.title, content_type: d.content_type || "text" }]));
+        const docMap = Object.fromEntries(docs.map((d) => [d.id, d.title]));
         setSourceDocs(
           Object.entries(docCounts)
-            .map(([id, count]) => ({
-              id,
-              title: docMap[id]?.title || id.slice(0, 8),
-              mentions: count,
-              content_type: docMap[id]?.content_type || "text",
-            }))
+            .map(([id, count]) => ({ id, title: docMap[id] || id.slice(0, 8), mentions: count }))
             .sort((a, b) => b.mentions - a.mentions)
         );
       } catch {
@@ -440,10 +435,7 @@ export function EntityPanelContent({
                   fontSize: 10, fontFamily: "'Courier New', monospace",
                 }}
               >
-                <span style={{ color: "rgba(200,215,235,0.85)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8, display: "flex", alignItems: "center", gap: 4 }}>
-                  {doc.content_type === "image" && (
-                    <span style={{ color: "rgba(100,200,180,0.7)", fontSize: 11, flexShrink: 0 }} title="Image document">📷</span>
-                  )}
+                <span style={{ color: "rgba(200,215,235,0.85)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: 8 }}>
                   {doc.title}
                 </span>
                 <span style={{ color: "rgba(140,200,255,0.6)", flexShrink: 0 }}>

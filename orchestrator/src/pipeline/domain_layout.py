@@ -213,28 +213,11 @@ def transform_new_domain(store_or_conn, domain_path):
         _store_position(store_or_conn, domain_path, x, y)
         return {"x": x, "y": y}
 
-    # Transform with saved UMAP — fallback if numba/UMAP fails (known issue on ARM Docker)
-    try:
-        coords = data["reducer"].transform(embedding)
-        x = float(np.clip((coords[0, 0] - data["mins"][0]) / data["ranges"][0], 0, 1))
-        y = float(np.clip((coords[0, 1] - data["mins"][1]) / data["ranges"][1], 0, 1))
-    except Exception:
-        # Fallback: place near similar existing domains using embedding similarity
-        stored = _get_stored_positions(store_or_conn)
-        if stored:
-            # Find nearest stored domain by name similarity and place nearby
-            import random
-            closest = min(stored.items(), key=lambda kv: abs(hash(kv[0]) - hash(domain_path)) % 1000)
-            x = closest[1]["x"] + random.uniform(-0.05, 0.05)
-            y = closest[1]["y"] + random.uniform(-0.05, 0.05)
-            x = max(0.0, min(1.0, x))
-            y = max(0.0, min(1.0, y))
-        else:
-            import random
-            x = 0.4 + random.uniform(0, 0.2)
-            y = 0.4 + random.uniform(0, 0.2)
+    coords = data["reducer"].transform(embedding)
+    x = float(np.clip((coords[0, 0] - data["mins"][0]) / data["ranges"][0], 0, 1))
+    y = float(np.clip((coords[0, 1] - data["mins"][1]) / data["ranges"][1], 0, 1))
 
-    _store_position(store_or_conn, domain_path, x, y, embedding[0].tobytes() if embedding is not None else None)
+    _store_position(store_or_conn, domain_path, x, y, embedding[0].tobytes())
     return {"x": x, "y": y}
 
 
@@ -244,20 +227,13 @@ def ensure_layout(store_or_conn):
     stored = _get_stored_positions(store_or_conn)
     stored_paths = set(stored.keys())
 
+    # Remove stale
+    for path in stored_paths - all_paths:
+        _delete_position(store_or_conn, path)
+        del stored[path]
+
     missing = all_paths - stored_paths
 
-    # If a saved UMAP model exists, use transform() for missing domains
-    # This preserves the latent space from a larger training set
-    model = _get_model(store_or_conn)
-    if model and model.get("model_blob") and missing:
-        for path in missing:
-            pos = transform_new_domain(store_or_conn, path)
-            if pos:
-                stored[path] = pos
-        # Return only positions for active domains
-        return {p: stored[p] for p in all_paths if p in stored}
-
-    # No model — need full fit
     if not stored or len(missing) > len(all_paths) * 0.5:
         return full_fit(store_or_conn)
 
@@ -267,5 +243,4 @@ def ensure_layout(store_or_conn):
             if pos:
                 stored[path] = pos
 
-    # Return only positions for active domains
-    return {p: stored[p] for p in all_paths if p in stored}
+    return stored

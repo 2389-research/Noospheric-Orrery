@@ -11,15 +11,8 @@
 services:
   # Firebase Emulator Suite — local Firestore + Auth
   firebase-emulator:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM eclipse-temurin:21-jdk
-        RUN apt-get update -qq && apt-get install -y -qq curl && \
-            curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-            apt-get install -y -qq nodejs && \
-            npm install -g firebase-tools
-        WORKDIR /app
+    image: node:20-slim
+    working_dir: /app
     volumes:
       - .:/app
     ports:
@@ -27,18 +20,17 @@ services:
       - "8080:8080"   # Firestore
       - "9099:9099"   # Auth
       - "9199:9199"   # Storage
-    command: firebase emulators:start --project noospheric-orrery
+    command: >
+      sh -c "npm install -g firebase-tools &&
+             firebase emulators:start --project noospheric-orrery"
     environment:
       - GCLOUD_PROJECT=noospheric-orrery
 
   # Orchestrator API — same container as Cloud Run
   orchestrator:
-    platform: linux/amd64
-    build:
-      context: .
-      dockerfile: orchestrator/Dockerfile.local
+    build: ./orchestrator
     ports:
-      - "8100:8000"
+      - "8100:8080"
     env_file: .env
     environment:
       - DB_BACKEND=firestore
@@ -47,8 +39,6 @@ services:
       - AUTH_REQUIRED=false
       - FIRESTORE_EMULATOR_HOST=firebase-emulator:8080
       - FIREBASE_AUTH_EMULATOR_HOST=firebase-emulator:9099
-      - FIREBASE_STORAGE_EMULATOR_HOST=firebase-emulator:9199
-      - FIREBASE_STORAGE_BUCKET=noospheric-orrery.firebasestorage.app
     depends_on:
       - firebase-emulator
 
@@ -58,12 +48,10 @@ services:
       context: ./frontend
       args:
         BACKEND_URL: http://orchestrator:8000
-        NEXT_PUBLIC_AUTH_MODE: noop
     ports:
       - "3100:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8100
-      - NEXT_PUBLIC_AUTH_MODE=noop
       - NEXT_PUBLIC_FIREBASE_API_KEY=fake-api-key
       - NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=localhost
       - NEXT_PUBLIC_FIREBASE_PROJECT_ID=noospheric-orrery

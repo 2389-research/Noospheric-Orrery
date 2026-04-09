@@ -72,51 +72,69 @@ def run_post_processing(db: firestore.Client, workspace_id: str):
     except Exception as e:
         print(f"Cooccurrence computation failed (non-fatal): {e}", flush=True)
 
-    # ── 3. Compute domain layout (UMAP transform) ─────────────────
+    # ── 3. Compute domain layout (UMAP) ──────────────────────────
     try:
         print("Computing UMAP domain layout...", flush=True)
-        import pickle
         import numpy as np
 
         domain_col = db.collection(f"workspaces/{workspace_id}/domains")
         layout_col = db.collection(f"workspaces/{workspace_id}/domainLayout")
-
+        doc_col = db.collection(f"workspaces/{workspace_id}/documents")
         all_domains = list(domain_col.stream())
-        domain_paths = [d.to_dict().get("path", "") for d in all_domains if d.to_dict().get("path")]
+        docs_raw = list(doc_col.stream())
+        doc_domains_raw = list(db.collection(f"workspaces/{workspace_id}/documentDomains").stream())
 
-        # Find domains that don't have positions yet
-        stored = {d.id.replace("__", "/"): d.to_dict() for d in layout_col.stream()}
-        missing = [p for p in domain_paths if p not in stored]
+        doc_to_domains = {}
+        for dd in doc_domains_raw:
+            ddd = dd.to_dict()
+            doc_to_domains.setdefault(ddd.get("documentId", ""), []).append(ddd.get("domainPath", ""))
 
-        if not missing:
-            print(f"  All {len(domain_paths)} domains already have positions", flush=True)
+        ename = {e.id: e.to_dict().get("canonicalName", "") for e in all_entities}
+        domain_entity_names: dict[str, set[str]] = {}
+        for s in all_sources:
+            sd = s.to_dict()
+            for path in doc_to_domains.get(sd.get("documentId", ""), []):
+                domain_entity_names.setdefault(path, set()).add(ename.get(sd.get("entityId", ""), ""))
+
+        doc_titles: dict[str, list[str]] = {}
+        for d in docs_raw:
+            for path in doc_to_domains.get(d.id, []):
+                doc_titles.setdefault(path, []).append(d.to_dict().get("title", ""))
+
+        domain_texts, domain_paths = [], []
+        for d in all_domains:
+            path = d.to_dict().get("path", "")
+            ents = sorted(domain_entity_names.get(path, set()))[:10]
+            titles = doc_titles.get(path, [])[:5]
+            text = f'{path.replace("/", " > ")}. Documents: {", ".join(titles)}. Entities: {", ".join(ents)}'
+            domain_texts.append(text)
+            domain_paths.append(path)
+
+        if len(domain_texts) >= 3:
+            result = ai_client.models.embed_content(model="text-embedding-004", contents=domain_texts)
+            embeddings = np.array([e.values for e in result.embeddings])
+
+            import umap
+            reducer = umap.UMAP(n_components=2, n_neighbors=min(5, len(domain_paths) - 1), min_dist=0.3, random_state=42)
+            positions = reducer.fit_transform(embeddings)
+
+            positions -= positions.min(axis=0)
+            scale = positions.max(axis=0)
+            scale[scale == 0] = 1
+            positions = (positions / scale) * 800 - 400
+
+            for i, path in enumerate(domain_paths):
+                layout_col.document(path.replace("/", "__")).set({
+                    "x": float(positions[i][0]), "y": float(positions[i][1]),
+                })
+            print(f"  UMAP layout for {len(domain_paths)} domains", flush=True)
         else:
-            # Load the universal UMAP model (stored in default workspace)
-            model_doc = db.collection("workspaces/default/layoutModel/umap").get()
-            if not model_doc.exists:
-                # Try this workspace
-                model_doc = db.collection(f"workspaces/{workspace_id}/layoutModel/umap").get()
-
-            if model_doc.exists and model_doc.to_dict().get("modelBlob"):
-                model_data = pickle.loads(model_doc.to_dict()["modelBlob"])
-                reducer = model_data["reducer"]
-                mins, ranges = model_data["mins"], model_data["ranges"]
-
-                # Embed domain names with sentence-transformers (same model used to train UMAP)
-                from sentence_transformers import SentenceTransformer
-                embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-                texts = [p.replace("/", " ").replace("-", " ") for p in missing]
-                embeddings = embed_model.encode(texts, normalize_embeddings=True)
-
-                coords = reducer.transform(embeddings)
-                for i, path in enumerate(missing):
-                    x = float(np.clip((coords[i, 0] - mins[0]) / ranges[0], 0, 1))
-                    y = float(np.clip((coords[i, 1] - mins[1]) / ranges[1], 0, 1))
-                    layout_col.document(path.replace("/", "__")).set({"x": x, "y": y})
-
-                print(f"  Positioned {len(missing)} new domains via UMAP transform", flush=True)
-            else:
-                print(f"  No UMAP model found — {len(missing)} domains without positions", flush=True)
+            for i, path in enumerate(domain_paths):
+                angle = (2 * math.pi * i) / max(len(domain_paths), 1)
+                layout_col.document(path.replace("/", "__")).set({
+                    "x": math.cos(angle) * 300, "y": math.sin(angle) * 300,
+                })
+            print(f"  Circular layout for {len(domain_paths)} domains", flush=True)
     except Exception as e:
         print(f"Domain layout failed (non-fatal): {e}", flush=True)
 

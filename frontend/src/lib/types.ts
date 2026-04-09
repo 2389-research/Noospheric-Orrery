@@ -5,8 +5,6 @@ export interface DocumentSummary {
   created_at: string;
   domains: string[];
   entity_count: number;
-  content_type?: "text" | "image";
-  thumbnail_path?: string;
 }
 
 export interface DomainInfo {
@@ -40,7 +38,6 @@ export interface Stats {
   entity_count: number;
   domain_count: number;
   active_jobs: number;
-  image_count: number;
 }
 
 export interface IngestResult {

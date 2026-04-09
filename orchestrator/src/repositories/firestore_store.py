@@ -29,18 +29,6 @@ from .interfaces import (
 )
 
 
-def _safe_doc_id(name: str) -> str:
-    """Sanitize a string for use as a Firestore document ID.
-
-    Firestore doc IDs cannot contain '/', or be '.' or '..'.
-    Also avoid leading/trailing whitespace.
-    """
-    safe = name.strip().replace("/", "__SLASH__")
-    if safe in (".", ".."):
-        safe = f"__{safe}__"
-    return safe or "__empty__"
-
-
 def _encode_path(path: str) -> str:
     """Encode domain path for use as Firestore doc ID (/ not allowed)."""
     return path.replace("/", "__")
@@ -59,22 +47,15 @@ class FirestoreDocumentRepository(DocumentRepository):
         results = self._col.count().get()
         return int(results[0][0].value) if results else 0
 
-    def create(self, id, title, content, content_hash, source_path=None,
-               content_type="text", image_path=None, thumbnail_path=None):
-        doc = {
+    def create(self, id, title, content, content_hash, source_path=None):
+        self._col.document(id).set({
             "title": title,
             "content": content,
             "contentHash": content_hash,
             "sourcePath": source_path,
-            "contentType": content_type,
             "status": "pending",
             "createdAt": firestore.SERVER_TIMESTAMP,
-        }
-        if image_path:
-            doc["imagePath"] = image_path
-        if thumbnail_path:
-            doc["thumbnailPath"] = thumbnail_path
-        self._col.document(id).set(doc)
+        })
         return id
 
     def get(self, doc_id):
@@ -87,9 +68,6 @@ class FirestoreDocumentRepository(DocumentRepository):
             content_hash=d.get("contentHash"), source_path=d.get("sourcePath"),
             status=d.get("status", "pending"),
             created_at=str(d.get("createdAt", "")),
-            content_type=d.get("contentType", "text"),
-            image_path=d.get("imagePath"),
-            thumbnail_path=d.get("thumbnailPath"),
         )
 
     def list(self, limit=50, offset=0):
@@ -98,10 +76,7 @@ class FirestoreDocumentRepository(DocumentRepository):
         for doc in query.stream():
             d = doc.to_dict()
             result = Document(id=doc.id, title=d.get("title", ""), status=d.get("status", ""),
-                              created_at=str(d.get("createdAt", "")),
-                              content_type=d.get("contentType", "text"),
-                              image_path=d.get("imagePath"),
-                              thumbnail_path=d.get("thumbnailPath"))
+                              created_at=str(d.get("createdAt", "")))
             # Get domains subcollection
             domain_docs = self._col.document(doc.id).collection("domains").stream()
             result.domains = [dd.id.replace("__", "/") for dd in domain_docs]
@@ -116,9 +91,6 @@ class FirestoreDocumentRepository(DocumentRepository):
 
     def update_status(self, doc_id, status):
         self._col.document(doc_id).update({"status": status})
-
-    def update_content(self, doc_id, content):
-        self._col.document(doc_id).update({"content": content})
 
     def get_for_domain(self, domain_path, status_filter=None):
         # Query documents that have this domain in their domains subcollection
@@ -184,9 +156,6 @@ class FirestoreChunkRepository(ChunkRepository):
 
     def update_embedding(self, chunk_id, embedding):
         self._col.document(chunk_id).update({"embedding": embedding})
-
-    def update_text(self, chunk_id, text):
-        self._col.document(chunk_id).update({"text": text, "length": len(text)})
 
 
 class FirestoreDomainRepository(DomainRepository):
@@ -659,21 +628,14 @@ class FirestoreSpecRepository(SpecRepository):
             "createdAt": firestore.SERVER_TIMESTAMP,
         })
 
-    def get_general(self, media_type="text"):
-        # Client-side sort and filter to avoid composite index
+    def get_general(self):
+        # Client-side sort to avoid composite index
         results = list(self._col.where("domainPath", "==", None).stream())
         if not results:
             return None
-        # Filter by media type
-        filtered = [r for r in results if r.to_dict().get("mediaType", "text") == media_type]
-        if not filtered:
-            # Fall back to any general spec (backwards compat)
-            filtered = [r for r in results if not r.to_dict().get("mediaType")]
-        if not filtered:
-            return None
-        filtered.sort(key=lambda d: d.to_dict().get("version", 0), reverse=True)
-        d = filtered[0].to_dict()
-        return Spec(id=filtered[0].id, domain_path=None, version=d["version"],
+        results.sort(key=lambda d: d.to_dict().get("version", 0), reverse=True)
+        d = results[0].to_dict()
+        return Spec(id=results[0].id, domain_path=None, version=d["version"],
                     spec_content=d["specContent"], golden_set=d.get("goldenSet"), score=d.get("score"))
 
     def get_for_domain(self, domain_path):
@@ -773,13 +735,13 @@ class FirestoreNormalizationRepository(NormalizationRepository):
         }
 
     def get_merge_map_entry(self, name):
-        doc = self._merge_col.document(_safe_doc_id(name)).get()
+        doc = self._merge_col.document(name).get()
         if doc.exists:
             return doc.to_dict().get("toEntityId")
         return None
 
     def create_merge_map_entry(self, from_name, to_entity_id):
-        self._merge_col.document(_safe_doc_id(from_name)).set({"toEntityId": to_entity_id})
+        self._merge_col.document(from_name).set({"toEntityId": to_entity_id})
 
     def get_merge_history(self, entity_id):
         results = self._merge_col.where("toEntityId", "==", entity_id).stream()

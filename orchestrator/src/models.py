@@ -57,7 +57,6 @@ class Stats(BaseModel):
     entity_count: int
     domain_count: int
     active_jobs: int
-    image_count: int = 0
 
 class IngestResult(BaseModel):
     document_id: str
@@ -65,7 +64,6 @@ class IngestResult(BaseModel):
     domains: list[str]
     entity_count: int
     jobs_queued: list[str]
-    content_type: str = "text"
 
 class DirectoryIngestRequest(BaseModel):
     path: str

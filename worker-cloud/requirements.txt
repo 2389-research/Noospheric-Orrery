@@ -2,6 +2,3 @@ anthropic[bedrock]
 google-cloud-firestore
 firebase-admin
 google-genai
-sentence-transformers
-umap-learn
-numpy<2.1

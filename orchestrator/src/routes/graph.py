@@ -179,31 +179,22 @@ def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
     domains = [{"id": d.id, "path": d.path, "parent_path": d.parent_path,
                 "doc_count": d.document_count, "spec_version": d.spec_version} for d in domain_objs]
 
-    # Domain positions
-    # SQLite: UMAP computed on demand via ensure_layout
-    # Firestore: read stored positions (computed by worker on Cloud Run where numba works)
+    # Domain positions — read from stored positions
+    # On SQLite: UMAP computes if needed. On Firestore: positions pre-pushed, just read.
     if store.conn is not None:
         from ..pipeline.domain_layout import ensure_layout
-        domain_positions = ensure_layout(store.conn)
+        domain_positions = ensure_layout(store)
     else:
-        all_stored = store.layout.get_stored_positions()
-        active_paths = {d["path"] for d in domains}
-        # Only include positions for domains that actually exist in this workspace
-        domain_positions = {p: pos for p, pos in all_stored.items() if p in active_paths}
-        # Normalize to 0-1 range (some old positions stored in -400 to 400 range)
-        if domain_positions:
-            xs = [v["x"] for v in domain_positions.values()]
-            ys = [v["y"] for v in domain_positions.values()]
-            min_x, max_x = min(xs), max(xs)
-            min_y, max_y = min(ys), max(ys)
-            rx = (max_x - min_x) or 1
-            ry = (max_y - min_y) or 1
-            domain_positions = {
-                p: {"x": (v["x"] - min_x) / rx, "y": (v["y"] - min_y) / ry}
-                for p, v in domain_positions.items()
-            }
-        # Domains without positions are omitted — the post-process worker
-        # computes them via UMAP transform() on Cloud Run (x86)
+        domain_positions = store.layout.get_stored_positions()
+        # Place any domains without positions in a circle
+        import math
+        missing = [d["path"] for d in domains if d["path"] not in domain_positions]
+        for i, path in enumerate(missing):
+            angle = (i / max(len(missing), 1)) * 2 * math.pi
+            x = 0.5 + 0.3 * math.cos(angle)
+            y = 0.5 + 0.3 * math.sin(angle)
+            domain_positions[path] = {"x": x, "y": y}
+            store.layout.store_position(path, x, y)
 
     domain_doc_counts = {d["path"]: d["doc_count"] for d in domains}
     region_colors = _assign_domain_colors(domains)
@@ -276,10 +267,7 @@ def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
     # Recent documents
     recent_docs = store.documents.get_recent(limit=50)
     videos = [{"id": d.id, "title": d.title, "domains": d.domains,
-               "primary": d.domains[0] if d.domains else None,
-               "content_type": getattr(d, "content_type", "text"),
-               "thumbnail_path": getattr(d, "thumbnail_path", None),
-               } for d in recent_docs]
+               "primary": d.domains[0] if d.domains else None} for d in recent_docs]
 
     # Domain specs
     domain_specs = {}
