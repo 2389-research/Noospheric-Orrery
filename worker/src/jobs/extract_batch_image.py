@@ -90,6 +90,9 @@ async def run_extract_batch_image(job: dict, db_path: str) -> None:
                 (chunk_id, doc_id, description, len(description)),
             )
 
+        # Clear previous extraction sources for this doc (general spec gets replaced by simmered)
+        conn.execute("DELETE FROM entity_sources WHERE document_id = ?", (doc_id,))
+
         # Store entities
         for entity in result.get("entities", []):
             name = entity.get("name", "").lower().strip()

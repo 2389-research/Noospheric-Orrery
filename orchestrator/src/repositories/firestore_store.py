@@ -47,15 +47,22 @@ class FirestoreDocumentRepository(DocumentRepository):
         results = self._col.count().get()
         return int(results[0][0].value) if results else 0
 
-    def create(self, id, title, content, content_hash, source_path=None):
-        self._col.document(id).set({
+    def create(self, id, title, content, content_hash, source_path=None,
+               content_type="text", image_path=None, thumbnail_path=None):
+        doc = {
             "title": title,
             "content": content,
             "contentHash": content_hash,
             "sourcePath": source_path,
+            "contentType": content_type,
             "status": "pending",
             "createdAt": firestore.SERVER_TIMESTAMP,
-        })
+        }
+        if image_path:
+            doc["imagePath"] = image_path
+        if thumbnail_path:
+            doc["thumbnailPath"] = thumbnail_path
+        self._col.document(id).set(doc)
         return id
 
     def get(self, doc_id):
@@ -68,6 +75,9 @@ class FirestoreDocumentRepository(DocumentRepository):
             content_hash=d.get("contentHash"), source_path=d.get("sourcePath"),
             status=d.get("status", "pending"),
             created_at=str(d.get("createdAt", "")),
+            content_type=d.get("contentType", "text"),
+            image_path=d.get("imagePath"),
+            thumbnail_path=d.get("thumbnailPath"),
         )
 
     def list(self, limit=50, offset=0):
@@ -76,7 +86,10 @@ class FirestoreDocumentRepository(DocumentRepository):
         for doc in query.stream():
             d = doc.to_dict()
             result = Document(id=doc.id, title=d.get("title", ""), status=d.get("status", ""),
-                              created_at=str(d.get("createdAt", "")))
+                              created_at=str(d.get("createdAt", "")),
+                              content_type=d.get("contentType", "text"),
+                              image_path=d.get("imagePath"),
+                              thumbnail_path=d.get("thumbnailPath"))
             # Get domains subcollection
             domain_docs = self._col.document(doc.id).collection("domains").stream()
             result.domains = [dd.id.replace("__", "/") for dd in domain_docs]
@@ -91,6 +104,9 @@ class FirestoreDocumentRepository(DocumentRepository):
 
     def update_status(self, doc_id, status):
         self._col.document(doc_id).update({"status": status})
+
+    def update_content(self, doc_id, content):
+        self._col.document(doc_id).update({"content": content})
 
     def get_for_domain(self, domain_path, status_filter=None):
         # Query documents that have this domain in their domains subcollection
@@ -156,6 +172,9 @@ class FirestoreChunkRepository(ChunkRepository):
 
     def update_embedding(self, chunk_id, embedding):
         self._col.document(chunk_id).update({"embedding": embedding})
+
+    def update_text(self, chunk_id, text):
+        self._col.document(chunk_id).update({"text": text, "length": len(text)})
 
 
 class FirestoreDomainRepository(DomainRepository):
@@ -628,14 +647,21 @@ class FirestoreSpecRepository(SpecRepository):
             "createdAt": firestore.SERVER_TIMESTAMP,
         })
 
-    def get_general(self):
-        # Client-side sort to avoid composite index
+    def get_general(self, media_type="text"):
+        # Client-side sort and filter to avoid composite index
         results = list(self._col.where("domainPath", "==", None).stream())
         if not results:
             return None
-        results.sort(key=lambda d: d.to_dict().get("version", 0), reverse=True)
-        d = results[0].to_dict()
-        return Spec(id=results[0].id, domain_path=None, version=d["version"],
+        # Filter by media type
+        filtered = [r for r in results if r.to_dict().get("mediaType", "text") == media_type]
+        if not filtered:
+            # Fall back to any general spec (backwards compat)
+            filtered = [r for r in results if not r.to_dict().get("mediaType")]
+        if not filtered:
+            return None
+        filtered.sort(key=lambda d: d.to_dict().get("version", 0), reverse=True)
+        d = filtered[0].to_dict()
+        return Spec(id=filtered[0].id, domain_path=None, version=d["version"],
                     spec_content=d["specContent"], golden_set=d.get("goldenSet"), score=d.get("score"))
 
     def get_for_domain(self, domain_path):

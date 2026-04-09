@@ -23,6 +23,19 @@ from ..pipeline.image_prep import is_image_file
 
 router = APIRouter()
 
+# General specs loaded from orchestrator/specs/*.md — edit those files to update
+_SPECS_DIR = Path(__file__).resolve().parent.parent.parent / "specs"
+
+
+def _load_general_spec(name: str) -> str:
+    """Load a general spec from the specs directory."""
+    path = _SPECS_DIR / f"{name}.md"
+    return path.read_text()
+
+
+GENERAL_TEXT_SPEC = _load_general_spec("general_text")
+GENERAL_IMAGE_SPEC = _load_general_spec("general_image")
+
 
 async def _ingest_document(store, title: str, content: str, source_path: str | None) -> dict:
     settings = get_settings()
@@ -75,38 +88,38 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
     domains = assign_document_domains(store, doc_id, classification)
     store.documents.update_status(doc_id, "classified")
 
-    # 3. Extract if general spec exists
+    # 3. Extract — use simmered general spec if available, otherwise built-in general spec
     entity_count = 0
     chunk_entities: dict[str, list[str]] = {}
     spec = store.specs.get_general()
+    spec_content = spec.spec_content if spec else GENERAL_TEXT_SPEC
+    spec_version = spec.version if spec else 0
+    extraction_pass = "general_simmered" if spec else "general"
 
-    if spec:
-        spec_content = spec.spec_content
-        spec_version = spec.version
-        entities = await extract_document(
-            relay=relay, chunks=chunks, spec=spec_content, model=settings.extraction_model,
+    entities = await extract_document(
+        relay=relay, chunks=chunks, spec=spec_content, model=settings.extraction_model,
+    )
+    for entity in entities:
+        entity_id = normalize_entity(store, entity["name"], entity["type"])
+        store.entity_sources.create(
+            entity_id=entity_id,
+            document_id=doc_id,
+            chunk_id=entity.get("chunk_id"),
+            extraction_pass=extraction_pass,
+            spec_version=spec_version,
         )
-        for entity in entities:
-            entity_id = normalize_entity(store, entity["name"], entity["type"])
-            store.entity_sources.create(
-                entity_id=entity_id,
-                document_id=doc_id,
-                chunk_id=entity.get("chunk_id"),
-                extraction_pass="general",
-                spec_version=spec_version,
-            )
-            chunk_id = entity.get("chunk_id")
-            if chunk_id:
-                chunk_entities.setdefault(chunk_id, []).append(entity_id)
+        chunk_id = entity.get("chunk_id")
+        if chunk_id:
+            chunk_entities.setdefault(chunk_id, []).append(entity_id)
 
-        edges = compute_cooccurrence_edges(chunk_entities)
-        for edge in edges:
-            store.relationships.upsert_cooccurrence(
-                edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
-            )
+    edges = compute_cooccurrence_edges(chunk_entities)
+    for edge in edges:
+        store.relationships.upsert_cooccurrence(
+            edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
+        )
 
-        entity_count = len(entities)
-        store.documents.update_status(doc_id, "extracted")
+    entity_count = len(entities)
+    store.documents.update_status(doc_id, "extracted")
 
     # 4. Cascade through domain specs
     #    For each domain this doc belongs to, walk up the tree and
@@ -156,15 +169,8 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
         entity_count += domain_entity_count
         store.documents.update_status(doc_id, "enriched")
 
-    # 5. Check thresholds + queue simmers
+    # 5. Check thresholds + queue domain simmers (general spec always available, no auto-simmer needed)
     jobs_queued = []
-
-    if not spec:
-        existing_general_job = store.jobs.get_existing("simmer_general", "general", ["queued", "running"])
-        if not existing_general_job:
-            job_id = str(uuid.uuid4())
-            store.jobs.create(job_id, "simmer_general", "general")
-            jobs_queued.append(job_id)
 
     for domain_path in domains:
         domain = store.domains.get(domain_path)
@@ -233,6 +239,22 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
 
     doc_id = str(uuid.uuid4())
 
+    # Cloud mode: upload images to Firebase Storage
+    stored_image_path = image_path
+    stored_thumb_path = thumb_path
+    if os.environ.get("DB_BACKEND", "sqlite").lower() == "firestore":
+        try:
+            from ..services.image_storage import upload_image
+            storage_img = f"images/{doc_id}/{Path(image_path).name}"
+            upload_image(image_path, storage_img)
+            stored_image_path = storage_img
+
+            storage_thumb = f"images/{doc_id}/thumbnail.jpg"
+            upload_image(thumb_path, storage_thumb)
+            stored_thumb_path = storage_thumb
+        except Exception as e:
+            print(f"Firebase Storage upload failed, using local path: {e}", flush=True)
+
     # Classify
     taxonomy = store.domains.get_all_paths()
     classification = await classify_image(
@@ -241,10 +263,10 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
     )
     domains = assign_document_domains(store, doc_id, classification)
 
-    # Store document — classify only, no extraction until spec exists
+    # Store document
     store.documents.create(
-        doc_id, title, "", content_hash, image_path,
-        content_type="image", image_path=image_path, thumbnail_path=thumb_path,
+        doc_id, title, "", content_hash, stored_image_path,
+        content_type="image", image_path=stored_image_path, thumbnail_path=stored_thumb_path,
     )
     store.documents.update_status(doc_id, "classified")
 
@@ -256,47 +278,60 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
         text="", offset=0, length=0,
     )])
 
-    # Extract only if image spec exists (same pattern as text)
+    # Extract with simmered spec if available, otherwise use general spec
     entity_count = 0
     image_spec = store.specs.get_general(media_type="image")
-    if image_spec:
-        extraction = await extract_entities_from_image(
-            relay=relay, image_base64=b64, media_type=media_type,
-            spec=image_spec.spec_content, model=settings.extraction_model,
+    spec_content = image_spec.spec_content if image_spec else GENERAL_IMAGE_SPEC
+    spec_version = image_spec.version if image_spec else 0
+    extraction_pass = "image_simmered" if image_spec else "image_general"
+
+    extraction = await extract_entities_from_image(
+        relay=relay, image_base64=b64, media_type=media_type,
+        spec=spec_content, model=settings.extraction_model,
+    )
+
+    description = extraction.get("description", "")
+
+    # Update document content with description
+    store.documents.update_content(doc_id, description)
+    store.chunks.update_text(chunk_id, description)
+
+    chunk_entities: dict[str, list[str]] = {}
+    for entity in extraction.get("entities", []):
+        name = entity.get("name", "").lower().strip()
+        etype = entity.get("type", "Object")
+        if not name:
+            continue
+        entity_id = normalize_entity(store, name, etype)
+        store.entity_sources.create(
+            entity_id=entity_id, document_id=doc_id, chunk_id=chunk_id,
+            extraction_pass=extraction_pass,
+            spec_version=spec_version,
         )
+        chunk_entities.setdefault(chunk_id, []).append(entity_id)
+        entity_count += 1
 
-        description = extraction.get("description", "")
-
-        # Update document content with description
-        store.conn.execute("UPDATE documents SET content = ? WHERE id = ?", (description, doc_id))
-        store.conn.execute("UPDATE chunks SET text = ?, length = ? WHERE id = ?", (description, len(description), chunk_id))
-
-        chunk_entities: dict[str, list[str]] = {}
-        for entity in extraction.get("entities", []):
-            name = entity.get("name", "").lower().strip()
-            etype = entity.get("type", "Object")
-            if not name:
-                continue
-            entity_id = normalize_entity(store, name, etype)
-            store.entity_sources.create(
-                entity_id=entity_id, document_id=doc_id, chunk_id=chunk_id,
-                extraction_pass="image_general",
-                spec_version=image_spec.version,
+    if chunk_entities:
+        edges = compute_cooccurrence_edges(chunk_entities)
+        for edge in edges:
+            store.relationships.upsert_cooccurrence(
+                edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
             )
-            chunk_entities.setdefault(chunk_id, []).append(entity_id)
-            entity_count += 1
+    store.documents.update_status(doc_id, "extracted")
 
-        if chunk_entities:
-            edges = compute_cooccurrence_edges(chunk_entities)
-            for edge in edges:
-                store.relationships.upsert_cooccurrence(
-                    edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
-                )
-            store.documents.update_status(doc_id, "extracted")
-
-    # Embed for search — both text (sentence-transformers) and image (SigLIP)
+    # Embed for search
     import os as _os
-    if _os.environ.get("DB_BACKEND", "sqlite").lower() != "firestore":
+    if _os.environ.get("DB_BACKEND", "sqlite").lower() == "firestore":
+        # Cloud: embed description with Vertex AI for vector search
+        if description:
+            try:
+                from ..services.embedding import embed_text
+                from google.cloud.firestore_v1.vector import Vector
+                desc_embedding = embed_text(description)
+                store.chunks.update_embedding(chunk_id, Vector(desc_embedding))
+            except Exception as e:
+                print(f"Vertex AI embedding after image ingest: {e}", flush=True)
+    else:
         # Text embeddings (sentence-transformers) for text search compatibility
         try:
             from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks

@@ -57,6 +57,7 @@ class Stats(BaseModel):
     entity_count: int
     domain_count: int
     active_jobs: int
+    image_count: int = 0
 
 class IngestResult(BaseModel):
     document_id: str

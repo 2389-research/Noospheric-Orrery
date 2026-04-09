@@ -82,6 +82,10 @@ class SQLiteDocumentRepository(DocumentRepository):
         self._conn.execute("UPDATE documents SET status = ? WHERE id = ?", (status, doc_id))
         self._conn.commit()
 
+    def update_content(self, doc_id, content):
+        self._conn.execute("UPDATE documents SET content = ? WHERE id = ?", (content, doc_id))
+        self._conn.commit()
+
     def get_for_domain(self, domain_path, status_filter=None):
         query = """SELECT d.* FROM documents d
             JOIN document_domains dd ON d.id = dd.document_id
@@ -151,6 +155,10 @@ class SQLiteChunkRepository(ChunkRepository):
 
     def update_embedding(self, chunk_id, embedding):
         self._conn.execute("UPDATE chunks SET embedding = ? WHERE id = ?", (embedding, chunk_id))
+        self._conn.commit()
+
+    def update_text(self, chunk_id, text):
+        self._conn.execute("UPDATE chunks SET text = ?, length = ? WHERE id = ?", (text, len(text), chunk_id))
         self._conn.commit()
 
 

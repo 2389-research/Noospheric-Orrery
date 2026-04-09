@@ -15,8 +15,9 @@ WORKDIR /app/orchestrator
 COPY orchestrator/pyproject.toml orchestrator/uv.lock ./
 RUN uv sync --frozen --no-cache
 
-# Copy application code
+# Copy application code + general specs
 COPY orchestrator/src/ src/
+COPY orchestrator/specs/ specs/
 
 EXPOSE 8000
 CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

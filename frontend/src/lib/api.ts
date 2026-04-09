@@ -121,6 +121,7 @@ export const api = {
     }>(`/documents/${docId}/reader`),
 
   // Workspace CRUD
+  listWorkspaces: () => fetchAPI<import("./hooks/use-workspaces").Workspace[]>("/workspaces"),
   createWorkspace: (name: string, description: string = "") =>
     fetchAPI<{ workspaceId: string; name: string }>("/workspaces", {
       method: "POST",

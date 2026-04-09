@@ -179,22 +179,29 @@ def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
     domains = [{"id": d.id, "path": d.path, "parent_path": d.parent_path,
                 "doc_count": d.document_count, "spec_version": d.spec_version} for d in domain_objs]
 
-    # Domain positions — read from stored positions
-    # On SQLite: UMAP computes if needed. On Firestore: positions pre-pushed, just read.
+    # Domain positions
+    # SQLite: UMAP computed on demand via ensure_layout
+    # Firestore: read stored positions (computed by worker on Cloud Run where numba works)
     if store.conn is not None:
         from ..pipeline.domain_layout import ensure_layout
-        domain_positions = ensure_layout(store)
+        domain_positions = ensure_layout(store.conn)
     else:
         domain_positions = store.layout.get_stored_positions()
-        # Place any domains without positions in a circle
-        import math
+        # Place any domains without stored positions nearby existing ones
         missing = [d["path"] for d in domains if d["path"] not in domain_positions]
-        for i, path in enumerate(missing):
-            angle = (i / max(len(missing), 1)) * 2 * math.pi
-            x = 0.5 + 0.3 * math.cos(angle)
-            y = 0.5 + 0.3 * math.sin(angle)
-            domain_positions[path] = {"x": x, "y": y}
-            store.layout.store_position(path, x, y)
+        if missing:
+            import random
+            for path in missing:
+                if domain_positions:
+                    # Place near a random existing domain
+                    ref = random.choice(list(domain_positions.values()))
+                    x = ref["x"] + random.uniform(-0.05, 0.05)
+                    y = ref["y"] + random.uniform(-0.05, 0.05)
+                else:
+                    x = random.uniform(0.2, 0.8)
+                    y = random.uniform(0.2, 0.8)
+                domain_positions[path] = {"x": max(0, min(1, x)), "y": max(0, min(1, y))}
+                store.layout.store_position(path, x, y)
 
     domain_doc_counts = {d["path"]: d["doc_count"] for d in domains}
     region_colors = _assign_domain_colors(domains)

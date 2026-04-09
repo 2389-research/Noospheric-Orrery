@@ -8,6 +8,7 @@ interface ImagePaneProps {
   documentId: string;
   onClose: () => void;
   onNavigateEntity?: (entityId: string) => void;
+  onNavigateDomain?: (domainPath: string) => void;
 }
 
 interface ImageEntity {
@@ -39,7 +40,7 @@ function getColor(type: string): string {
   return ENTITY_COLORS[type] ?? "#9c9a92";
 }
 
-export function ImagePane({ documentId, onClose, onNavigateEntity }: ImagePaneProps) {
+export function ImagePane({ documentId, onClose, onNavigateEntity, onNavigateDomain }: ImagePaneProps) {
   const noosphereId = useNoosphereId();
   const [doc, setDoc] = useState<ImageDocDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -99,11 +100,20 @@ export function ImagePane({ documentId, onClose, onNavigateEntity }: ImagePanePr
     <div style={{ fontFamily: "'Courier New', monospace", height: "100%", display: "flex", flexDirection: "column" }}>
       {/* Header */}
       <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(100,200,180,0.12)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
-        <div>
-          <div style={{ fontSize: 9, color: "rgba(100,200,180,0.7)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 2 }}>
-            Image
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button
+            onClick={onClose}
+            style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(100,200,180,0.6)", fontSize: 11, fontFamily: "'Courier New', monospace", padding: "2px 0" }}
+            title="Back to results"
+          >
+            ← back
+          </button>
+          <div>
+            <div style={{ fontSize: 9, color: "rgba(100,200,180,0.7)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 2 }}>
+              Image
+            </div>
+            <div style={{ fontSize: 13, color: "#e8eaf0" }}>{doc.title}</div>
           </div>
-          <div style={{ fontSize: 13, color: "#e8eaf0" }}>{doc.title}</div>
         </div>
         <button
           onClick={onClose}
@@ -135,9 +145,20 @@ export function ImagePane({ documentId, onClose, onNavigateEntity }: ImagePanePr
           <div style={{ padding: "10px 16px", borderBottom: "1px solid rgba(100,200,180,0.08)" }}>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
               {doc.domains.map((dp) => (
-                <span key={dp} style={{ fontSize: 9, color: "rgba(100,200,180,0.8)", padding: "2px 6px", border: "1px solid rgba(100,200,180,0.2)", borderRadius: 3 }}>
+                <button
+                  key={dp}
+                  onClick={() => onNavigateDomain?.(dp)}
+                  style={{
+                    fontSize: 9, color: "rgba(100,200,180,0.8)", padding: "2px 6px",
+                    border: "1px solid rgba(100,200,180,0.2)", borderRadius: 3,
+                    background: "none", cursor: "pointer", fontFamily: "'Courier New', monospace",
+                    transition: "background 0.15s",
+                  }}
+                  onMouseEnter={(ev) => { ev.currentTarget.style.background = "rgba(100,200,180,0.1)"; }}
+                  onMouseLeave={(ev) => { ev.currentTarget.style.background = "none"; }}
+                >
                   {dp.split("/").pop()}
-                </span>
+                </button>
               ))}
             </div>
           </div>

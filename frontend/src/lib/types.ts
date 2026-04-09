@@ -40,6 +40,7 @@ export interface Stats {
   entity_count: number;
   domain_count: number;
   active_jobs: number;
+  image_count: number;
 }
 
 export interface IngestResult {

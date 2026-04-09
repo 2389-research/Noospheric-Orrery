@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { getFirestoreDb } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
+import { api } from "@/lib/api";
 
 export interface Workspace {
   id: string;
@@ -21,12 +22,23 @@ export function useWorkspaces() {
   );
   const [loading, setLoading] = useState(true);
 
+  const refresh = useCallback(async () => {
+    try {
+      const ws = await api.listWorkspaces();
+      setWorkspaces(ws.filter((w: Workspace) => w.status !== "archived"));
+    } catch {
+      // keep current
+    }
+    setLoading(false);
+  }, []);
+
   useEffect(() => {
     if (!session?.orgId) return;
 
     const db = getFirestoreDb();
     if (!db) {
-      setLoading(false);
+      // Noop/local mode — fetch from API
+      refresh();
       return;
     }
 
@@ -45,7 +57,7 @@ export function useWorkspaces() {
     });
 
     return () => unsubscribe();
-  }, [session?.orgId]);
+  }, [session?.orgId, refresh]);
 
-  return { workspaces, loading };
+  return { workspaces, loading, refresh };
 }

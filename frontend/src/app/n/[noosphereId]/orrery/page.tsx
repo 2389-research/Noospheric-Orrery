@@ -41,7 +41,8 @@ export default function VizPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult | null>(null);
   const [searching, setSearching] = useState(false);
-  const [includeImages, setIncludeImages] = useState(true);
+  const [includeImages, setIncludeImages] = useState(false);
+  const [hasImages, setHasImages] = useState(false);
   const [fading, setFading] = useState(false);
   const [authToken, setAuthToken] = useState<string>("");
   const galaxyRef = useRef<HTMLIFrameElement>(null);
@@ -50,6 +51,11 @@ export default function VizPage() {
   // Get auth token for iframe API calls
   useEffect(() => {
     getAuthToken().then(t => { if (t) setAuthToken(t); }).catch(() => {});
+  }, []);
+
+  // Check if workspace has images (to show/hide toggle)
+  useEffect(() => {
+    api.getStats().then(s => { if (s.image_count > 0) setHasImages(true); }).catch(() => {});
   }, []);
 
   // Current iframe ref
@@ -274,6 +280,7 @@ export default function VizPage() {
         >
           {searching ? "..." : "search"}
         </button>
+        {hasImages && (
         <button
           onClick={() => setIncludeImages(prev => !prev)}
           title={includeImages ? "Click to search text only" : "Click to include image results"}
@@ -289,6 +296,7 @@ export default function VizPage() {
         >
           {includeImages ? "📷 on" : "📷 off"}
         </button>
+        )}
       </div>
 
       {/* Breadcrumb + nav — top left, hidden when panel is open */}
@@ -395,6 +403,10 @@ export default function VizPage() {
                 setSelectedDocId(null);
                 enterStarView(entityId, "");
               }}
+              onNavigateDomain={(domainPath) => {
+                setSelectedDocId(null);
+                flyToDomain(domainPath);
+              }}
             />
           ) : (
             <ReaderPane
@@ -438,11 +450,11 @@ export default function VizPage() {
 
           {/* Image results — shown first when present */}
           {searchResults.images && searchResults.images.length > 0 && (
-            <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(100,200,180,0.15)" }}>
+            <div style={{ padding: "12px 16px", borderBottom: includeImages ? "none" : "1px solid rgba(100,200,180,0.15)" }}>
               <div style={{ fontSize: 9, color: "rgba(100,200,180,0.6)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
                 Image Results · {searchResults.images.length}
               </div>
-              {searchResults.images.slice(0, 5).map((img, i) => (
+              {searchResults.images.slice(0, 10).map((img, i) => (
                 <button
                   key={i}
                   onClick={() => {
@@ -479,7 +491,8 @@ export default function VizPage() {
             </div>
           )}
 
-          {/* Entity results — clickable → fly to */}
+          {/* Entity results — hidden when in image-only mode */}
+          {!includeImages && (
           <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(100,180,255,0.08)" }}>
             <div style={{ fontSize: 9, color: "rgba(140,200,255,0.6)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
               Entities — click to locate
@@ -510,8 +523,10 @@ export default function VizPage() {
               </div>
             ))}
           </div>
+          )}
 
-          {/* Document excerpts — text docs only */}
+          {/* Document excerpts — hidden when in image-only mode */}
+          {!includeImages && (
           <div style={{ padding: "12px 16px" }}>
             <div style={{ fontSize: 9, color: "rgba(140,200,255,0.6)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
               Document Excerpts
@@ -533,6 +548,7 @@ export default function VizPage() {
               </div>
             ))}
           </div>
+          )}
         </div>
       )}
     </div>
