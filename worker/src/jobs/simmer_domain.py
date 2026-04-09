@@ -23,6 +23,7 @@ async def run_simmer_domain(job: dict, db_path: str) -> None:
     settings = get_settings()
     config = json.loads(job["config"]) if job["config"] else {}
     domain_path = config.get("domain") or job["target"]
+    iterations = config.get("iterations", settings.simmer_iterations)
 
     conn = get_connection(db_path)
 
@@ -130,7 +131,7 @@ Read every sample document and list ALL entities you find as a JSON array:
             "domain_specificity": f"Entity types include categories specific to {domain_path} that the general spec misses — not just generic Person/Organization",
         },
         primary="coverage",
-        iterations=settings.simmer_iterations,
+        iterations=iterations,
         judge_mode="board",
         judge_panel=[
             {
@@ -153,7 +154,7 @@ Read every sample document and list ALL entities you find as a JSON array:
         output_dir=domain_dir / "golden",
         generator_model=settings.classification_model,
         judge_model=settings.classification_model,
-        clerk_model=settings.extraction_model,
+        clerk_model=settings.classification_model,
         background=(
             f"Sample documents from domain '{domain_path}' are in {sample_dir}. Read ALL of them.\n\n"
             f"The golden set must contain TWO things:\n"
@@ -180,7 +181,7 @@ Read every sample document and list ALL entities you find as a JSON array:
             "format_compliance": "Valid JSON with name and type fields",
         },
         primary="coverage",
-        iterations=settings.simmer_iterations,
+        iterations=iterations,
         judge_mode="board",
         judge_panel=[
             {
@@ -209,9 +210,9 @@ Read every sample document and list ALL entities you find as a JSON array:
         output_dir=domain_dir / "spec",
         generator_model=settings.classification_model,
         judge_model=settings.classification_model,
-        clerk_model=settings.extraction_model,
+        clerk_model=settings.classification_model,
         evaluator=(
-            f"python {shlex.quote(str(evaluator_script))}"
+            f"uv run python {shlex.quote(str(evaluator_script))}"
             f" --candidate {{candidate_path}}"
             f" --samples-dir {shlex.quote(str(sample_dir))}"
             f" --golden-set {shlex.quote(str(golden_set_path))}"

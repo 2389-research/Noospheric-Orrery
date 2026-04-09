@@ -23,6 +23,9 @@ class Document:
     created_at: str | None = None
     domains: list[str] = field(default_factory=list)
     entity_count: int = 0
+    content_type: str = "text"
+    image_path: str | None = None
+    thumbnail_path: str | None = None
 
 
 @dataclass
@@ -170,6 +173,9 @@ class DocumentRepository(ABC):
     def update_status(self, doc_id: str, status: str) -> None: ...
 
     @abstractmethod
+    def update_content(self, doc_id: str, content: str) -> None: ...
+
+    @abstractmethod
     def get_for_domain(self, domain_path: str, status_filter: list[str] | None = None) -> list[Document]: ...
 
     @abstractmethod
@@ -191,6 +197,9 @@ class ChunkRepository(ABC):
 
     @abstractmethod
     def update_embedding(self, chunk_id: str, embedding: bytes) -> None: ...
+
+    @abstractmethod
+    def update_text(self, chunk_id: str, text: str) -> None: ...
 
 
 class DomainRepository(ABC):
