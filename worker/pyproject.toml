@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "anthropic[bedrock]>=0.40.0",
     "sentence-transformers>=3.0.0",
+    "torch>=2.0.0",
     # simmer-sdk: install from PyPI or local path (see worker/Dockerfile)
     # "simmer-sdk>=0.2.0",
     "orrery-relay",
@@ -18,6 +19,12 @@ dev = [
 
 [tool.uv.sources]
 orrery-relay = { path = "../packages/orrery-relay" }
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
