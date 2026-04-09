@@ -69,8 +69,13 @@ export default function VizPage() {
     breadcrumbs.push({ label: starEntityName, action: () => {} });
   }
 
-  // Enter star view with fade
-  const enterStarView = useCallback((entityId: string, entityName: string) => {
+  // Enter star view with fade — refresh auth token first
+  const enterStarView = useCallback(async (entityId: string, entityName: string) => {
+    // Refresh token before loading star iframe (tokens expire after ~1hr)
+    try {
+      const fresh = await getAuthToken();
+      if (fresh) setAuthToken(fresh);
+    } catch {}
     setFading(true);
     setTimeout(() => {
       setStarEntityId(entityId);
