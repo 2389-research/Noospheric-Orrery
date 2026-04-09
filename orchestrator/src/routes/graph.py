@@ -186,7 +186,10 @@ def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
         from ..pipeline.domain_layout import ensure_layout
         domain_positions = ensure_layout(store.conn)
     else:
-        domain_positions = store.layout.get_stored_positions()
+        all_stored = store.layout.get_stored_positions()
+        active_paths = {d["path"] for d in domains}
+        # Only include positions for domains that actually exist in this workspace
+        domain_positions = {p: pos for p, pos in all_stored.items() if p in active_paths}
         # Place any domains without stored positions nearby existing ones
         missing = [d["path"] for d in domains if d["path"] not in domain_positions]
         if missing:
