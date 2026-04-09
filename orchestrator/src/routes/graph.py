@@ -190,6 +190,18 @@ def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
         active_paths = {d["path"] for d in domains}
         # Only include positions for domains that actually exist in this workspace
         domain_positions = {p: pos for p, pos in all_stored.items() if p in active_paths}
+        # Normalize to 0-1 range (some old positions stored in -400 to 400 range)
+        if domain_positions:
+            xs = [v["x"] for v in domain_positions.values()]
+            ys = [v["y"] for v in domain_positions.values()]
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            rx = (max_x - min_x) or 1
+            ry = (max_y - min_y) or 1
+            domain_positions = {
+                p: {"x": (v["x"] - min_x) / rx, "y": (v["y"] - min_y) / ry}
+                for p, v in domain_positions.items()
+            }
         # Domains without positions are omitted — the post-process worker
         # computes them via UMAP transform() on Cloud Run (x86)
 
