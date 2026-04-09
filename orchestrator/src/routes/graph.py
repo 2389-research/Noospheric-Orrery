@@ -190,21 +190,8 @@ def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
         active_paths = {d["path"] for d in domains}
         # Only include positions for domains that actually exist in this workspace
         domain_positions = {p: pos for p, pos in all_stored.items() if p in active_paths}
-        # Place any domains without stored positions nearby existing ones
-        missing = [d["path"] for d in domains if d["path"] not in domain_positions]
-        if missing:
-            import random
-            for path in missing:
-                if domain_positions:
-                    # Place near a random existing domain
-                    ref = random.choice(list(domain_positions.values()))
-                    x = ref["x"] + random.uniform(-0.05, 0.05)
-                    y = ref["y"] + random.uniform(-0.05, 0.05)
-                else:
-                    x = random.uniform(0.2, 0.8)
-                    y = random.uniform(0.2, 0.8)
-                domain_positions[path] = {"x": max(0, min(1, x)), "y": max(0, min(1, y))}
-                store.layout.store_position(path, x, y)
+        # Domains without positions are omitted — the post-process worker
+        # computes them via UMAP transform() on Cloud Run (x86)
 
     domain_doc_counts = {d["path"]: d["doc_count"] for d in domains}
     region_colors = _assign_domain_colors(domains)
