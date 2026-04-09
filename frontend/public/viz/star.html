@@ -77,7 +77,7 @@ const API_URL = new URLSearchParams(location.search).get('api') || window.API_UR
 const AUTH_TOKEN = new URLSearchParams(location.search).get('token') || '';
 const WORKSPACE_ID = new URLSearchParams(location.search).get('workspace') || '';
 const fetchHeaders = {};
-if (AUTH_TOKEN) fetchHeaders['Authorization'] = `Bearer ${AUTH_TOKEN}`;
+if (AUTH_TOKEN && AUTH_TOKEN !== 'noop') fetchHeaders['Authorization'] = `Bearer ${AUTH_TOKEN}`;
 if (WORKSPACE_ID) fetchHeaders['X-Workspace-Id'] = WORKSPACE_ID;
 
 async function loadData() {
@@ -202,6 +202,7 @@ function buildStarView(graph) {
       id: d.id,
       kind: 'document',
       title: d.title || 'Untitled',
+      content_type: d.content_type || 'text',
       radius: 8,
       x: dx, y: dy,
       _px: dx, _py: dy,
@@ -350,11 +351,13 @@ canvas.addEventListener('mouseup', e => {
     const hit = hitTest(w.x, w.y);
     if (hit) {
       if (hit.kind === 'co_entity') {
-        window.location.search = `?entity=${encodeURIComponent(hit.id)}`;
+        const params = new URLSearchParams(location.search);
+        params.set('entity', hit.id);
+        window.location.search = params.toString();
       } else if (hit.kind === 'document') {
         window.parent.postMessage({
           type: 'node_selected', nodeType: 'document',
-          data: { id: hit.id, title: hit.title }
+          data: { id: hit.id, title: hit.title, content_type: hit.content_type || 'text' }
         }, '*');
       } else if (hit.kind === 'central') {
         window.parent.postMessage({

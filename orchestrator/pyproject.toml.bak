@@ -1,0 +1,52 @@
+[project]
+name = "orrery-orchestrator"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "anthropic[bedrock]>=0.40.0",
+    "python-multipart>=0.0.9",
+    "sentence-transformers>=3.0.0",
+    "umap-learn>=0.5.0",
+    "numpy>=1.26.0,<2.1",
+    "faiss-cpu>=1.7.0",
+    "mcp>=1.0.0",
+    "torch>=2.0.0",
+    "Pillow>=10.0.0",
+    "sentencepiece>=0.1.99",
+    "orrery-relay",
+    "firebase-admin>=6.0.0",
+    "google-cloud-firestore>=2.0.0",
+    "google-genai>=1.0.0",
+]
+
+[project.optional-dependencies]
+local = [
+    # For local SQLite mode — FAISS search + sentence-transformers embeddings
+    # Not needed on Cloud Run (uses Vertex AI + Firestore vector search)
+    "sentence-transformers>=3.0.0",
+    "umap-learn>=0.5.0",
+    "faiss-cpu>=1.7.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+orrery-relay = { path = "../packages/orrery-relay" }
+torch = { index = "pytorch-cpu" }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

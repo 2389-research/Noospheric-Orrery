@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { GalaxyPanel } from "@/components/galaxy/galaxy-panel";
 import { ReaderPane } from "@/components/reader/reader-pane";
+import { ImagePane } from "@/components/image-pane";
 import { api } from "@/lib/api";
 import { getAuthToken } from "@/lib/firebase";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
@@ -16,6 +17,7 @@ interface SearchResult {
   query: string;
   entities: { id: string; name: string; type: string; source_count: number; score: number; paths: string[] }[];
   chunks: { chunk_id: string; document_id: string; document_title: string; text: string; score: number }[];
+  images?: { document_id: string; title: string; description: string; score: number }[];
   total_entities: number;
   total_chunks: number;
 }
@@ -34,18 +36,31 @@ export default function VizPage() {
   const [starEntityName, setStarEntityName] = useState<string>("");
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
+  const [selectedDocType, setSelectedDocType] = useState<string>("text");
   const [domainColors, setDomainColors] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult | null>(null);
   const [searching, setSearching] = useState(false);
+  const [includeImages, setIncludeImages] = useState(false);
+  const [hasImages, setHasImages] = useState(false);
   const [fading, setFading] = useState(false);
   const [authToken, setAuthToken] = useState<string>("");
   const galaxyRef = useRef<HTMLIFrameElement>(null);
   const starRef = useRef<HTMLIFrameElement>(null);
 
   // Get auth token for iframe API calls
+  const isNoop = process.env.NEXT_PUBLIC_AUTH_MODE === "noop";
   useEffect(() => {
+    if (isNoop) {
+      setAuthToken("noop");  // sentinel — iframes render, no auth header sent
+      return;
+    }
     getAuthToken().then(t => { if (t) setAuthToken(t); }).catch(() => {});
+  }, [isNoop]);
+
+  // Check if workspace has images (to show/hide toggle)
+  useEffect(() => {
+    api.getStats().then(s => { if (s.image_count > 0) setHasImages(true); }).catch(() => {});
   }, []);
 
   // Current iframe ref
@@ -59,8 +74,13 @@ export default function VizPage() {
     breadcrumbs.push({ label: starEntityName, action: () => {} });
   }
 
-  // Enter star view with fade
-  const enterStarView = useCallback((entityId: string, entityName: string) => {
+  // Enter star view with fade — refresh auth token first
+  const enterStarView = useCallback(async (entityId: string, entityName: string) => {
+    // Refresh token before loading star iframe (tokens expire after ~1hr)
+    try {
+      const fresh = await getAuthToken();
+      if (fresh) setAuthToken(fresh);
+    } catch {}
     setFading(true);
     setTimeout(() => {
       setStarEntityId(entityId);
@@ -102,6 +122,7 @@ export default function VizPage() {
       if (e.data?.type === "node_selected") {
         if (e.data.nodeType === "document") {
           setSelectedDocId(e.data.data.id as string);
+          setSelectedDocType((e.data.data.content_type as string) || "text");
           setSelectedNode(null);
         } else {
           setSelectedNode({ nodeType: e.data.nodeType, data: e.data.data });
@@ -141,6 +162,7 @@ export default function VizPage() {
             activeRef.current?.contentWindow?.postMessage({
               type: "search_result",
               entities: data.entities,
+              doc_ids: data.doc_ids || [],
             }, "*");
           }
         } catch { /* ignore */ }
@@ -175,7 +197,7 @@ export default function VizPage() {
       if (token) headers["Authorization"] = `Bearer ${token}`;
       if (noosphereId) headers["X-Workspace-Id"] = noosphereId;
 
-      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20&expand=false`, { headers });
+      const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20&expand=false&include_images=${includeImages}`, { headers });
       const results: SearchResult = await resp.json();
       setSearchResults(results);
 
@@ -191,7 +213,16 @@ export default function VizPage() {
       console.error("Search failed:", e);
     }
     setSearching(false);
-  }, [searchQuery, viewMode]);
+  }, [searchQuery, viewMode, includeImages]);
+
+  // Re-search when image toggle changes (if there's an active search)
+  const includeImagesRef = useRef(includeImages);
+  useEffect(() => {
+    if (includeImagesRef.current !== includeImages && searchQuery.trim()) {
+      includeImagesRef.current = includeImages;
+      handleSearch();
+    }
+  }, [includeImages, searchQuery, handleSearch]);
 
   // Click search result → navigate to it
   const flyToEntity = useCallback((entityId: string) => {
@@ -259,6 +290,23 @@ export default function VizPage() {
         >
           {searching ? "..." : "search"}
         </button>
+        {hasImages && (
+        <button
+          onClick={() => setIncludeImages(prev => !prev)}
+          title={includeImages ? "Click to search text only" : "Click to include image results"}
+          style={{
+            padding: "8px 10px", fontSize: 11,
+            fontFamily: "'Courier New', monospace",
+            background: includeImages ? "rgba(100,200,180,0.15)" : "rgba(100,180,255,0.05)",
+            color: includeImages ? "rgba(100,200,180,0.8)" : "rgba(100,180,255,0.4)",
+            border: `1px solid ${includeImages ? "rgba(100,200,180,0.3)" : "rgba(100,180,255,0.15)"}`,
+            borderRadius: 6,
+            cursor: "pointer",
+          }}
+        >
+          {includeImages ? "📷 on" : "📷 off"}
+        </button>
+        )}
       </div>
 
       {/* Breadcrumb + nav — top left, hidden when panel is open */}
@@ -301,22 +349,22 @@ export default function VizPage() {
       }} />
 
       {/* Galaxy/Sector iframe (always mounted, hidden when in star mode) */}
-      <iframe
+      {authToken && <iframe
         ref={galaxyRef}
-        src={`/viz/index.html?api=${encodeURIComponent("/api")}${authToken ? `&token=${encodeURIComponent(authToken)}` : ""}&workspace=${encodeURIComponent(noosphereId)}`}
+        src={`/viz/index.html?api=${encodeURIComponent("/api")}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}`}
         style={{
           width: "100%", height: "100%", border: "none",
           position: "absolute", top: 0, left: 0,
           display: viewMode === "galaxy" ? "block" : "none",
         }}
         title="Galaxy View"
-      />
+      />}
 
-      {/* Star iframe (mounted when in star mode) */}
-      {viewMode === "star" && starEntityId && (
+      {/* Star iframe (mounted when in star mode, only after auth token is ready) */}
+      {viewMode === "star" && starEntityId && authToken && (
         <iframe
           ref={starRef}
-          src={`/viz/star.html?entity=${encodeURIComponent(starEntityId)}&api=${encodeURIComponent("/api")}${authToken ? `&token=${encodeURIComponent(authToken)}` : ""}&workspace=${encodeURIComponent(noosphereId)}`}
+          src={`/viz/star.html?entity=${encodeURIComponent(starEntityId)}&api=${encodeURIComponent("/api")}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}`}
           style={{
             width: "100%", height: "100%", border: "none",
             position: "absolute", top: 0, left: 0,
@@ -357,14 +405,29 @@ export default function VizPage() {
           borderRight: "1px solid rgba(100,200,180,0.12)",
           overflowY: "auto",
         }}>
-          <ReaderPane
-            documentId={selectedDocId!}
-            onClose={() => setSelectedDocId(null)}
-            onNavigateEntity={(entityId) => {
-              setSelectedDocId(null);
-              enterStarView(entityId, "");
-            }}
-          />
+          {selectedDocType === "image" ? (
+            <ImagePane
+              documentId={selectedDocId!}
+              onClose={() => setSelectedDocId(null)}
+              onNavigateEntity={(entityId) => {
+                setSelectedDocId(null);
+                enterStarView(entityId, "");
+              }}
+              onNavigateDomain={(domainPath) => {
+                setSelectedDocId(null);
+                flyToDomain(domainPath);
+              }}
+            />
+          ) : (
+            <ReaderPane
+              documentId={selectedDocId!}
+              onClose={() => setSelectedDocId(null)}
+              onNavigateEntity={(entityId) => {
+                setSelectedDocId(null);
+                enterStarView(entityId, "");
+              }}
+            />
+          )}
         </div>
       )}
 
@@ -395,7 +458,51 @@ export default function VizPage() {
             </div>
           </div>
 
-          {/* Entity results — clickable → fly to */}
+          {/* Image results — shown first when present */}
+          {searchResults.images && searchResults.images.length > 0 && (
+            <div style={{ padding: "12px 16px", borderBottom: includeImages ? "none" : "1px solid rgba(100,200,180,0.15)" }}>
+              <div style={{ fontSize: 9, color: "rgba(100,200,180,0.6)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+                Image Results · {searchResults.images.length}
+              </div>
+              {searchResults.images.slice(0, 10).map((img, i) => (
+                <button
+                  key={i}
+                  onClick={() => {
+                    setSelectedDocId(img.document_id);
+                    setSelectedDocType("image");
+                  }}
+                  style={{
+                    display: "block", width: "100%", textAlign: "left",
+                    padding: 0, marginBottom: 8,
+                    background: "none", border: "none", cursor: "pointer",
+                    fontFamily: "'Courier New', monospace",
+                  }}
+                >
+                  <div style={{
+                    borderRadius: 4, overflow: "hidden",
+                    border: "1px solid rgba(100,200,180,0.2)",
+                    background: "rgba(100,200,180,0.03)",
+                  }}>
+                    <img
+                      src={`/api/images/${img.document_id}`}
+                      alt={img.title}
+                      style={{ width: "100%", height: 120, objectFit: "cover", display: "block" }}
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
+                    <div style={{ padding: "6px 10px" }}>
+                      <div style={{ fontSize: 10, color: "rgba(100,200,180,0.7)", display: "flex", alignItems: "center", gap: 4 }}>
+                        {img.title}
+                        <span style={{ marginLeft: "auto", fontSize: 9, color: "rgba(100,200,180,0.4)" }}>{img.score.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Entity results — hidden when in image-only mode */}
+          {!includeImages && (
           <div style={{ padding: "12px 16px", borderBottom: "1px solid rgba(100,180,255,0.08)" }}>
             <div style={{ fontSize: 9, color: "rgba(140,200,255,0.6)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
               Entities — click to locate
@@ -426,13 +533,17 @@ export default function VizPage() {
               </div>
             ))}
           </div>
+          )}
 
-          {/* Chunk results */}
+          {/* Document excerpts — hidden when in image-only mode */}
+          {!includeImages && (
           <div style={{ padding: "12px 16px" }}>
             <div style={{ fontSize: 9, color: "rgba(140,200,255,0.6)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
               Document Excerpts
             </div>
-            {searchResults.chunks.slice(0, 5).map((c, i) => (
+            {searchResults.chunks
+              .filter(c => !c.document_title.match(/\.(jpg|jpeg|png|webp|gif)$/i))
+              .slice(0, 5).map((c, i) => (
               <div key={i} style={{
                 padding: "8px 10px", marginBottom: 8,
                 borderLeft: "2px solid rgba(0,200,180,0.4)",
@@ -447,6 +558,7 @@ export default function VizPage() {
               </div>
             ))}
           </div>
+          )}
         </div>
       )}
     </div>

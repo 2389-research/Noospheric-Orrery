@@ -8,6 +8,7 @@ import { NavBar } from "@/components/nav-bar";
 import { DemoModeContext } from "@/lib/hooks/use-demo-mode";
 
 const MAGOS_ID = process.env.NEXT_PUBLIC_MAGOS_WORKSPACE_ID;
+const IS_NOOP = process.env.NEXT_PUBLIC_AUTH_MODE === "noop";
 
 export default function NoosphereLayout({
   children,
@@ -25,6 +26,7 @@ export default function NoosphereLayout({
     if (!noosphereId || !session) return;
 
     const isValid =
+      IS_NOOP ||
       session.workspaces.some((w) => w.id === noosphereId) ||
       isDemo;
 
