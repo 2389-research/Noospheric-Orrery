@@ -29,6 +29,18 @@ from .interfaces import (
 )
 
 
+def _safe_doc_id(name: str) -> str:
+    """Sanitize a string for use as a Firestore document ID.
+
+    Firestore doc IDs cannot contain '/', or be '.' or '..'.
+    Also avoid leading/trailing whitespace.
+    """
+    safe = name.strip().replace("/", "__SLASH__")
+    if safe in (".", ".."):
+        safe = f"__{safe}__"
+    return safe or "__empty__"
+
+
 def _encode_path(path: str) -> str:
     """Encode domain path for use as Firestore doc ID (/ not allowed)."""
     return path.replace("/", "__")
@@ -761,16 +773,13 @@ class FirestoreNormalizationRepository(NormalizationRepository):
         }
 
     def get_merge_map_entry(self, name):
-        # Firestore doc IDs can't contain '/' — encode it
-        safe_name = name.replace("/", "__SLASH__")
-        doc = self._merge_col.document(safe_name).get()
+        doc = self._merge_col.document(_safe_doc_id(name)).get()
         if doc.exists:
             return doc.to_dict().get("toEntityId")
         return None
 
     def create_merge_map_entry(self, from_name, to_entity_id):
-        safe_name = from_name.replace("/", "__SLASH__")
-        self._merge_col.document(safe_name).set({"toEntityId": to_entity_id})
+        self._merge_col.document(_safe_doc_id(from_name)).set({"toEntityId": to_entity_id})
 
     def get_merge_history(self, entity_id):
         results = self._merge_col.where("toEntityId", "==", entity_id).stream()
