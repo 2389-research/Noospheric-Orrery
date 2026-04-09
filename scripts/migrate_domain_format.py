@@ -81,7 +81,20 @@ def migrate_workspace(db, ws_id):
                 if old_encoded != new_encoded:
                     doc_domains.document(old_encoded).delete()
 
-    # 4. Update layout positions
+    # 4. Update documentDomains collection (the join table)
+    dd_col = ws_ref.collection("documentDomains")
+    dd_fixed = 0
+    for dd in dd_col.stream():
+        d = dd.to_dict()
+        old_path = d.get("domainPath", "")
+        new_path = sanitize(old_path)
+        if old_path != new_path:
+            dd.reference.update({"domainPath": new_path})
+            dd_fixed += 1
+    if dd_fixed:
+        print(f"    Fixed {dd_fixed} documentDomain paths")
+
+    # 5. Update layout positions
     for old_path, new_path in renames.items():
         old_encoded = old_path.replace("/", "__")
         new_encoded = new_path.replace("/", "__")
