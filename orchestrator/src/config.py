@@ -2,7 +2,7 @@
 # ABOUTME: Supports gateway, bedrock, and ollama backends via ANTHROPIC_BACKEND env var.
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 
@@ -34,23 +34,25 @@ def _xdg_data_dir() -> str:
 
 
 def get_settings() -> Settings:
+    """Build Settings from env vars, falling back to dataclass defaults."""
+    defaults = Settings()
     _base = _xdg_data_dir()
-    return Settings(
-        anthropic_backend=os.environ.get("ANTHROPIC_BACKEND", "gateway"),
-        gateway_url=os.environ.get("GATEWAY_URL", ""),
-        gateway_api_key=os.environ.get("GATEWAY_API_KEY", ""),
-        aws_access_key=os.environ.get("AWS_ACCESS_KEY", ""),
-        aws_secret_key=os.environ.get("AWS_SECRET_KEY", ""),
-        aws_region=os.environ.get("AWS_REGION", "us-east-1"),
-        ollama_url=os.environ.get("OLLAMA_URL", "http://localhost:11434"),
-        classification_model=os.environ.get("CLASSIFICATION_MODEL", "claude-sonnet-4-6"),
-        extraction_model=os.environ.get("EXTRACTION_MODEL", "claude-haiku-4-5"),
-        general_spec_threshold=int(os.environ.get("GENERAL_SPEC_THRESHOLD", "10")),
-        domain_spec_threshold=int(os.environ.get("DOMAIN_SPEC_THRESHOLD", "20")),
-        simmer_iterations=int(os.environ.get("SIMMER_ITERATIONS", "3")),
-        chunk_size=int(os.environ.get("CHUNK_SIZE", "2000")),
-        worker_poll_interval=int(os.environ.get("WORKER_POLL_INTERVAL", "5")),
-        db_path=os.environ.get("DB_PATH", f"{_base}/orrery.db"),
-        documents_dir=os.environ.get("DOCUMENTS_DIR", f"{_base}/documents"),
-        specs_dir=os.environ.get("SPECS_DIR", f"{_base}/specs"),
-    )
+
+    # Override path defaults with XDG-based paths when not in Docker
+    path_defaults = {
+        "db_path": f"{_base}/orrery.db",
+        "documents_dir": f"{_base}/documents",
+        "specs_dir": f"{_base}/specs",
+    }
+
+    kwargs = {}
+    for f in fields(Settings):
+        env_var = f.name.upper()
+        default = path_defaults.get(f.name, getattr(defaults, f.name))
+        val = os.environ.get(env_var)
+        if val is not None:
+            kwargs[f.name] = f.type(val) if f.type in (int, float) else val
+        else:
+            kwargs[f.name] = default
+
+    return Settings(**kwargs)
