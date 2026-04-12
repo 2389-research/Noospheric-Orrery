@@ -13,9 +13,15 @@ async def handle_job(job: dict, db_path: str) -> None:
     elif job["type"] == "simmer_domain":
         from .jobs.simmer_domain import run_simmer_domain
         await run_simmer_domain(job, db_path)
+    elif job["type"] == "simmer_general_image":
+        from .jobs.simmer_general import run_simmer_general_image
+        await run_simmer_general_image(job, db_path)
     elif job["type"] == "extract_batch":
         from .jobs.extract_batch import run_extract_batch
         await run_extract_batch(job, db_path)
+    elif job["type"] == "extract_batch_image":
+        from .jobs.extract_batch_image import run_extract_batch_image
+        await run_extract_batch_image(job, db_path)
     else:
         raise ValueError(f"Unknown job type: {job['type']}")
 
