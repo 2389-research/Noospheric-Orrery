@@ -37,10 +37,10 @@ class SQLiteDocumentRepository(DocumentRepository):
     def count(self):
         return self._conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
 
-    def create(self, id, title, content, content_hash, source_path=None):
+    def create(self, id, title, content, content_hash, source_path=None, content_type="text"):
         self._conn.execute(
-            "INSERT INTO documents (id, title, content, content_hash, source_path, status) VALUES (?, ?, ?, ?, ?, 'pending')",
-            (id, title, content, content_hash, source_path),
+            "INSERT INTO documents (id, title, content, content_hash, source_path, status, content_type) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (id, title, content, content_hash, source_path, content_type),
         )
         self._conn.commit()
         return id
@@ -53,6 +53,8 @@ class SQLiteDocumentRepository(DocumentRepository):
             id=row["id"], title=row["title"], content=row["content"],
             content_hash=row["content_hash"], source_path=row["source_path"],
             status=row["status"], created_at=row["created_at"],
+            content_type=row["content_type"] or "text",
+            thumbnail_path=row["thumbnail_path"] if "thumbnail_path" in row.keys() else None,
         )
 
     def list(self, limit=50, offset=0):
@@ -64,7 +66,8 @@ class SQLiteDocumentRepository(DocumentRepository):
         ).fetchall()
         result = []
         for r in rows:
-            doc = Document(id=r["id"], title=r["title"], status=r["status"], created_at=r["created_at"])
+            doc = Document(id=r["id"], title=r["title"], status=r["status"], created_at=r["created_at"],
+                          content_type=r["content_type"] or "text", source_path=r["source_path"])
             doc.domains = r["domains"].split(",") if r["domains"] else []
             result.append(doc)
         return result
@@ -92,13 +95,13 @@ class SQLiteDocumentRepository(DocumentRepository):
 
     def get_recent(self, limit=50):
         rows = self._conn.execute(
-            "SELECT d.id, d.title, GROUP_CONCAT(dd.domain_path) as domains "
+            "SELECT d.id, d.title, d.content_type, GROUP_CONCAT(dd.domain_path) as domains "
             "FROM documents d LEFT JOIN document_domains dd ON d.id = dd.document_id "
             "GROUP BY d.id ORDER BY d.created_at DESC LIMIT ?", (limit,)
         ).fetchall()
         result = []
         for r in rows:
-            doc = Document(id=r["id"], title=r["title"])
+            doc = Document(id=r["id"], title=r["title"], content_type=r["content_type"] or "text")
             doc.domains = r["domains"].split(",") if r["domains"] else []
             result.append(doc)
         return result
@@ -430,12 +433,12 @@ class SQLiteRelationshipRepository(RelationshipRepository):
 
         # Documents
         doc_rows = self._conn.execute("""
-            SELECT DISTINCT d.id, d.title FROM entity_sources es
+            SELECT DISTINCT d.id, d.title, d.content_type FROM entity_sources es
             JOIN documents d ON es.document_id = d.id WHERE es.entity_id = ?
             ORDER BY d.title
         """, (entity_id,)).fetchall()
         doc_ids = [r["id"] for r in doc_rows]
-        documents = [{"id": r["id"], "title": r["title"]} for r in doc_rows]
+        documents = [{"id": r["id"], "title": r["title"], "content_type": r["content_type"] or "text"} for r in doc_rows]
 
         # Co-entities
         co_rows = self._conn.execute("""

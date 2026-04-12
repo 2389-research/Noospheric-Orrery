@@ -22,12 +22,12 @@ WORKDIR /app/worker
 COPY worker/pyproject.toml worker/uv.lock ./
 RUN uv sync --frozen --no-cache --no-dev --no-install-project
 
-# Install simmer-sdk v0.3.0 from GitHub (internal dep — not the PyPI package, which is unrelated)
-RUN uv pip install --no-cache-dir "simmer-sdk @ git+https://github.com/2389-research/simmer-sdk.git@v0.3.0"
-
 # Copy application code, then install the project itself
 COPY worker/src/ src/
 RUN uv sync --frozen --no-cache --no-dev
+
+# Install simmer-sdk AFTER final sync (not in lockfile, so must come after)
+RUN uv pip install --no-cache-dir "simmer-sdk @ git+https://github.com/2389-research/simmer-sdk.git@v0.4.0"
 
 # Non-root user (Claude CLI refuses --dangerously-skip-permissions as root)
 RUN useradd -m -s /bin/bash worker

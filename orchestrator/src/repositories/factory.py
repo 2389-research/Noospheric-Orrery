@@ -1,11 +1,11 @@
 from __future__ import annotations
-"""Factory for creating the appropriate DataStore.
+"""Factory for creating the SQLite DataStore.
 
 Usage:
     from repositories.factory import get_store
-    store = get_store()  # reads DB_BACKEND env var
+    store = get_store()
 
-SQLite multi-workspace: each workspace gets its own .db file under
+Multi-workspace: each workspace gets its own .db file under
 ~/orrery-data/workspaces/{workspace_id}/orrery.db
 
 Testing:
@@ -43,32 +43,18 @@ def _sqlite_workspace_db_path(workspace_id: str | None) -> str:
 
 
 def get_store(db_path: str | None = None, workspace_id: str | None = None) -> DataStore:
-    """Create a DataStore based on DB_BACKEND env var.
+    """Create a SQLite DataStore.
 
     Args:
         db_path: SQLite database path (overrides workspace routing)
-        workspace_id: Workspace ID — routes to workspace-specific DB (SQLite) or collection (Firestore)
+        workspace_id: Workspace ID — routes to workspace-specific DB
 
     If a test store is set, returns that instead.
     """
     if _test_store is not None:
         return _test_store
 
-    backend = os.environ.get("DB_BACKEND", "sqlite").lower()
-
-    if backend == "sqlite":
-        from .sqlite_store import SQLiteDataStore
-        if not db_path:
-            db_path = _sqlite_workspace_db_path(workspace_id)
-        return SQLiteDataStore(db_path)
-
-    elif backend == "firestore":
-        from .firestore_store import FirestoreDataStore
-        project_id = os.environ.get("FIREBASE_PROJECT_ID", "noospheric-orrery")
-        ws_id = workspace_id or os.environ.get("FIREBASE_WORKSPACE_ID")
-        if not ws_id:
-            raise ValueError("Firestore backend requires a workspace ID (X-Workspace-Id header or FIREBASE_WORKSPACE_ID env var)")
-        return FirestoreDataStore(project_id=project_id, workspace_id=ws_id)
-
-    else:
-        raise ValueError(f"Unknown DB_BACKEND: {backend}. Use 'sqlite' or 'firestore'.")
+    from .sqlite_store import SQLiteDataStore
+    if not db_path:
+        db_path = _sqlite_workspace_db_path(workspace_id)
+    return SQLiteDataStore(db_path)

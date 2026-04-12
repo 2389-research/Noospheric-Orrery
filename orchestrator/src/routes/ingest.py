@@ -1,4 +1,4 @@
-# ABOUTME: Ingest route — accepts file uploads and directory paths, runs the full pipeline.
+# ABOUTME: Ingest route — accepts file uploads (text + images) and directory paths.
 # ABOUTME: Handles dedup, chunking, classification, extraction, and job queuing.
 
 import uuid
@@ -19,8 +19,22 @@ from ..pipeline.domain_normalizer import assign_document_domains
 from ..pipeline.extractor import extract_document
 from ..pipeline.normalizer import normalize_entity
 from ..pipeline.cooccurrence import compute_cooccurrence_edges
+from ..pipeline.image_prep import is_image_file
 
 router = APIRouter()
+
+# General specs loaded from orchestrator/specs/*.md — edit those files to update
+_SPECS_DIR = Path(__file__).resolve().parent.parent.parent / "specs"
+
+
+def _load_general_spec(name: str) -> str:
+    """Load a general spec from the specs directory."""
+    path = _SPECS_DIR / f"{name}.md"
+    return path.read_text()
+
+
+GENERAL_TEXT_SPEC = _load_general_spec("general_text")
+GENERAL_IMAGE_SPEC = _load_general_spec("general_image")
 
 
 async def _ingest_document(store, title: str, content: str, source_path: str | None) -> dict:
@@ -38,6 +52,7 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
             "domains": domains,
             "entity_count": 0,
             "jobs_queued": [],
+            "content_type": "text",
         }
 
     doc_id = str(uuid.uuid4())
@@ -73,49 +88,44 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
     domains = assign_document_domains(store, doc_id, classification)
     store.documents.update_status(doc_id, "classified")
 
-    # 3. Extract if general spec exists
+    # 3. Extract — use simmered general spec if available, otherwise built-in general spec
     entity_count = 0
     chunk_entities: dict[str, list[str]] = {}
     spec = store.specs.get_general()
+    spec_content = spec.spec_content if spec else GENERAL_TEXT_SPEC
+    spec_version = spec.version if spec else 0
+    extraction_pass = "general_simmered" if spec else "general"
 
-    if spec:
-        spec_content = spec.spec_content
-        spec_version = spec.version
-        entities = await extract_document(
-            relay=relay, chunks=chunks, spec=spec_content, model=settings.extraction_model,
+    entities = await extract_document(
+        relay=relay, chunks=chunks, spec=spec_content, model=settings.extraction_model,
+    )
+    for entity in entities:
+        entity_id = normalize_entity(store, entity["name"], entity["type"])
+        store.entity_sources.create(
+            entity_id=entity_id,
+            document_id=doc_id,
+            chunk_id=entity.get("chunk_id"),
+            extraction_pass=extraction_pass,
+            spec_version=spec_version,
         )
-        for entity in entities:
-            entity_id = normalize_entity(store, entity["name"], entity["type"])
-            store.entity_sources.create(
-                entity_id=entity_id,
-                document_id=doc_id,
-                chunk_id=entity.get("chunk_id"),
-                extraction_pass="general",
-                spec_version=spec_version,
-            )
-            chunk_id = entity.get("chunk_id")
-            if chunk_id:
-                chunk_entities.setdefault(chunk_id, []).append(entity_id)
+        chunk_id = entity.get("chunk_id")
+        if chunk_id:
+            chunk_entities.setdefault(chunk_id, []).append(entity_id)
 
-        edges = compute_cooccurrence_edges(chunk_entities)
-        for edge in edges:
-            store.relationships.upsert_cooccurrence(
-                edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
-            )
+    edges = compute_cooccurrence_edges(chunk_entities)
+    for edge in edges:
+        store.relationships.upsert_cooccurrence(
+            edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
+        )
 
-        entity_count = len(entities)
-        store.documents.update_status(doc_id, "extracted")
+    entity_count = len(entities)
+    store.documents.update_status(doc_id, "extracted")
 
     # 4. Cascade through domain specs
-    #    For each domain this doc belongs to, walk up the tree and
-    #    run any domain-specific specs that exist.
-    #    e.g., doc in business/product_development/strategy/ecommerce
-    #    checks: ecommerce spec, strategy spec, product_development spec
     domain_entity_count = 0
     seen_specs = set()
 
     for domain_path in domains:
-        # Walk up the domain tree: a/b/c → [a/b/c, a/b, a]
         parts = domain_path.split("/")
         ancestor_paths = ["/".join(parts[:i+1]) for i in range(len(parts))]
 
@@ -154,15 +164,8 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
         entity_count += domain_entity_count
         store.documents.update_status(doc_id, "enriched")
 
-    # 5. Check thresholds + queue simmers
+    # 5. Queue domain simmers (general spec always available via built-in, no auto-simmer needed)
     jobs_queued = []
-
-    if not spec:
-        existing_general_job = store.jobs.get_existing("simmer_general", "general", ["queued", "running"])
-        if not existing_general_job:
-            job_id = str(uuid.uuid4())
-            store.jobs.create(job_id, "simmer_general", "general")
-            jobs_queued.append(job_id)
 
     for domain_path in domains:
         domain = store.domains.get(domain_path)
@@ -173,24 +176,14 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
                 store.jobs.create(job_id, "simmer_domain", domain_path, {"domain": domain_path})
                 jobs_queued.append(job_id)
 
-    # Queue post-processing if entities were extracted
-    # Handles: embedding, cooccurrences, UMAP layout, graph cache rebuild
+    # Rebuild search index inline after extraction
     if entity_count > 0:
-        import os as _os
-        if _os.environ.get("DB_BACKEND", "sqlite").lower() == "firestore":
-            existing_pp = store.jobs.get_existing("post_process", "general", ["queued", "running"])
-            if not existing_pp:
-                pp_id = str(uuid.uuid4())
-                store.jobs.create(pp_id, "post_process", "general")
-                jobs_queued.append(pp_id)
-        else:
-            # SQLite: rebuild search index inline
-            try:
-                from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
-                embed_new_entities(store.conn)
-                embed_new_chunks(store.conn)
-            except Exception as e:
-                print(f"Search index update after ingest: {e}")
+        try:
+            from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
+            embed_new_entities(store.conn)
+            embed_new_chunks(store.conn)
+        except Exception as e:
+            print(f"Search index update after ingest: {e}")
 
     return {
         "document_id": doc_id,
@@ -198,23 +191,132 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
         "domains": domains,
         "entity_count": entity_count,
         "jobs_queued": jobs_queued,
+        "content_type": "text",
+    }
+
+
+async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -> dict:
+    """Ingest an image: describe via vision LLM, classify, extract entities."""
+    settings = get_settings()
+    relay = Relay.from_settings(settings)
+
+    # Dedup
+    content_hash = hashlib.sha256(file_bytes).hexdigest()
+    existing = store.documents.get_by_hash(content_hash)
+    if existing:
+        domains = [d.domain_path for d in store.domains.get_domains_for_document(existing.id)]
+        return {
+            "document_id": existing.id, "title": title, "domains": domains,
+            "entity_count": 0, "jobs_queued": [], "content_type": "image",
+        }
+
+    doc_id = str(uuid.uuid4())
+
+    # 1. Describe the image via vision LLM
+    from ..pipeline.image_prep import image_to_base64, make_image_content_block
+    b64, media_type = image_to_base64(Path(image_path))
+
+    description = ""
+    try:
+        desc_response = await relay.complete(
+            model=settings.classification_model, max_tokens=512,
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
+                {"type": "text", "text": "Describe this image in 2-3 sentences. What is it? What details are visible?"},
+            ]}],
+        )
+        description = desc_response.text.strip()
+    except Exception as e:
+        print(f"Image description failed: {e}", flush=True)
+        description = f"Image: {title}"
+
+    # Store document with description as content
+    store.documents.create(doc_id, title, description, content_hash, image_path, content_type="image")
+
+    # Store a single chunk with the description
+    chunk_id = str(uuid.uuid4())
+    from ..repositories.interfaces import Chunk
+    store.chunks.create_batch([Chunk(
+        id=chunk_id, document_id=doc_id, chunk_index=0,
+        text=description, offset=0, length=len(description),
+    )])
+
+    # 2. Classify using image vision
+    from ..pipeline.classifier import classify_image
+    taxonomy = store.domains.get_all_paths()
+
+    classification = await classify_image(
+        relay=relay, image_base64=b64, media_type=media_type,
+        existing_taxonomy=taxonomy, model=settings.classification_model,
+    )
+
+    domains = assign_document_domains(store, doc_id, classification)
+    store.documents.update_status(doc_id, "classified")
+
+    # 3. Extract entities using general image spec
+    entity_count = 0
+    chunk_entities: dict[str, list[str]] = {}
+    spec = store.specs.get_general()
+    spec_content = spec.spec_content if spec else GENERAL_IMAGE_SPEC
+    spec_version = spec.version if spec else 0
+
+    # Extract entities from the image description using the spec
+    chunks = [{"id": chunk_id, "chunk_index": 0, "text": description, "offset": 0, "length": len(description)}]
+    entities = await extract_document(
+        relay=relay, chunks=chunks, spec=spec_content, model=settings.extraction_model,
+    )
+    for entity in entities:
+        entity_id = normalize_entity(store, entity["name"], entity["type"])
+        store.entity_sources.create(
+            entity_id=entity_id, document_id=doc_id,
+            chunk_id=chunk_id, extraction_pass="general",
+            spec_version=spec_version,
+        )
+        chunk_entities.setdefault(chunk_id, []).append(entity_id)
+
+    edges = compute_cooccurrence_edges(chunk_entities)
+    for edge in edges:
+        store.relationships.upsert_cooccurrence(
+            edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
+        )
+
+    entity_count = len(entities)
+    store.documents.update_status(doc_id, "extracted")
+
+    # Rebuild search index
+    try:
+        from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
+        embed_new_entities(store.conn)
+        embed_new_chunks(store.conn)
+    except Exception as e:
+        print(f"Search index update after image ingest: {e}")
+
+    return {
+        "document_id": doc_id, "title": title, "domains": domains,
+        "entity_count": entity_count, "jobs_queued": [], "content_type": "image",
     }
 
 
 @router.post("/ingest", response_model=IngestResult)
 async def ingest_file(file: UploadFile = File(...), auth: AuthStore = Depends(get_auth_store)):
-    content = (await file.read()).decode("utf-8")
+    file_bytes = await file.read()
     title = file.filename or "untitled"
-
     settings = get_settings()
     os.makedirs(settings.documents_dir, exist_ok=True)
-    doc_path = os.path.join(settings.documents_dir, f"{uuid.uuid4()}_{title}")
-    with open(doc_path, "w") as f:
-        f.write(content)
 
     store = auth.store
     try:
-        result = await _ingest_document(store, title, content, doc_path)
+        if is_image_file(title):
+            doc_path = os.path.join(settings.documents_dir, f"{uuid.uuid4()}_{title}")
+            with open(doc_path, "wb") as f:
+                f.write(file_bytes)
+            result = await _ingest_image(store, title, file_bytes, doc_path)
+        else:
+            content = file_bytes.decode("utf-8")
+            doc_path = os.path.join(settings.documents_dir, f"{uuid.uuid4()}_{title}")
+            with open(doc_path, "w") as f:
+                f.write(content)
+            result = await _ingest_document(store, title, content, doc_path)
     finally:
         store.close()
     return result
@@ -229,10 +331,19 @@ async def ingest_directory(request: DirectoryIngestRequest, auth: AuthStore = De
     store = auth.store
     results = []
     try:
+        text_exts = {".txt", ".md", ".json", ".csv"}
+        image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
         for file_path in sorted(dir_path.rglob("*")):
-            if file_path.is_file() and file_path.suffix in (".txt", ".md", ".json", ".csv"):
+            if not file_path.is_file():
+                continue
+            suffix = file_path.suffix.lower()
+            if suffix in text_exts:
                 content = file_path.read_text(errors="replace")
                 result = await _ingest_document(store, file_path.stem, content, str(file_path))
+                results.append(result)
+            elif suffix in image_exts:
+                file_bytes = file_path.read_bytes()
+                result = await _ingest_image(store, file_path.name, file_bytes, str(file_path))
                 results.append(result)
     finally:
         store.close()

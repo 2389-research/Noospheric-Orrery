@@ -6,10 +6,8 @@ from .db import init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    import os
     settings = get_settings()
-    if os.environ.get("DB_BACKEND", "sqlite") == "sqlite":
-        init_db(settings.db_path)
+    init_db(settings.db_path)
     # Pre-warm SentenceTransformer model so first /graph request isn't slow
     try:
         from .pipeline.domain_layout import _embed_texts
@@ -41,6 +39,7 @@ from .routes.search import router as search_router
 from .routes.reclassify import router as reclassify_router
 from .routes.auth_routes import router as auth_router
 from .routes.workspace_routes import router as workspace_router
+from .routes.image_files import router as image_files_router
 
 app.include_router(ingest_router)
 app.include_router(documents_router)
@@ -57,6 +56,7 @@ app.include_router(search_router)
 app.include_router(reclassify_router)
 app.include_router(auth_router)
 app.include_router(workspace_router)
+app.include_router(image_files_router)
 
 from fastapi import WebSocket as WS
 from .broadcast import ws_endpoint

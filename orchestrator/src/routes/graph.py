@@ -157,44 +157,18 @@ def _layout_domains(domains: list[dict]) -> dict[str, dict]:
 def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
     """Return graph data in cosmic_data_v4 format.
 
-    On Firestore: reads precomputed graph JSON from workspaces/{id}/cache/graph.
-    On SQLite: computes live (fast with SQL joins).
+    Computes domain positions via UMAP (or circular fallback).
     """
     store = auth.store
-
-    # Firestore: try cached graph first
-    if hasattr(store, '_db'):
-        cache_ref = store._db.collection("workspaces").document(store._workspace_id).collection("cache").document("graph")
-        cache_doc = cache_ref.get()
-        if cache_doc.exists:
-            import json
-            cached = cache_doc.to_dict()
-            data = json.loads(cached.get("data", "{}"))
-            if data.get("domain_positions"):
-                store.close()
-                return data
 
     # Get all domains with docs
     domain_objs = store.domains.list(min_doc_count=1)
     domains = [{"id": d.id, "path": d.path, "parent_path": d.parent_path,
                 "doc_count": d.document_count, "spec_version": d.spec_version} for d in domain_objs]
 
-    # Domain positions — read from stored positions
-    # On SQLite: UMAP computes if needed. On Firestore: positions pre-pushed, just read.
-    if store.conn is not None:
-        from ..pipeline.domain_layout import ensure_layout
-        domain_positions = ensure_layout(store)
-    else:
-        domain_positions = store.layout.get_stored_positions()
-        # Place any domains without positions in a circle
-        import math
-        missing = [d["path"] for d in domains if d["path"] not in domain_positions]
-        for i, path in enumerate(missing):
-            angle = (i / max(len(missing), 1)) * 2 * math.pi
-            x = 0.5 + 0.3 * math.cos(angle)
-            y = 0.5 + 0.3 * math.sin(angle)
-            domain_positions[path] = {"x": x, "y": y}
-            store.layout.store_position(path, x, y)
+    # Domain positions via UMAP (ensure_layout handles fallback)
+    from ..pipeline.domain_layout import ensure_layout
+    domain_positions = ensure_layout(store)
 
     domain_doc_counts = {d["path"]: d["doc_count"] for d in domains}
     region_colors = _assign_domain_colors(domains)
@@ -205,51 +179,13 @@ def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
 
     subdomains = [d["path"] for d in domains if d["path"].count("/") >= 2]
 
-    # Entities with domain weights — batch load to avoid N+1 queries
+    # Entities with domain weights via SQL joins
     all_entities = store.entities.list(limit=5000)
-
-    # Batch: load all entity sources and document-domain mappings at once
-    if hasattr(store, '_db'):
-        # Firestore: batch load
-        es_col = store._db.collection("workspaces").document(store._workspace_id).collection("entitySources")
-        dd_col = store._db.collection("workspaces").document(store._workspace_id).collection("documentDomains")
-
-        all_sources = list(es_col.stream())
-        all_doc_domains = list(dd_col.stream())
-
-        # Build lookup: doc_id -> [domain_paths]
-        doc_to_domains: dict[str, list[str]] = {}
-        for dd in all_doc_domains:
-            ddd = dd.to_dict()
-            did = ddd.get("documentId", "")
-            path = ddd.get("domainPath", "")
-            if did and path:
-                doc_to_domains.setdefault(did, []).append(path)
-
-        # Build lookup: entity_id -> {domain_path: count}
-        entity_domain_weights: dict[str, dict[str, float]] = {}
-        for s in all_sources:
-            sd = s.to_dict()
-            eid = sd.get("entityId", "")
-            did = sd.get("documentId", "")
-            if eid and did:
-                for path in doc_to_domains.get(did, []):
-                    if eid not in entity_domain_weights:
-                        entity_domain_weights[eid] = {}
-                    entity_domain_weights[eid][path] = entity_domain_weights[eid].get(path, 0) + 1
-
-        # Normalize weights
-        for eid, counts in entity_domain_weights.items():
-            total = sum(counts.values())
-            if total > 0:
-                entity_domain_weights[eid] = {p: round(c / total, 3) for p, c in counts.items()}
-    else:
-        # SQLite: use the per-entity method (fast with SQL joins)
-        entity_domain_weights = {}
-        for e in all_entities:
-            w = store.domains.get_entity_domain_weights(e.id)
-            if w:
-                entity_domain_weights[e.id] = w
+    entity_domain_weights = {}
+    for e in all_entities:
+        w = store.domains.get_entity_domain_weights(e.id)
+        if w:
+            entity_domain_weights[e.id] = w
 
     entities = []
     for e in all_entities:
@@ -267,7 +203,8 @@ def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
     # Recent documents
     recent_docs = store.documents.get_recent(limit=50)
     videos = [{"id": d.id, "title": d.title, "domains": d.domains,
-               "primary": d.domains[0] if d.domains else None} for d in recent_docs]
+               "primary": d.domains[0] if d.domains else None,
+               "content_type": getattr(d, "content_type", "text")} for d in recent_docs]
 
     # Domain specs
     domain_specs = {}

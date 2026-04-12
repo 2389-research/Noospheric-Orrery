@@ -18,7 +18,7 @@ class Settings:
     extraction_model: str = "claude-haiku-4-5"
     general_spec_threshold: int = 10
     domain_spec_threshold: int = 20
-    simmer_iterations: int = 5
+    simmer_iterations: int = 3
     chunk_size: int = 2000
     ollama_url: str = "http://localhost:11434"
     worker_poll_interval: int = 5

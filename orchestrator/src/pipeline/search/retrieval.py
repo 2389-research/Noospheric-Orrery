@@ -1,7 +1,4 @@
-"""Stage 1: Parallel retrieval — FAISS semantic + exact match.
-
-Only used in SQLite local mode. Cloud mode uses Firestore vector search.
-"""
+"""Stage 1: Parallel retrieval — FAISS semantic + exact match."""
 
 import sqlite3
 import numpy as np

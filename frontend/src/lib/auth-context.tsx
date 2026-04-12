@@ -1,14 +1,13 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from "react";
-import { type User } from "firebase/auth";
-import { onAuthChange, signInWithGoogle, signOutUser, setupSession, type SessionInfo } from "./firebase";
+import { type AuthUser, onAuthChange, signInWithGoogle, signOutUser, setupSession, type SessionInfo } from "./firebase";
 import { setApiWorkspaceId } from "./api";
 
 const API_URL = "/api";
 
 interface AuthContextType {
-  user: User | null;
+  user: AuthUser | null;
   loading: boolean;
   session: SessionInfo | null;
   workspaceId: string | null;
@@ -28,7 +27,7 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [workspaceId, _setWorkspaceId] = useState<string | null>(null);
@@ -40,8 +39,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Provision session when user signs in
-  const provisionSession = useCallback(async (firebaseUser: User | null) => {
-    if (!firebaseUser) {
+  const provisionSession = useCallback(async (authUser: AuthUser | null) => {
+    if (!authUser) {
       setSession(null);
       _setWorkspaceId(null);
       setApiWorkspaceId(null);
@@ -65,10 +64,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const unsubscribe = onAuthChange((firebaseUser) => {
-      setUser(firebaseUser);
+    const unsubscribe = onAuthChange((authUser) => {
+      setUser(authUser);
       setLoading(false);
-      provisionSession(firebaseUser);
+      provisionSession(authUser);
     });
     return unsubscribe;
   }, [provisionSession]);

@@ -1,5 +1,3 @@
-import { getAuthToken } from "./firebase";
-
 // Module-level workspace ID — set by auth context, read by fetchAPI
 let _currentWorkspaceId: string | null = null;
 
@@ -11,16 +9,6 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     ...(options?.headers as Record<string, string> || {}),
   };
-
-  // Add auth token if available
-  try {
-    const token = await getAuthToken();
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-  } catch {
-    // Auth not initialized or user not signed in — proceed without token
-  }
 
   // Add workspace ID header
   if (_currentWorkspaceId) {
@@ -120,6 +108,8 @@ export const api = {
     }>(`/documents/${docId}/reader`),
 
   // Workspace CRUD
+  listWorkspaces: () =>
+    fetchAPI<{ id: string; name: string; description?: string; status?: string }[]>("/workspaces"),
   createWorkspace: (name: string, description: string = "") =>
     fetchAPI<{ workspaceId: string; name: string }>("/workspaces", {
       method: "POST",

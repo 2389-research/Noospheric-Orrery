@@ -19,7 +19,7 @@ class Settings:
     extraction_model: str = "claude-haiku-4-5"
     general_spec_threshold: int = 10
     domain_spec_threshold: int = 20
-    simmer_iterations: int = 5
+    simmer_iterations: int = 3
     chunk_size: int = 2000
     worker_poll_interval: int = 5
     db_path: str = "/data/orrery.db"
@@ -47,7 +47,7 @@ def get_settings() -> Settings:
         extraction_model=os.environ.get("EXTRACTION_MODEL", "claude-haiku-4-5"),
         general_spec_threshold=int(os.environ.get("GENERAL_SPEC_THRESHOLD", "10")),
         domain_spec_threshold=int(os.environ.get("DOMAIN_SPEC_THRESHOLD", "20")),
-        simmer_iterations=int(os.environ.get("SIMMER_ITERATIONS", "5")),
+        simmer_iterations=int(os.environ.get("SIMMER_ITERATIONS", "3")),
         chunk_size=int(os.environ.get("CHUNK_SIZE", "2000")),
         worker_poll_interval=int(os.environ.get("WORKER_POLL_INTERVAL", "5")),
         db_path=os.environ.get("DB_PATH", f"{_base}/orrery.db"),

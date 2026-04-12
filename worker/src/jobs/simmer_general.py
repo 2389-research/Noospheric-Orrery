@@ -127,6 +127,16 @@ def _make_iteration_recorder(job_id: str, phase: str, db_path: str, output_dir: 
                              d.get("score", 0), d.get("seed_score", 0),
                              d.get("evidence", ""), d.get("improve", "")),
                         )
+
+                    # Backfill correct scores from criterion_details (simmer-sdk board bug)
+                    real_scores = {d["criterion"]: d["score"] for d in details if d.get("score")}
+                    if real_scores:
+                        real_composite = round(sum(real_scores.values()) / len(real_scores), 1)
+                        conn.execute(
+                            "UPDATE simmer_iterations SET scores = ?, composite = ? WHERE id = ?",
+                            (json.dumps(real_scores), real_composite, iteration_id),
+                        )
+
                     conn.commit()
                     print(f"  [{phase}] iter {record.iteration}: parsed {len(details)} criterion details", flush=True)
                 finally:

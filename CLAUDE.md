@@ -93,21 +93,11 @@ docker compose up
 # Workspaces: multi-workspace via separate SQLite files
 ```
 
-### Cloud Mode (Firestore + Firebase Auth)
-
-```bash
-docker compose -f docker-compose.firebase.yml up          # all three services
-docker compose -f docker-compose.firebase.yml up orchestrator worker   # without frontend
-```
-
-Ports: orchestrator → 8100, frontend → 3100.
-
 ### Without Docker (native dev)
 
 ```bash
 # Orchestrator
-source /tmp/run-orchestrator.sh
-cd orchestrator && pip install -e '.[local]' && uvicorn src.main:app --reload --port 8000
+cd orchestrator && pip install -e . && uvicorn src.main:app --reload --port 8000
 
 # Worker (separate terminal)
 source /tmp/run-orchestrator.sh
@@ -160,13 +150,14 @@ gemma4:e4b      # extraction, clerk (8B dense, good at structured output)
 
 The relay handles translation to Bedrock inference profile IDs when running in bedrock mode. For ollama, model names are passed through as-is. Check `packages/orrery-relay/src/orrery_relay/backends.py` for the current mapping.
 
-### Three Deployment Tiers
+### Two Deployment Tiers
 
-| Tier | Backend | Models | Auth | Embeddings |
-|------|---------|--------|------|------------|
-| Cloud | `bedrock` or `gateway` | Sonnet/Haiku | Firebase Auth | Vertex AI |
-| Local with API | `bedrock` or `gateway` | Sonnet/Haiku | noop | sentence-transformers |
-| Fully local | `ollama` | gemma4:26b/e4b | noop | sentence-transformers |
+| Tier | Backend | Models | Embeddings |
+|------|---------|--------|------------|
+| Local with API | `bedrock` or `gateway` | Sonnet/Haiku | sentence-transformers |
+| Fully local | `ollama` | gemma4:26b/e4b | sentence-transformers |
+
+Auth is always noop (no sign-in required). Data is stored in SQLite.
 
 Simmer jobs read `CLASSIFICATION_MODEL` for judge/generator and `EXTRACTION_MODEL` for clerk/extraction. All model references come from config — no hardcoded model names in the pipeline code.
 

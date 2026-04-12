@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS documents (
     content_hash TEXT,
     metadata TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    status TEXT DEFAULT 'pending'
+    status TEXT DEFAULT 'pending',
+    content_type TEXT DEFAULT 'text',
+    thumbnail_path TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash);
 
@@ -177,6 +179,13 @@ def init_db(db_path: str) -> None:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(SCHEMA)
+    # Migrate: add columns for image support if missing
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
+    if "content_type" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN content_type TEXT DEFAULT 'text'")
+    if "thumbnail_path" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN thumbnail_path TEXT")
+    conn.commit()
     conn.close()
 
 def get_connection(db_path: str) -> sqlite3.Connection:

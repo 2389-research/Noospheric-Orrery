@@ -1,7 +1,6 @@
 """Repository pattern for database abstraction.
 
-Supports SQLite (local dev) and Firestore (cloud deployment).
-Switch via DB_BACKEND env var: 'sqlite' (default) or 'firestore'.
+Uses SQLite with WAL mode for concurrent read/write.
 """
 
 from .interfaces import (
