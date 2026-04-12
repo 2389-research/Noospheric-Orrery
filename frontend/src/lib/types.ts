@@ -14,6 +14,8 @@ export interface DomainInfo {
   path: string;
   parent_path: string | null;
   document_count: number;
+  text_count: number;
+  image_count: number;
   spec_version: number | null;
   created_at: string;
 }

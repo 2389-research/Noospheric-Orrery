@@ -50,6 +50,7 @@ export const api = {
     }),
   getJobIterations: (jobId: string) => fetchAPI<import("./types").SimmerJobDetail>(`/jobs/${jobId}/iterations`),
   triggerGeneralSimmer: () => fetchAPI<{ job_id: string }>("/simmer/general", { method: "POST" }),
+  triggerGeneralImageSimmer: () => fetchAPI<{ job_id: string }>("/simmer/general/image", { method: "POST" }),
   triggerDomainSimmer: (domain: string) => fetchAPI<{ job_id: string }>(`/simmer/${domain}`, { method: "POST" }),
   triggerNormalization: () =>
     fetchAPI<{
