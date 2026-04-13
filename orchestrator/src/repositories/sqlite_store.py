@@ -37,12 +37,10 @@ class SQLiteDocumentRepository(DocumentRepository):
     def count(self):
         return self._conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
 
-    def create(self, id, title, content, content_hash, source_path=None,
-               content_type="text", image_path=None, thumbnail_path=None):
+    def create(self, id, title, content, content_hash, source_path=None, content_type="text"):
         self._conn.execute(
-            "INSERT INTO documents (id, title, content, content_hash, source_path, status, content_type, image_path, thumbnail_path) "
-            "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
-            (id, title, content, content_hash, source_path, content_type, image_path, thumbnail_path),
+            "INSERT INTO documents (id, title, content, content_hash, source_path, status, content_type) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (id, title, content, content_hash, source_path, content_type),
         )
         self._conn.commit()
         return id
@@ -55,8 +53,7 @@ class SQLiteDocumentRepository(DocumentRepository):
             id=row["id"], title=row["title"], content=row["content"],
             content_hash=row["content_hash"], source_path=row["source_path"],
             status=row["status"], created_at=row["created_at"],
-            content_type=row["content_type"] if "content_type" in row.keys() else "text",
-            image_path=row["image_path"] if "image_path" in row.keys() else None,
+            content_type=row["content_type"] or "text",
             thumbnail_path=row["thumbnail_path"] if "thumbnail_path" in row.keys() else None,
         )
 
@@ -69,7 +66,8 @@ class SQLiteDocumentRepository(DocumentRepository):
         ).fetchall()
         result = []
         for r in rows:
-            doc = Document(id=r["id"], title=r["title"], status=r["status"], created_at=r["created_at"])
+            doc = Document(id=r["id"], title=r["title"], status=r["status"], created_at=r["created_at"],
+                          content_type=r["content_type"] or "text", source_path=r["source_path"])
             doc.domains = r["domains"].split(",") if r["domains"] else []
             result.append(doc)
         return result
@@ -80,10 +78,6 @@ class SQLiteDocumentRepository(DocumentRepository):
 
     def update_status(self, doc_id, status):
         self._conn.execute("UPDATE documents SET status = ? WHERE id = ?", (status, doc_id))
-        self._conn.commit()
-
-    def update_content(self, doc_id, content):
-        self._conn.execute("UPDATE documents SET content = ? WHERE id = ?", (content, doc_id))
         self._conn.commit()
 
     def get_for_domain(self, domain_path, status_filter=None):
@@ -101,15 +95,13 @@ class SQLiteDocumentRepository(DocumentRepository):
 
     def get_recent(self, limit=50):
         rows = self._conn.execute(
-            "SELECT d.id, d.title, d.content_type, d.thumbnail_path, GROUP_CONCAT(dd.domain_path) as domains "
+            "SELECT d.id, d.title, d.content_type, GROUP_CONCAT(dd.domain_path) as domains "
             "FROM documents d LEFT JOIN document_domains dd ON d.id = dd.document_id "
             "GROUP BY d.id ORDER BY d.created_at DESC LIMIT ?", (limit,)
         ).fetchall()
         result = []
         for r in rows:
-            doc = Document(id=r["id"], title=r["title"],
-                           content_type=r["content_type"] or "text",
-                           thumbnail_path=r["thumbnail_path"])
+            doc = Document(id=r["id"], title=r["title"], content_type=r["content_type"] or "text")
             doc.domains = r["domains"].split(",") if r["domains"] else []
             result.append(doc)
         return result
@@ -155,10 +147,6 @@ class SQLiteChunkRepository(ChunkRepository):
 
     def update_embedding(self, chunk_id, embedding):
         self._conn.execute("UPDATE chunks SET embedding = ? WHERE id = ?", (embedding, chunk_id))
-        self._conn.commit()
-
-    def update_text(self, chunk_id, text):
-        self._conn.execute("UPDATE chunks SET text = ?, length = ? WHERE id = ?", (text, len(text), chunk_id))
         self._conn.commit()
 
 
@@ -583,10 +571,9 @@ class SQLiteSpecRepository(SpecRepository):
         )
         self._conn.commit()
 
-    def get_general(self, media_type="text"):
+    def get_general(self):
         row = self._conn.execute(
-            "SELECT * FROM specs WHERE domain_path IS NULL AND (media_type = ? OR media_type IS NULL) ORDER BY version DESC LIMIT 1",
-            (media_type,),
+            "SELECT * FROM specs WHERE domain_path IS NULL ORDER BY version DESC LIMIT 1"
         ).fetchone()
         if not row:
             return None

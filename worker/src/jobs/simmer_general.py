@@ -176,6 +176,15 @@ def _make_iteration_recorder(job_id: str, phase: str, db_path: str, output_dir: 
                              d.get("score", 0), d.get("seed_score", 0),
                              d.get("evidence", ""), d.get("improve", "")),
                         )
+                    # Backfill correct scores from criterion_details (simmer-sdk safety net)
+                    real_scores = {d["criterion"]: d["score"] for d in details if d.get("score")}
+                    if real_scores:
+                        real_composite = round(sum(real_scores.values()) / len(real_scores), 1)
+                        conn.execute(
+                            "UPDATE simmer_iterations SET scores = ?, composite = ? WHERE id = ?",
+                            (json.dumps(real_scores), real_composite, iteration_id),
+                        )
+
                     conn.commit()
                     print(f"  [{phase}] iter {record.iteration}: parsed {len(details)} criterion details", flush=True)
                 finally:
@@ -376,7 +385,7 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
 
     # Get sample images
     docs = conn.execute(
-        "SELECT id, title, image_path FROM documents WHERE content_type = 'image' AND status IN ('classified', 'extracted', 'enriched') ORDER BY RANDOM() LIMIT 5"
+        "SELECT id, title, source_path FROM documents WHERE content_type = 'image' AND status IN ('classified', 'extracted', 'enriched') ORDER BY RANDOM() LIMIT 5"
     ).fetchall()
 
     if not docs:
@@ -393,7 +402,7 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
 
     import shutil
     for doc in docs:
-        src = Path(doc["image_path"])
+        src = Path(doc["source_path"])
         if src.exists():
             shutil.copy2(src, sample_dir / f"{doc['id']}{src.suffix}")
 
@@ -532,8 +541,8 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
             {
                 "name": "Extraction & Description",
                 "lens": (
-                    "Read eval-*/*.json for Haiku extractions. Compare to pre-scans in image_prescans/*.txt. "
-                    "Use query_image to verify specifics. Does the domain context help Haiku be more specific?"
+                    "Read eval-*/*.json for extractions. Compare to pre-scans in image_prescans/*.txt. "
+                    "Does the domain context help the model be more specific?"
                 ),
             },
             {
@@ -560,15 +569,12 @@ async def run_simmer_general_image(job: dict, db_path: str) -> None:
         background=(
             f"This is an image spec simmer. The seed is the general image extraction spec.\n"
             f"Your job: add domain-specific recognition context to help Haiku extract better.\n\n"
-            f"Pre-scans (Haiku's raw observations) are in {prescan_dir}/*.txt\n"
-            f"Evaluator runs Haiku with the spec each iteration — results in eval-N/*.json\n"
-            f"Use query_image to investigate specific images.\n"
-            f"DO NOT open .jpg files directly.\n\n"
+            f"Pre-scans (raw observations) are in {prescan_dir}/*.txt\n"
+            f"Evaluator runs the spec on each image each iteration — results in eval-N/*.json\n\n"
             f"The general spec structure (entity types, rules, output format) should stay intact.\n"
             f"Add domain knowledge that helps Haiku recognize what it's looking at."
         ),
         on_iteration=_make_iteration_recorder(job_id, "domain_spec", db_path, str(specs_dir / "image_spec")),
-        custom_tools=image_tools,
         **provider_kwargs,
     )
 

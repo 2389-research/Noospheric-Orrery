@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import { useWorkspaces } from "@/lib/hooks/use-workspaces";
 import { setApiWorkspaceId } from "@/lib/api";
 import { NavBar } from "@/components/nav-bar";
 import { DemoModeContext } from "@/lib/hooks/use-demo-mode";
@@ -17,6 +18,7 @@ export default function NoosphereLayout({
 }) {
   const { noosphereId } = useParams<{ noosphereId: string }>();
   const { session, setWorkspaceId } = useAuth();
+  const { workspaces } = useWorkspaces();
   const router = useRouter();
   const [ready, setReady] = useState(false);
 
@@ -25,9 +27,11 @@ export default function NoosphereLayout({
   useEffect(() => {
     if (!noosphereId || !session) return;
 
+    // Check both session workspaces (initial) and live workspace list (API)
     const isValid =
       IS_NOOP ||
       session.workspaces.some((w) => w.id === noosphereId) ||
+      workspaces.some((w) => w.id === noosphereId) ||
       isDemo;
 
     if (!isValid) {
@@ -40,7 +44,7 @@ export default function NoosphereLayout({
     setApiWorkspaceId(noosphereId);
     localStorage.setItem("lastWorkspaceId", noosphereId);
     setReady(true);
-  }, [noosphereId, session, setWorkspaceId, router, isDemo]);
+  }, [noosphereId, session, workspaces, setWorkspaceId, router, isDemo]);
 
   if (!ready) {
     return (

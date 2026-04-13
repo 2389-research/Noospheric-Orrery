@@ -7,13 +7,11 @@ router = APIRouter()
 @router.get("/stats", response_model=Stats)
 def get_stats(auth: AuthStore = Depends(get_auth_store)):
     store = auth.store
-    # Image count — check content_type if available
     image_count = 0
     try:
-        if hasattr(store.documents, '_conn'):
-            image_count = store.documents._conn.execute(
-                "SELECT COUNT(*) FROM documents WHERE content_type = 'image'"
-            ).fetchone()[0]
+        image_count = store.conn.execute(
+            "SELECT COUNT(*) FROM documents WHERE content_type = 'image'"
+        ).fetchone()[0]
     except Exception:
         pass
     result = Stats(

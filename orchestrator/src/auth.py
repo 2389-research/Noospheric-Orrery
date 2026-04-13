@@ -1,8 +1,9 @@
 from __future__ import annotations
-"""Firebase Auth middleware for FastAPI.
+"""Auth middleware for FastAPI.
 
-Validates Firebase ID tokens and extracts user context.
-Skips auth when AUTH_REQUIRED=false (local dev) or DB_BACKEND=sqlite.
+Local mode: always returns DEV_USER (no external auth required).
+The AuthUser dataclass and role hierarchy are preserved for future
+auth backends (e.g., simple JWT, OAuth).
 
 Usage:
     from .auth import get_current_user, AuthUser
@@ -12,32 +13,9 @@ Usage:
         print(user.uid, user.email, user.workspace_id)
 """
 
-import os
 from dataclasses import dataclass
-from fastapi import Request, HTTPException, Depends
+from fastapi import Request, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-
-# Lazy-init Firebase Admin
-_firebase_initialized = False
-
-
-def _init_firebase():
-    global _firebase_initialized
-    if _firebase_initialized:
-        return
-    try:
-        import firebase_admin
-        from firebase_admin import credentials
-        if not firebase_admin._apps:
-            cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-            if cred_path:
-                cred = credentials.Certificate(cred_path)
-                firebase_admin.initialize_app(cred)
-            else:
-                firebase_admin.initialize_app()
-        _firebase_initialized = True
-    except Exception as e:
-        print(f"Firebase Auth init failed: {e}")
 
 
 @dataclass
@@ -50,7 +28,7 @@ class AuthUser:
     org_id: str = ""
 
 
-# Dev user for unauthenticated local mode
+# Dev user for local mode
 DEV_USER = AuthUser(uid="dev-user", email="dev@localhost", name="Dev User", role="admin")
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -60,39 +38,8 @@ async def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> AuthUser:
-    """Extract and validate Firebase auth token.
-
-    Returns AuthUser with uid, email, workspace_id, role.
-    Skips auth in local dev mode (AUTH_REQUIRED=false or DB_BACKEND=sqlite).
-    """
-    # Skip auth in local/SQLite mode
-    auth_required = os.environ.get("AUTH_REQUIRED", "").lower()
-    db_backend = os.environ.get("DB_BACKEND", "sqlite").lower()
-
-    if auth_required == "false" or (db_backend == "sqlite" and auth_required != "true"):
-        return DEV_USER
-
-    if not credentials:
-        raise HTTPException(status_code=401, detail="Missing authorization token")
-
-    token = credentials.credentials
-
-    try:
-        _init_firebase()
-        from firebase_admin import auth
-        decoded = auth.verify_id_token(token)
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
-
-    # Extract custom claims
-    uid = decoded.get("uid", "")
-    email = decoded.get("email")
-    name = decoded.get("name")
-    workspace_id = decoded.get("workspace_id", os.environ.get("FIREBASE_WORKSPACE_ID", "default"))
-    role = decoded.get("role", "editor")
-    org_id = decoded.get("orgId", "")
-
-    return AuthUser(uid=uid, email=email, name=name, workspace_id=workspace_id, role=role, org_id=org_id)
+    """Return the current user. Always returns DEV_USER in local mode."""
+    return DEV_USER
 
 
 ROLE_HIERARCHY = {"admin": 3, "editor": 2, "viewer": 1}
@@ -115,6 +62,7 @@ def require_role(*roles: str):
     async def check_role(user: AuthUser = Depends(get_current_user)):
         user_level = ROLE_HIERARCHY.get(user.role, 0)
         if user_level < min_level:
+            from fastapi import HTTPException
             raise HTTPException(status_code=403, detail=f"Requires role: {', '.join(roles)}")
         return user
     return check_role

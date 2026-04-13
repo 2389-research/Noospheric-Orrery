@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS documents (
     content_hash TEXT,
     metadata TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    status TEXT DEFAULT 'pending'
+    status TEXT DEFAULT 'pending',
+    content_type TEXT DEFAULT 'text',
+    thumbnail_path TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash);
 
@@ -152,7 +154,8 @@ CREATE TABLE IF NOT EXISTS specs (
     spec_content TEXT,
     golden_set TEXT,
     score REAL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    media_type TEXT DEFAULT 'text'
 );
 """
 
@@ -162,6 +165,25 @@ def init_db(db_path: str) -> None:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(SCHEMA)
+    # Migrate: add columns for image support if missing
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
+    if "content_type" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN content_type TEXT DEFAULT 'text'")
+    if "thumbnail_path" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN thumbnail_path TEXT")
+    # Migrate specs table
+    spec_cols = {r[1] for r in conn.execute("PRAGMA table_info(specs)").fetchall()}
+    if "media_type" not in spec_cols:
+        conn.execute("ALTER TABLE specs ADD COLUMN media_type TEXT DEFAULT 'text'")
+    # Backfill: tag legacy image rows by file extension
+    conn.execute("""
+        UPDATE documents SET content_type = 'image'
+        WHERE (content_type IS NULL OR content_type = 'text')
+        AND (source_path LIKE '%.jpg' OR source_path LIKE '%.jpeg'
+             OR source_path LIKE '%.png' OR source_path LIKE '%.webp'
+             OR source_path LIKE '%.gif')
+    """)
+    conn.commit()
     conn.close()
 
 def get_connection(db_path: str) -> sqlite3.Connection:

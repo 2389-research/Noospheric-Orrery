@@ -1,5 +1,3 @@
-import { getAuthToken } from "./firebase";
-
 // Module-level workspace ID — set by auth context, read by fetchAPI
 let _currentWorkspaceId: string | null = null;
 
@@ -11,16 +9,6 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     ...(options?.headers as Record<string, string> || {}),
   };
-
-  // Add auth token if available
-  try {
-    const token = await getAuthToken();
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-  } catch {
-    // Auth not initialized or user not signed in — proceed without token
-  }
 
   // Add workspace ID header
   if (_currentWorkspaceId) {
@@ -62,8 +50,8 @@ export const api = {
     }),
   getJobIterations: (jobId: string) => fetchAPI<import("./types").SimmerJobDetail>(`/jobs/${jobId}/iterations`),
   triggerGeneralSimmer: () => fetchAPI<{ job_id: string }>("/simmer/general", { method: "POST" }),
+  triggerGeneralImageSimmer: () => fetchAPI<{ job_id: string }>("/simmer/general/image", { method: "POST" }),
   triggerDomainSimmer: (domain: string) => fetchAPI<{ job_id: string }>(`/simmer/${domain}`, { method: "POST" }),
-  triggerImageSimmer: () => fetchAPI<{ job_id: string }>("/simmer/general/image", { method: "POST" }),
   triggerNormalization: () =>
     fetchAPI<{
       plural_merges: number;
@@ -121,7 +109,8 @@ export const api = {
     }>(`/documents/${docId}/reader`),
 
   // Workspace CRUD
-  listWorkspaces: () => fetchAPI<import("./hooks/use-workspaces").Workspace[]>("/workspaces"),
+  listWorkspaces: () =>
+    fetchAPI<{ id: string; name: string; description?: string; status?: string }[]>("/workspaces"),
   createWorkspace: (name: string, description: string = "") =>
     fetchAPI<{ workspaceId: string; name: string }>("/workspaces", {
       method: "POST",

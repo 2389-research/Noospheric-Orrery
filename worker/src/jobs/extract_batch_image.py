@@ -28,7 +28,7 @@ async def run_extract_batch_image(job: dict, db_path: str) -> None:
 
     # Get all image docs
     docs = conn.execute(
-        "SELECT id, title, image_path FROM documents WHERE content_type = 'image' AND status IN ('classified', 'extracted')"
+        "SELECT id, title, source_path FROM documents WHERE content_type = 'image' AND status IN ('classified', 'extracted')"
     ).fetchall()
     conn.close()
 
@@ -48,14 +48,14 @@ async def run_extract_batch_image(job: dict, db_path: str) -> None:
 
     for doc in docs:
         doc_id = doc["id"]
-        image_path = doc["image_path"]
+        source_path = doc["source_path"]
 
-        if not image_path or not Path(image_path).exists():
+        if not source_path or not Path(source_path).exists():
             print(f"  Skipping {doc['title']}: image not found", flush=True)
             continue
 
-        b64 = base64.b64encode(Path(image_path).read_bytes()).decode()
-        suffix = Path(image_path).suffix.lower()
+        b64 = base64.b64encode(Path(source_path).read_bytes()).decode()
+        suffix = Path(source_path).suffix.lower()
         media_type = "image/jpeg" if suffix in (".jpg", ".jpeg") else "image/png"
 
         try:

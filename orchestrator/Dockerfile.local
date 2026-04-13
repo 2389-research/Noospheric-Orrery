@@ -1,10 +1,12 @@
 # ABOUTME: Docker build for the orchestrator in local/SQLite mode (full ML stack).
-# ABOUTME: Uses uv for dependency management; torch CPU-only via pyproject.toml index config.
+# ABOUTME: Uses uv for dependency management; includes torch, sentence-transformers, UMAP, FAISS.
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
-# Disable numba JIT — prevents SIGILL on ARM Docker
-ENV NUMBA_DISABLE_JIT=1
+# Use generic ARM64 target to avoid LLVM CPU-specific scheduling model bugs (numba#10388).
+# Without this, LLVM detects Apple Silicon and picks an incomplete scheduling model → SIGILL.
+# This enables full JIT (including UMAP transform + pynndescent) without SIGILL.
+ENV NUMBA_CPU_NAME=generic
 
 # Mirror repo layout so ../packages/orrery-relay resolves from pyproject.toml
 COPY packages/orrery-relay/ /app/packages/orrery-relay/
@@ -16,7 +18,7 @@ WORKDIR /app/orchestrator
 COPY orchestrator/pyproject.toml orchestrator/uv.lock ./
 RUN uv sync --frozen --no-cache --no-install-project
 
-# Copy application code + general specs, then install the project itself
+# Copy application code + specs, then install the project itself
 COPY orchestrator/src/ src/
 COPY orchestrator/specs/ specs/
 RUN uv sync --frozen --no-cache

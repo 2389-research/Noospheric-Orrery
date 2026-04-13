@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 import { getAuthToken } from "@/lib/firebase";
 import { ReaderPane } from "@/components/reader/reader-pane";
+import { ImagePane } from "@/components/image-pane";
 
 export default function StarPage() {
   return (
@@ -20,6 +21,7 @@ function StarPageInner() {
   const entity = searchParams.get("entity") || "";
 
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
+  const [selectedDocType, setSelectedDocType] = useState<string>("text");
   const [searchQuery, setSearchQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [authToken, setAuthToken] = useState("");
@@ -35,6 +37,7 @@ function StarPageInner() {
     const handler = (e: MessageEvent) => {
       if (e.data?.type === "node_selected" && e.data.nodeType === "document") {
         setSelectedDocId(e.data.data.id as string);
+        setSelectedDocType((e.data.data.content_type as string) || "text");
       } else if (e.data?.type === "node_cleared") {
         setSelectedDocId(null);
       } else if (e.data?.type === "navigate_galaxy") {
@@ -141,19 +144,32 @@ function StarPageInner() {
           borderRight: "1px solid rgba(100,200,180,0.12)",
           overflowY: "auto",
         }}>
-          <ReaderPane
-            documentId={selectedDocId}
-            onClose={() => setSelectedDocId(null)}
-            onNavigateEntity={(entityId) => {
-              setSelectedDocId(null);
-              // Navigate star view to this entity
-              iframeRef.current?.contentWindow?.location.replace(
-                `/viz/star.html?entity=${encodeURIComponent(entityId)}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}`
-              );
-              // Update URL without full page reload
-              window.history.pushState({}, '', `/n/${noosphereId}/orrery/star?entity=${encodeURIComponent(entityId)}`);
-            }}
-          />
+          {selectedDocType === "image" ? (
+            <ImagePane
+              documentId={selectedDocId!}
+              onClose={() => setSelectedDocId(null)}
+              onNavigateEntity={(entityId) => {
+                setSelectedDocId(null);
+                iframeRef.current?.contentWindow?.location.replace(
+                  `/viz/star.html?entity=${encodeURIComponent(entityId)}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}`
+                );
+                window.history.pushState({}, '', `/n/${noosphereId}/orrery/star?entity=${encodeURIComponent(entityId)}`);
+              }}
+              onNavigateDomain={() => {}}
+            />
+          ) : (
+            <ReaderPane
+              documentId={selectedDocId!}
+              onClose={() => setSelectedDocId(null)}
+              onNavigateEntity={(entityId) => {
+                setSelectedDocId(null);
+                iframeRef.current?.contentWindow?.location.replace(
+                  `/viz/star.html?entity=${encodeURIComponent(entityId)}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}`
+                );
+                window.history.pushState({}, '', `/n/${noosphereId}/orrery/star?entity=${encodeURIComponent(entityId)}`);
+              }}
+            />
+          )}
         </div>
       )}
     </div>
