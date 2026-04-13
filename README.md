@@ -1,305 +1,170 @@
 # Noospheric Orrery
 
-An adaptive knowledge graph extraction pipeline with a cosmic visualization. Upload documents, watch the system discover domains, build extraction specs through iterative refinement, and explore the resulting graph as an interactive galaxy map.
-
-Built on miniature painting YouTube tutorials as the proof-of-concept domain. The pipeline is domain-agnostic — it discovers entity types, relationship types, and domain taxonomy from the corpus itself.
+An adaptive knowledge graph pipeline. Upload documents and images, the system classifies them into domains, builds extraction specs through iterative refinement, extracts entities, and visualizes the result as an interactive galaxy map.
 
 ## What It Does
 
-1. **Ingest** — drop text files or point at a directory
-2. **Classify** — Claude Sonnet assigns documents to a hierarchical domain taxonomy it builds incrementally
-3. **Simmer** — a background worker uses simmer-sdk to iteratively refine a golden entity set, then a Haiku extraction spec tuned to your corpus
-4. **Extract** — Claude Haiku runs the simmered spec cheaply across all documents; domain-specific specs add richness on top
-5. **Normalize** — entities are deduplicated via string rules + embedding similarity + LLM review for ambiguous pairs
-6. **Visualize** — an interactive galaxy map renders domains as nebulae and entities as stars
+1. **Ingest** — upload text files or images (drag-and-drop, dual upload zones)
+2. **Classify** — LLM assigns documents to a hierarchical domain taxonomy it builds incrementally
+3. **Extract** — entities extracted immediately using built-in general specs (text + image)
+4. **Simmer** — background worker iteratively refines domain-specific extraction specs
+5. **Normalize** — entities deduplicated via string rules + embedding similarity + LLM review
+6. **Visualize** — interactive galaxy map with UMAP-based semantic domain layout
 
-The system is queryable from the first upload. First-pass extraction uses a generic spec immediately. Domain-specific richness comes later as simmering completes.
+The system is queryable from the first upload. Domain-specific richness comes later as simmering completes.
+
+## Quick Start
+
+```bash
+git clone https://github.com/2389-research/Noospheric-Orrery.git
+cd Noospheric-Orrery
+cp .env.example .env    # edit with your credentials
+docker compose up
+```
+
+Open http://localhost:3100 — no sign-in required.
+
+### Three Backend Options
+
+Configure in `.env`:
+
+| Backend | Config | Models | What You Need |
+|---------|--------|--------|---------------|
+| **AWS Bedrock** | `ANTHROPIC_BACKEND=bedrock` | Sonnet/Haiku | AWS credentials with Bedrock access |
+| **Anthropic API** | `ANTHROPIC_BACKEND=gateway` | Sonnet/Haiku | Anthropic API key (`sk-ant-...`) |
+| **Ollama (fully local)** | `ANTHROPIC_BACKEND=ollama` | gemma4:26b/e4b | [Ollama](https://ollama.com) installed, models pulled |
+
+#### Fully Local Mode (Ollama)
+
+```bash
+# Install Ollama and pull models
+ollama pull gemma4:26b    # 17GB — classification, judging, generation
+ollama pull gemma4:e4b    # 9.6GB — extraction (follows structured prompts reliably)
+
+# Configure .env
+ANTHROPIC_BACKEND=ollama
+OLLAMA_URL=http://host.docker.internal:11434
+CLASSIFICATION_MODEL=gemma4:26b
+EXTRACTION_MODEL=gemma4:e4b
+
+# Launch
+docker compose up
+```
+
+Zero cloud dependencies. Text and image extraction, search, simmering all work locally.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  orchestrator (FastAPI, :8100)                          │
-│  Ingest → Classify → Extract → Normalize                │
-│  Exposes REST API consumed by frontend                  │
+│  Ingest → Classify → Extract → Normalize → Search       │
+│  Image serving, graph data, WebSocket broadcasts        │
 └──────────────────────┬──────────────────────────────────┘
                        │ shared SQLite (WAL mode)
 ┌──────────────────────┴──────────────────────────────────┐
 │  worker (Python, background)                            │
 │  Polls jobs table every 5s                              │
-│  Runs simmer_general, simmer_domain, extract_batch      │
+│  Runs simmer (text + image), extract_batch, normalize   │
+│  Uses simmer-sdk with direct API agent loop (no CLI)    │
 └─────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────┐
 │  frontend (Next.js, :3100)                              │
-│  Upload / Pipeline / Entities / Viz / Simmer / Extract  │
+│  Upload / Pipeline / Entities / Orrery / Simmer detail  │
+│  Multi-workspace, image search, ImagePane               │
 └─────────────────────────────────────────────────────────┘
-
-External:
-  AWS Bedrock  — all Claude API calls
-  simmer-sdk   — iterative refinement loops
 ```
 
-All three services run via `docker compose up`. Orchestrator and worker share a SQLite volume at `/data/orrery.db`.
+All LLM calls go through `orrery-relay` (`packages/orrery-relay/`), which handles backend routing:
+- **Bedrock/Gateway**: Anthropic SDK with tool_use for structured output
+- **Ollama**: Native `/api/chat` endpoint — supports text, vision, and structured output
 
-## Tech Stack
+## Features
 
-| Layer | Technology |
-|-------|-----------|
-| Orchestrator | Python 3.11+, FastAPI, Uvicorn |
-| Worker | Python 3.11+, asyncio polling loop |
-| AI calls | AWS Bedrock via `anthropic[bedrock]` SDK |
-| Classification model | `claude-sonnet-4-20250514` |
-| Extraction model | `claude-haiku-4-20250514` (or haiku-4-5) |
-| Iterative refinement | simmer-sdk |
-| Embeddings | all-MiniLM-L6-v2 (sentence-transformers) |
-| Semantic search | FAISS IndexFlatIP + query expansion via Haiku |
-| Domain layout | UMAP on domain embeddings (persistent, stable) |
-| Storage | SQLite WAL mode |
-| Frontend | Next.js 16, shadcn/ui, TypeScript |
-| Cosmic viz | Canvas2D ES modules, iframe + postMessage |
-| MCP server | stdio server for AI agent integration |
-| Containers | Docker Compose |
+### Text Pipeline
+- Upload `.txt`, `.md`, `.json`, `.csv`
+- Classification into hierarchical domains
+- Entity extraction with general spec (immediate) + domain specs (after simmering)
+- Co-occurrence edges, domain cascade, normalization
 
-## Quick Start
+### Image Pipeline
+- Upload `.jpg`, `.png`, `.webp`, `.gif`
+- Vision LLM describes and classifies images
+- Entity extraction from image descriptions
+- Image search (toggle in orrery view)
+- ImagePane renders actual images with entity tags
 
-### Prerequisites
+### Simmering (Spec Refinement)
+- **Text**: 2-phase (golden set → extraction spec), board judge with 2 panelists
+- **Image**: Single-phase with vision review, deterministic steps for Ollama
+- **API backends**: Uses simmer-sdk direct API agent loop (2x faster than CLI, no hangs)
+- **Ollama**: Deterministic pipeline — pre-scan → evaluate → review → score → generate
+- Pipeline page shows per-domain text/image breakdown with conditional refine buttons
 
-- Docker and Docker Compose
-- **One of:**
-  - AWS account with Bedrock access (cross-region inference for `us-east-1`) — cloud mode
-  - Anthropic API key — cloud mode via direct API
-  - [Ollama](https://ollama.com) with local models — fully local, no API keys needed
-### Setup
+### UMAP Domain Layout
+- 100 anchor domains seed the UMAP space for well-distributed initial layout
+- `transform()` places new domains without re-fitting (stable positions)
+- `NUMBA_CPU_NAME=generic` fixes ARM Docker SIGILL (numba#10388)
+
+### Multi-Workspace
+- Multiple workspaces via JSON registry + separate SQLite files
+- Workspace switcher in the UI
+- Each workspace is fully isolated
+
+## Running Without Docker
 
 ```bash
-# 1. Clone
-git clone https://github.com/2389-research/Noospheric-Orrery.git
-cd Noospheric-Orrery
+# Orchestrator
+cd orchestrator && pip install -e . && uvicorn src.main:app --reload --port 8000
 
-# 2. Configure environment
-cp .env.example .env
-# Edit .env with your AWS credentials
+# Worker (separate terminal)
+cd worker && python -m src.main
 
-# 3. Launch
-docker compose up
-
-# Or pull pre-built images from GHCR
-docker compose pull
-docker compose up
+# Frontend (separate terminal)
+cd frontend && NEXT_PUBLIC_AUTH_MODE=noop BACKEND_URL=http://localhost:8000 npm run dev
 ```
 
-Pre-built images are published to GitHub Container Registry on each [release](https://github.com/2389-research/Noospheric-Orrery/releases):
-- `ghcr.io/2389-research/orrery-orchestrator`
-- `ghcr.io/2389-research/orrery-worker`
-- `ghcr.io/2389-research/orrery-frontend`
-
-Services start on:
-- **Frontend**: http://localhost:3100 (upload, pipeline, entities, galaxy viz)
-- **Orchestrator API**: http://localhost:8100 (REST API + WebSocket)
-- **API docs**: http://localhost:8100/docs (Swagger)
-
-Data persists in the `orrery-data` Docker volume.
-
-### First Steps
-
-1. Open http://localhost:3100 and upload a text/markdown file
-2. The pipeline automatically: classifies into domains, extracts entities, indexes for search
-3. Go to `/viz` to see the galaxy map — zoom in for sector detail, double-click entities for star view
-4. Use `/pipeline` to monitor jobs, trigger simmering, run normalization
-
-### Fully Local Mode (Ollama, No Cloud APIs)
-
-Run the entire pipeline with local models via [Ollama](https://ollama.com). No API keys, no cloud dependencies — just Docker + Ollama.
-
-**1. Install Ollama and pull models:**
+## Testing
 
 ```bash
-# Install Ollama: https://ollama.com/download
-ollama pull gemma4:26b    # 17GB — classification, judging, generation (MoE, 4B active)
-ollama pull gemma4:e4b    # 9.6GB — extraction, clerk tasks (8B dense, follows structured prompts)
+# Run in Docker (recommended — matches production environment)
+docker run --rm \
+  -v $(pwd)/orchestrator/tests:/app/orchestrator/tests \
+  -v $(pwd)/orchestrator/src:/app/orchestrator/src \
+  -v $(pwd)/orchestrator/specs:/app/orchestrator/specs \
+  -w /app/orchestrator \
+  ghcr.io/2389-research/orrery-orchestrator:latest \
+  sh -c "uv pip install pytest httpx && uv run python -m pytest tests/ -v"
 ```
 
-**2. Configure `.env`:**
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-```
-ANTHROPIC_BACKEND=ollama
-OLLAMA_URL=http://host.docker.internal:11434
-CLASSIFICATION_MODEL=gemma4:26b
-EXTRACTION_MODEL=gemma4:e4b
-```
-
-> `host.docker.internal` lets Docker containers reach Ollama on your host machine. If running without Docker, use `http://localhost:11434`.
-
-**3. Launch:**
-
-```bash
-docker compose up
-```
-
-**Model selection notes:**
-- **gemma4:26b** (MoE, 4B active params) — best balance of quality and speed for judging/generation. The judges read sample docs via tool calls and produce detailed scoring.
-- **gemma4:e4b** (8B dense) — outperforms larger MoE models for extraction because dense params follow structured prompts more reliably.
-- **gemma4:31b** (31B dense, 19GB) — higher quality but slower. Use if you have the VRAM and patience.
-- Scores are lower than cloud Sonnet (5-7/10 vs 8-9/10 typical) but the iterative refinement still works — specs improve across iterations.
-
-**Tested configurations:**
-
-| Role | Model | Why |
-|------|-------|-----|
-| Classification + Judging + Generation | `gemma4:26b` | Good tool use, reads docs thoroughly, produces structured scores |
-| Extraction + Clerk | `gemma4:e4b` | Follows JSON schemas reliably, fast for per-chunk extraction |
-
-### Running Without Docker (Dev Mode)
-
-```bash
-# Create venvs
-cd orchestrator && python3 -m venv .venv && .venv/bin/pip install -e ".[dev]" && cd ..
-cd worker && python3 -m venv .venv && .venv/bin/pip install -e ".[dev]" && .venv/bin/pip install -e ../simmer-sdk && cd ..
-cd frontend && npm install && cd ..
-
-# Set environment variables
-cp .env.example .env  # edit with your AWS creds
-export $(cat .env | xargs)
-# Data defaults to ~/.local/share/orrery/ (XDG). Override with DB_PATH, DOCUMENTS_DIR, SPECS_DIR.
-
-# Start services (each in its own terminal)
-cd orchestrator && .venv/bin/uvicorn src.main:app --host 0.0.0.0 --port 8100
-cd worker && .venv/bin/python -m src.main
-cd frontend && NEXT_PUBLIC_API_URL=http://localhost:8100 npm run dev -- -p 3100
-```
-
-### MCP Server (for AI agents)
-
-The orchestrator includes an MCP server for Claude Code or other MCP-compatible agents:
-
-```bash
-cd orchestrator
-source ../.env
-export DB_PATH=$HOME/orrery-data/orrery.db
-.venv/bin/python -m src.mcp_server
-```
-
-Exposes tools: `search_knowledge_graph`, `get_entity`, `get_document`, `list_domains`, `list_entities`. Searches trigger the galaxy viz glow animation via WebSocket when the orchestrator is running.
-
-## Pipeline Flow
-
-```
-POST /ingest (file upload or directory path)
-│
-├── 1. Store document + chunks in SQLite
-│
-├── 2. Classify (Sonnet, ~2-3s)
-│   ├── Build adaptive excerpt (whole doc if < 6K chars, else title + start + middle + end)
-│   ├── Classify against existing taxonomy
-│   ├── Normalize proposed domains (embed → cosine similarity → LLM review for ambiguous)
-│   └── Insert new domains, assign document
-│
-├── 3. Extract with general spec (if one exists)
-│   ├── Run simmered spec via Haiku on each chunk
-│   ├── Normalize entities (merge_map → embed → compare to cluster)
-│   └── Compute co-occurrence edges (entities in same chunk → weight by frequency)
-│
-├── 4. Cascade domain-specific specs (deepest domain first, then ancestors)
-│   └── Additive: domain entities added on top of general extraction
-│
-└── 5. Check thresholds → queue jobs
-    ├── No general spec → queue simmer_general (auto, first upload)
-    └── Domain >= threshold + no spec → queue simmer_domain
-```
-
-**Simmer jobs** run in the worker and produce:
-- Phase 1: Golden set (representative entities for the domain — simmered against coverage/precision/taxonomy criteria)
-- Phase 2: Extraction spec (Haiku prompt tuned to reproduce the golden set — simmered against recall/precision/format)
-
-Once a spec exists, all queued documents are extracted via `extract_batch`.
+61 tests covering: DB schema + migrations, config defaults, auth/workspace CRUD, ingest pipeline, image pipeline, entity normalization, domain layout, search, simmer triggers.
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/ingest` | Upload a file (multipart) |
-| `POST` | `/ingest/directory` | Ingest all `.txt/.md/.json/.csv` from a local path |
-| `GET` | `/documents` | List documents with status and domains |
-| `GET` | `/documents/{id}` | Document detail with entities |
-| `GET` | `/documents/{id}/reader` | Document with entity spans for highlighted reading |
-| `GET` | `/domains` | Domain taxonomy with doc counts and spec status |
-| `GET` | `/entities` | Paginated entities, filterable by `type`, `domain`, `job_id` |
-| `GET` | `/entities/{id}` | Entity detail with sources and merge history |
-| `GET` | `/entities/{id}/cooccurrences` | Entities that co-occur with this entity |
-| `GET` | `/jobs` | Pipeline job list, filterable by `status` |
-| `GET` | `/jobs/{id}/iterations` | Simmer iteration history for a job (phases + per-criterion scores) |
-| `POST` | `/simmer/general` | Manually trigger general spec simmering |
-| `POST` | `/simmer/{domain_path}` | Manually trigger domain-specific simmering |
-| `GET` | `/stats` | Dashboard counts (documents, entities, domains, active jobs) |
-| `POST` | `/normalize` | Run full normalization cascade on all entities |
-| `GET` | `/normalize/summary` | Normalization merge history |
-| `GET` | `/normalize/review` | Ambiguous entity pairs pending manual review |
-| `POST` | `/normalize/review/{id}` | Resolve a review item (`action=merge` or `keep_separate`) |
-| `POST` | `/discover-subdomains` | Run subdomain discovery across all extracted docs |
-| `GET` | `/search` | Hybrid search: query expansion + FAISS semantic + exact match + RRF fusion |
-| `POST` | `/search/rebuild` | Rebuild FAISS indexes from stored embeddings |
-| `POST` | `/reclassify` | Re-run classifier on all documents (additive domains) |
-| `GET` | `/entities/{id}/star-graph` | 2-hop local graph: entity + docs + co-entities with shared doc IDs |
-| `GET` | `/graph` | Graph data (UMAP positions, entities, trade routes) for the viz |
-| `GET` | `/graph/umap` | Same as /graph, forces fresh UMAP recomputation |
+| `POST` | `/ingest` | Upload file (text or image) |
+| `GET` | `/documents` | List documents with content_type |
+| `GET` | `/domains` | Domain taxonomy with text/image counts |
+| `GET` | `/entities` | Entities, filterable by type/domain/job |
+| `GET` | `/search?q=...&include_images=true` | Hybrid search with optional image results |
+| `GET` | `/graph` | Graph data (UMAP positions, entities, trade routes) |
+| `GET` | `/images/{id}` | Serve image file |
+| `POST` | `/simmer/general` | Trigger text spec simmering |
+| `POST` | `/simmer/general/image` | Trigger image spec simmering |
+| `POST` | `/simmer/{domain_path}` | Trigger domain-specific simmering |
+| `GET` | `/stats` | Counts (documents, entities, domains, images, active jobs) |
+| `GET` | `/workspaces` | List workspaces |
+| `POST` | `/workspaces` | Create workspace |
 | `GET` | `/health` | Health check |
 
-Full interactive docs at `/docs` (Swagger) and `/redoc`.
-
-## Frontend Pages
-
-| Route | Description |
-|-------|-------------|
-| `/` | Upload page — drag-and-drop files or paste a directory path |
-| `/pipeline` | Job status, domain taxonomy tree, spec maturity, "Simmer" buttons |
-| `/entities` | Paginated entity table with type/domain filters |
-| `/viz` | Galaxy map — zoom for sector detail, double-click entity for star view, search to navigate |
-| `/simmer/{id}` | Simmer job detail — iteration history, per-criterion scores, phase tabs |
-| `/extraction/{id}` | Batch extraction detail — docs processed, entities extracted, normalization summary, reader view |
-
-## Data Model (Key Tables)
-
-| Table | Purpose |
-|-------|---------|
-| `documents` | Uploaded files with status (`pending → classified → extracted → enriched`) |
-| `chunks` | Fixed-size chunks of each document for extraction provenance |
-| `domains` | Hierarchical taxonomy (`path` like `techniques/wet-blending`) |
-| `domain_merge_map` | Normalization decisions for domain labels |
-| `document_domains` | Many-to-many: which domains a document belongs to |
-| `entities` | Canonical entities with type |
-| `entity_sources` | Which document/chunk produced each entity, which spec version |
-| `merge_map` | Entity normalization cache (`from_name → to_entity_id`) |
-| `relationships` | Co-occurrence and typed edges between entities |
-| `jobs` | Pipeline jobs (`simmer_general`, `simmer_domain`, `extract_batch`) |
-| `specs` | Simmered extraction specs with golden set and composite score |
-| `simmer_iterations` | Per-iteration history from simmer-sdk (scores, key change, ASI) |
-| `entity_embeddings` | Cached embeddings for normalization (deferred) |
-| `normalization_review_queue` | Ambiguous entity pairs for manual review |
-
-Full schema: `/orchestrator/src/db.py`
-
-## Design Docs
-
-| Document | Location |
-|----------|----------|
-| Orchestrator design spec | `docs/orchestrator/design.md` |
-| Orchestrator implementation plan | `docs/orchestrator/implementation-plan.md` |
-| Pipeline specification | `docs/pipeline-spec.md` |
-| Extraction pipeline learnings | `docs/extraction-pipeline/` |
-| Domain classification | `docs/domain-classification/` |
-| Cosmic visualization | `docs/cosmic-visualization/` |
-| Architecture reference | `docs/ARCHITECTURE.md` |
+Full interactive docs at http://localhost:8100/docs
 
 ## Design Principles
 
 1. **Extraction specs are the artifact that improves, not the code.** The pipeline stays fixed; specs evolve through simmering.
-2. **Expensive work is amortized.** Domain classification and spec simmering happen once. Per-document extraction is cheap.
-3. **Queryable from moment one.** Every document produces entities immediately. Domain richness comes later.
-4. **The graph is both output and context.** Accumulated structure informs future extraction.
-5. **Prompt quality > model quality.** A simmered Haiku spec outperforms a generic Sonnet prompt.
+2. **Expensive work is amortized.** Classification and simmering happen once. Per-document extraction is cheap.
+3. **Queryable from moment one.** Every document produces entities immediately via built-in general specs.
+4. **Works offline.** Ollama backend requires zero internet after model download.
+5. **Prompt quality > model quality.** A simmered spec on a small model outperforms a generic prompt on a large one.
