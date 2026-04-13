@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import os
+import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -14,6 +17,56 @@ from .retry import with_retry, with_retry_sync
 from .types import RelayResponse, UsageEvent
 
 logger = logging.getLogger("orrery_relay")
+
+
+def _anthropic_to_ollama_messages(messages: list[dict], system: str | None = None) -> tuple[list[dict], str | None]:
+    """Translate Anthropic message format to native Ollama /api/chat format.
+
+    Extracts images from content blocks into the 'images' array.
+    Returns (ollama_messages, system_prompt).
+    """
+    result = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, str):
+            result.append({"role": msg["role"], "content": content})
+        elif isinstance(content, list):
+            text_parts = []
+            images = []
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get("type") == "image":
+                        source = block.get("source", {})
+                        if source.get("type") == "base64":
+                            images.append(source.get("data", ""))
+                    elif block.get("type") == "text":
+                        text_parts.append(block["text"])
+            entry = {"role": msg["role"], "content": "\n".join(text_parts)}
+            if images:
+                entry["images"] = images
+            result.append(entry)
+        else:
+            result.append({"role": msg["role"], "content": str(content) if content else ""})
+    return result, system
+
+
+def _parse_json_from_text(text: str) -> dict | None:
+    """Try to extract a JSON object from text that may have markdown fences."""
+    text = text.strip()
+    if "```" in text:
+        match = re.search(r'```(?:json)?\s*\n?(.*?)```', text, re.DOTALL)
+        if match:
+            text = match.group(1).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+    return None
 
 
 class Relay:
@@ -34,28 +87,31 @@ class Relay:
         on_usage: Callable[[UsageEvent], Awaitable[None]] | None = None,
     ) -> None:
         self._backend = backend
-        self._gateway_url = gateway_url
-        self._gateway_api_key = gateway_api_key
-        self._aws_access_key = aws_access_key
-        self._aws_secret_key = aws_secret_key
-        self._aws_region = aws_region
         self._ollama_url = ollama_url
         self._max_retries = max_retries
         self._base_delay = base_delay
         self._max_delay = max_delay
         self._on_usage = on_usage
-        self._async_client = create_async_client(
-            backend=backend, gateway_url=gateway_url, gateway_api_key=gateway_api_key,
-            aws_access_key=aws_access_key, aws_secret_key=aws_secret_key, aws_region=aws_region,
-            ollama_url=ollama_url,
-        )
+
+        if backend != "ollama":
+            self._async_client = create_async_client(
+                backend=backend, gateway_url=gateway_url, gateway_api_key=gateway_api_key,
+                aws_access_key=aws_access_key, aws_secret_key=aws_secret_key, aws_region=aws_region,
+                ollama_url=ollama_url,
+            )
+
+        # Store for sync client creation
+        self._gateway_url = gateway_url
+        self._gateway_api_key = gateway_api_key
+        self._aws_access_key = aws_access_key
+        self._aws_secret_key = aws_secret_key
+        self._aws_region = aws_region
         self._sync_client: Any = None
 
     @classmethod
     def from_env(cls, **overrides: Any) -> Relay:
         log_level = os.environ.get("RELAY_LOG_LEVEL", "INFO")
         logging.getLogger("orrery_relay").setLevel(getattr(logging, log_level.upper(), logging.INFO))
-        # Auto-detect backend: if ANTHROPIC_BACKEND isn't set, infer from available credentials
         explicit_backend = os.environ.get("ANTHROPIC_BACKEND", "")
         aws_key = os.environ.get("AWS_ACCESS_KEY", "")
         gateway_url = os.environ.get("GATEWAY_URL", "")
@@ -100,12 +156,72 @@ class Relay:
         kwargs.update(overrides)
         return cls(**kwargs)
 
+    async def _complete_ollama(
+        self, model: str, messages: list[dict], max_tokens: int,
+        system: str | None = None, temperature: float | None = None,
+        **kwargs: Any,
+    ) -> RelayResponse:
+        """Ollama completion via native /api/chat endpoint.
+
+        Uses the native endpoint instead of the OpenAI-compatible one because:
+        - Vision (image content blocks) works correctly
+        - No thinking mode issues (gemma4 ThinkingBlock bug)
+        - Consistent behavior across all Ollama model families
+        """
+        import httpx
+
+        ollama_messages, _ = _anthropic_to_ollama_messages(messages, system)
+        if system:
+            ollama_messages.insert(0, {"role": "system", "content": system})
+
+        # Check if any message has images — num_predict option breaks vision on gemma4
+        has_images = any("images" in m for m in ollama_messages)
+
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": ollama_messages,
+            "stream": False,
+        }
+        if not has_images:
+            body["options"] = {"num_predict": max_tokens}
+        if temperature is not None:
+            body.setdefault("options", {})["temperature"] = temperature
+
+        start = time.monotonic()
+
+        async def _call() -> Any:
+            async with httpx.AsyncClient(timeout=300) as client:
+                resp = await client.post(f"{self._ollama_url}/api/chat", json=body)
+                resp.raise_for_status()
+                return resp.json()
+
+        data = await with_retry(_call, max_retries=self._max_retries, base_delay=self._base_delay, max_delay=self._max_delay)
+        elapsed = (time.monotonic() - start) * 1000
+
+        text = data.get("message", {}).get("content", "")
+        input_tokens = data.get("prompt_eval_count", 0)
+        output_tokens = data.get("eval_count", 0)
+
+        logger.info("complete model=%s backend=ollama tokens=%d/%d latency=%.0fms", model, input_tokens, output_tokens, elapsed)
+
+        response = RelayResponse(raw=data, text=text, input_tokens=input_tokens, output_tokens=output_tokens, model=model, latency_ms=elapsed, backend="ollama")
+
+        if self._on_usage:
+            from datetime import datetime, timezone
+            event = UsageEvent(model=model, backend="ollama", input_tokens=input_tokens, output_tokens=output_tokens, latency_ms=elapsed, timestamp=datetime.now(timezone.utc).isoformat(), retries=0)
+            await self._on_usage(event)
+
+        return response
+
     async def complete(
         self, model: str, messages: list[dict], max_tokens: int,
         system: str | None = None, temperature: float | None = None,
         tools: list[dict] | None = None, tool_choice: dict | None = None,
         **kwargs: Any,
     ) -> RelayResponse:
+        if self._backend == "ollama":
+            return await self._complete_ollama(model, messages, max_tokens, system, temperature, **kwargs)
+
         mapped_model = map_model_id(model, self._backend)
         call_kwargs: dict[str, Any] = {"model": mapped_model, "messages": messages, "max_tokens": max_tokens}
         if system is not None: call_kwargs["system"] = system
@@ -113,11 +229,6 @@ class Relay:
         if tools is not None: call_kwargs["tools"] = tools
         if tool_choice is not None: call_kwargs["tool_choice"] = tool_choice
         call_kwargs.update(kwargs)
-
-        # Disable thinking for Ollama — gemma4 defaults to thinking mode which
-        # puts all output in ThinkingBlock with empty text (ollama#15288)
-        if self._backend == "ollama" and "thinking" not in call_kwargs:
-            call_kwargs["thinking"] = {"type": "disabled"}
 
         start = time.monotonic()
         async def _call() -> Any:
@@ -131,7 +242,6 @@ class Relay:
             raise
 
         elapsed = (time.monotonic() - start) * 1000
-        # Extract text from all content blocks (skip ThinkingBlock, ToolUseBlock, etc.)
         text = ""
         if raw.content:
             text_parts = [block.text for block in raw.content if hasattr(block, "text")]
@@ -157,20 +267,28 @@ class Relay:
         system: str | None = None, temperature: float | None = None,
         **kwargs: Any,
     ) -> dict:
-        """LLM call that returns guaranteed-valid JSON matching a schema.
+        """LLM call that returns JSON matching a schema.
 
-        Uses Anthropic tool use to enforce structured output. The model
-        is forced to call the tool, and the tool input is validated
-        against the schema by the API.
-
-        Args:
-            schema: JSON Schema for the output (the tool's input_schema)
-            tool_name: Name for the synthetic tool
-            tool_description: Description to guide the model
-
-        Returns:
-            dict matching the schema — never raises JSONDecodeError.
+        For Anthropic/Bedrock: uses tool_use to force structured output.
+        For Ollama: prompts for JSON and parses from text response.
         """
+        if self._backend == "ollama":
+            schema_hint = json.dumps(schema, indent=2)
+            json_instruction = f"\n\nReturn your response as a JSON object matching this schema:\n{schema_hint}\n\nReturn ONLY the JSON object, no other text."
+
+            augmented = list(messages)
+            if augmented and augmented[-1]["role"] == "user":
+                content = augmented[-1]["content"]
+                if isinstance(content, str):
+                    augmented[-1] = {**augmented[-1], "content": content + json_instruction}
+                elif isinstance(content, list):
+                    augmented[-1] = {**augmented[-1], "content": content + [{"type": "text", "text": json_instruction}]}
+
+            response = await self._complete_ollama(model, augmented, max_tokens, system, temperature, **kwargs)
+            parsed = _parse_json_from_text(response.text)
+            return parsed if parsed is not None else {}
+
+        # Anthropic/Bedrock: use tool_use
         tools = [{
             "name": tool_name,
             "description": tool_description,
@@ -185,12 +303,10 @@ class Relay:
             **kwargs,
         )
 
-        # Extract tool input from the response
         for block in response.raw.content:
             if block.type == "tool_use" and block.name == tool_name:
                 return block.input
 
-        # Fallback — shouldn't happen with tool_choice forced
         return {}
 
     def complete_sync(
