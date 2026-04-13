@@ -55,7 +55,7 @@ const WORKSPACE_ID = new URLSearchParams(location.search).get('workspace') || ''
 const layoutParam = new URLSearchParams(location.search).get('layout');
 const graphUrl = layoutParam === 'umap' ? `${API_URL}/graph/umap` : `${API_URL}/graph`;
 const fetchHeaders = {};
-if (AUTH_TOKEN) fetchHeaders['Authorization'] = `Bearer ${AUTH_TOKEN}`;
+if (AUTH_TOKEN && AUTH_TOKEN !== 'noop') fetchHeaders['Authorization'] = `Bearer ${AUTH_TOKEN}`;
 if (WORKSPACE_ID) fetchHeaders['X-Workspace-Id'] = WORKSPACE_ID;
 fetch(graphUrl, { headers: fetchHeaders }).then(r => r.json()).then(data => {
   state.loadGraphData(data);

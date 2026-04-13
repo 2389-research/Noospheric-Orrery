@@ -40,3 +40,57 @@ def test_init_db_idempotent(tmp_path):
     tables = [row[0] for row in cursor.fetchall()]
     conn.close()
     assert "documents" in tables
+
+
+def test_document_image_columns(tmp_path):
+    """Documents table has content_type, image_path, thumbnail_path for image support."""
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    conn = get_connection(db_path)
+    conn.execute(
+        "INSERT INTO documents (id, title, content, status, content_type, image_path, thumbnail_path) "
+        "VALUES ('d1', 'photo', '', 'pending', 'image', '/data/img.jpg', '/data/thumb.jpg')"
+    )
+    row = conn.execute("SELECT content_type, image_path, thumbnail_path FROM documents WHERE id = 'd1'").fetchone()
+    assert row["content_type"] == "image"
+    assert row["image_path"] == "/data/img.jpg"
+    assert row["thumbnail_path"] == "/data/thumb.jpg"
+    # Default is 'text'
+    conn.execute("INSERT INTO documents (id, title, content, status) VALUES ('d2', 'notes', 'hello', 'pending')")
+    row2 = conn.execute("SELECT content_type FROM documents WHERE id = 'd2'").fetchone()
+    assert row2["content_type"] == "text"
+    conn.close()
+
+
+def test_chunk_image_embedding_column(tmp_path):
+    """Chunks table has image_embedding BLOB for SigLIP embeddings."""
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    conn = get_connection(db_path)
+    conn.execute(
+        "INSERT INTO documents (id, title, content, status) VALUES ('d1', 'test', '', 'pending')"
+    )
+    conn.execute(
+        "INSERT INTO chunks (id, document_id, chunk_index, text, image_embedding) "
+        "VALUES ('c1', 'd1', 0, '', X'0102030405')"
+    )
+    row = conn.execute("SELECT image_embedding FROM chunks WHERE id = 'c1'").fetchone()
+    assert row["image_embedding"] is not None
+    conn.close()
+
+
+def test_spec_media_type_column(tmp_path):
+    """Specs table has media_type for separating text vs image spec lineage."""
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    conn = get_connection(db_path)
+    conn.execute(
+        "INSERT INTO specs (id, version, spec_content, media_type) VALUES ('s1', 1, 'spec', 'image')"
+    )
+    row = conn.execute("SELECT media_type FROM specs WHERE id = 's1'").fetchone()
+    assert row["media_type"] == "image"
+    # Default is 'text'
+    conn.execute("INSERT INTO specs (id, version, spec_content) VALUES ('s2', 1, 'spec')")
+    row2 = conn.execute("SELECT media_type FROM specs WHERE id = 's2'").fetchone()
+    assert row2["media_type"] == "text"
+    conn.close()

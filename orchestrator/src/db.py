@@ -10,10 +10,10 @@ CREATE TABLE IF NOT EXISTS documents (
     content TEXT,
     content_hash TEXT,
     metadata TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    status TEXT DEFAULT 'pending',
     content_type TEXT DEFAULT 'text',
-    thumbnail_path TEXT
+    thumbnail_path TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status TEXT DEFAULT 'pending'
 );
 CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash);
 
@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     offset INTEGER,
     length INTEGER,
     text TEXT,
-    embedding BLOB
+    embedding BLOB,
+    image_embedding BLOB
 );
 
 CREATE TABLE IF NOT EXISTS domains (
@@ -169,6 +170,7 @@ CREATE TABLE IF NOT EXISTS specs (
     spec_content TEXT,
     golden_set TEXT,
     score REAL,
+    media_type TEXT DEFAULT 'text',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """

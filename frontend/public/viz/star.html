@@ -77,7 +77,7 @@ const API_URL = new URLSearchParams(location.search).get('api') || window.API_UR
 const AUTH_TOKEN = new URLSearchParams(location.search).get('token') || '';
 const WORKSPACE_ID = new URLSearchParams(location.search).get('workspace') || '';
 const fetchHeaders = {};
-if (AUTH_TOKEN) fetchHeaders['Authorization'] = `Bearer ${AUTH_TOKEN}`;
+if (AUTH_TOKEN && AUTH_TOKEN !== 'noop') fetchHeaders['Authorization'] = `Bearer ${AUTH_TOKEN}`;
 if (WORKSPACE_ID) fetchHeaders['X-Workspace-Id'] = WORKSPACE_ID;
 
 async function loadData() {
@@ -351,7 +351,9 @@ canvas.addEventListener('mouseup', e => {
     const hit = hitTest(w.x, w.y);
     if (hit) {
       if (hit.kind === 'co_entity') {
-        window.location.search = `?entity=${encodeURIComponent(hit.id)}`;
+        const params = new URLSearchParams(location.search);
+        params.set('entity', hit.id);
+        window.location.search = params.toString();
       } else if (hit.kind === 'document') {
         window.parent.postMessage({
           type: 'node_selected', nodeType: 'document',

@@ -80,7 +80,7 @@ function WorkspaceRow({ workspace }: { workspace: Workspace }) {
 
 export default function NoospheresSettingsPage() {
   const { session } = useAuth();
-  const { workspaces, loading } = useWorkspaces();
+  const { workspaces, loading, refresh } = useWorkspaces();
   const [showCreate, setShowCreate] = useState(false);
   const router = useRouter();
 
@@ -114,7 +114,7 @@ export default function NoospheresSettingsPage() {
       {showCreate && (
         <CreateNoosphereModal
           onClose={() => setShowCreate(false)}
-          onCreated={() => setShowCreate(false)}
+          onCreated={() => { setShowCreate(false); refresh(); }}
         />
       )}
     </div>

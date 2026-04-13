@@ -54,9 +54,9 @@ app.include_router(graph_router)
 app.include_router(reader_router)
 app.include_router(search_router)
 app.include_router(reclassify_router)
+app.include_router(image_files_router)
 app.include_router(auth_router)
 app.include_router(workspace_router)
-app.include_router(image_files_router)
 
 from fastapi import WebSocket as WS
 from .broadcast import ws_endpoint
