@@ -114,6 +114,11 @@ class Relay:
         if tool_choice is not None: call_kwargs["tool_choice"] = tool_choice
         call_kwargs.update(kwargs)
 
+        # Disable thinking for Ollama — gemma4 defaults to thinking mode which
+        # puts all output in ThinkingBlock with empty text (ollama#15288)
+        if self._backend == "ollama" and "thinking" not in call_kwargs:
+            call_kwargs["thinking"] = {"type": "disabled"}
+
         start = time.monotonic()
         async def _call() -> Any:
             return await self._async_client.messages.create(**call_kwargs)
