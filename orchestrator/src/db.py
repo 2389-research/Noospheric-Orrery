@@ -191,6 +191,14 @@ def init_db(db_path: str) -> None:
     spec_cols = {r[1] for r in conn.execute("PRAGMA table_info(specs)").fetchall()}
     if "media_type" not in spec_cols:
         conn.execute("ALTER TABLE specs ADD COLUMN media_type TEXT DEFAULT 'text'")
+    # Backfill: tag legacy image rows by file extension
+    conn.execute("""
+        UPDATE documents SET content_type = 'image'
+        WHERE (content_type IS NULL OR content_type = 'text')
+        AND (source_path LIKE '%.jpg' OR source_path LIKE '%.jpeg'
+             OR source_path LIKE '%.png' OR source_path LIKE '%.webp'
+             OR source_path LIKE '%.gif')
+    """)
     conn.commit()
     conn.close()
 
