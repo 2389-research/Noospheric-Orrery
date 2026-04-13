@@ -126,11 +126,11 @@ class Relay:
             raise
 
         elapsed = (time.monotonic() - start) * 1000
-        # Handle both TextBlock and ToolUseBlock responses
+        # Extract text from all content blocks (skip ThinkingBlock, ToolUseBlock, etc.)
         text = ""
         if raw.content:
-            first = raw.content[0]
-            text = first.text if hasattr(first, "text") else ""
+            text_parts = [block.text for block in raw.content if hasattr(block, "text")]
+            text = "\n".join(text_parts)
         input_tokens = raw.usage.input_tokens
         output_tokens = raw.usage.output_tokens
 
@@ -211,6 +211,6 @@ class Relay:
         raw = with_retry_sync(_call, max_retries=self._max_retries, base_delay=self._base_delay, max_delay=self._max_delay)
 
         elapsed = (time.monotonic() - start) * 1000
-        text = raw.content[0].text if raw.content else ""
+        text = "\n".join(b.text for b in raw.content if hasattr(b, "text")) if raw.content else ""
         logger.info("complete_sync model=%s backend=%s tokens=%d/%d latency=%.0fms", model, self._backend, raw.usage.input_tokens, raw.usage.output_tokens, elapsed)
         return RelayResponse(raw=raw, text=text, input_tokens=raw.usage.input_tokens, output_tokens=raw.usage.output_tokens, model=model, latency_ms=elapsed, backend=self._backend)
