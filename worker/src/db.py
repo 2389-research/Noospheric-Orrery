@@ -165,6 +165,17 @@ def init_db(db_path: str) -> None:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(SCHEMA)
+    # Migrate: add columns for image support if missing
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
+    if "content_type" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN content_type TEXT DEFAULT 'text'")
+    if "thumbnail_path" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN thumbnail_path TEXT")
+    # Migrate specs table
+    spec_cols = {r[1] for r in conn.execute("PRAGMA table_info(specs)").fetchall()}
+    if "media_type" not in spec_cols:
+        conn.execute("ALTER TABLE specs ADD COLUMN media_type TEXT DEFAULT 'text'")
+    conn.commit()
     conn.close()
 
 def get_connection(db_path: str) -> sqlite3.Connection:

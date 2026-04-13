@@ -179,13 +179,26 @@ def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
 
     subdomains = [d["path"] for d in domains if d["path"].count("/") >= 2]
 
-    # Entities with domain weights via SQL joins
+    # Entities with domain weights — single batch query instead of N+1
     all_entities = store.entities.list(limit=5000)
-    entity_domain_weights = {}
-    for e in all_entities:
-        w = store.domains.get_entity_domain_weights(e.id)
-        if w:
-            entity_domain_weights[e.id] = w
+    weight_rows = store.conn.execute("""
+        SELECT es.entity_id, dd.domain_path, COUNT(*) as weight
+        FROM entity_sources es
+        JOIN document_domains dd ON es.document_id = dd.document_id
+        GROUP BY es.entity_id, dd.domain_path
+    """).fetchall()
+
+    # Build per-entity raw weights
+    raw_weights: dict[str, dict[str, int]] = defaultdict(dict)
+    for r in weight_rows:
+        raw_weights[r[0]][r[1]] = r[2]
+
+    # Normalize to fractions
+    entity_domain_weights: dict[str, dict[str, float]] = {}
+    for eid, dw in raw_weights.items():
+        total = sum(dw.values())
+        if total > 0:
+            entity_domain_weights[eid] = {dp: round(w / total, 3) for dp, w in dw.items()}
 
     entities = []
     for e in all_entities:

@@ -1,5 +1,8 @@
+import logging
 from fastapi import APIRouter, Depends
 from ..dependencies import get_auth_store, AuthStore
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -22,7 +25,7 @@ def list_domains(auth: AuthStore = Depends(get_auth_store)):
         for r in rows:
             text_image_counts[r[0]] = {"text_count": r[2], "image_count": r[1]}
     except Exception:
-        pass
+        logger.warning("Failed to fetch text/image breakdown for domains", exc_info=True)
 
     store.close()
     result = []

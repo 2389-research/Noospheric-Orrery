@@ -14,7 +14,7 @@ Tracked improvements and architecture changes.
 
 - **General extraction specs** — text + image docs extract entities on upload without simmering first. Specs as editable markdown in `orchestrator/specs/`.
 - **Image pipeline** — upload, classify, extract, search, serve images (local filesystem).
-- **Universal UMAP model** — 100 training domains, model on Cloud Run, `transform()` for new domains.
+- **Universal UMAP model** — 100 training domains, model stored locally, `transform()` for new domains.
 - **CPU-only torch** — pytorch-cpu index in pyproject.toml. ~5GB savings per image.
 
 ## DONE (2026-04-01 — 2026-04-07)
@@ -36,8 +36,8 @@ Duplicate domains from format inconsistency (underscores vs hyphens). Apply the 
 ### Re-simmer Button in UI
 No way to re-trigger a simmer run from the UI once one has completed.
 
-### Image Pipeline Restoration
-Image upload/extract/search code was built but lost during a git revert cycle. PR #17 (tag `firebase-archive-v1-restore`) has the restore. Needs to be cherry-picked and adapted for local-only (local filesystem storage instead of Firebase Storage).
+### Image Pipeline — Local Storage Adaptation
+Image upload/extract/search pipeline is functional (see DONE 2026-04-08). Remaining work: verify local filesystem storage paths are consistent across Docker and native dev, and add tests for image ingest flow.
 
 ---
 

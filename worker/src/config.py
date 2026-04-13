@@ -57,11 +57,19 @@ def _xdg_data_dir() -> str:
 
 
 def get_settings() -> Settings:
-    """Build Settings from env vars, falling back to dataclass defaults."""
-    defaults = Settings()
-    _base = _xdg_data_dir()
+    """Build Settings from env vars, falling back to dataclass defaults.
 
-    # Override path defaults with XDG-based paths when not in Docker
+    Default paths use /data/ to match Docker layout. When /data/ doesn't
+    exist (native dev without Docker), fall back to XDG paths.
+    """
+    defaults = Settings()
+
+    # Use /data/ (Docker default) if it exists, otherwise XDG for native dev
+    if os.path.isdir("/data"):
+        _base = "/data"
+    else:
+        _base = _xdg_data_dir()
+
     path_defaults = {
         "db_path": f"{_base}/orrery.db",
         "documents_dir": f"{_base}/documents",

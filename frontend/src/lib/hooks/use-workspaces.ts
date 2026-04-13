@@ -30,9 +30,9 @@ export function useWorkspaces() {
   }, []);
 
   useEffect(() => {
-    if (!session?.orgId) return;
+    if (!session) return;
     refresh();
-  }, [session?.orgId, refresh]);
+  }, [session, refresh]);
 
   return { workspaces, loading, refresh };
 }
