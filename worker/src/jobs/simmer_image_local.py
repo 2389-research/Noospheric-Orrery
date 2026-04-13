@@ -310,15 +310,14 @@ async def run_simmer_image_local(job: dict, db_path: str) -> None:
         record = IterationRecord(
             iteration=iteration,
             scores=scores,
-            composite=round(composite, 1) if isinstance(composite, float) else composite,
             key_change=key_change,
             asi=asi,
             judge_mode="local",
             regressed=composite < best_composite and iteration > 0,
-            best_candidate=current_spec,
         )
+        # Set composite manually (not a constructor arg in simmer-sdk)
+        record.composite = round(composite, 1) if isinstance(composite, float) else composite
 
-        # Fake trajectory for the recorder
         await record_iteration(record, [], "")
 
         print(f"  [image_spec] iteration {iteration}: {composite}/10 — {key_change}", flush=True)
