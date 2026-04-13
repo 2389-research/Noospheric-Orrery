@@ -185,6 +185,10 @@ def init_db(db_path: str) -> None:
         conn.execute("ALTER TABLE documents ADD COLUMN content_type TEXT DEFAULT 'text'")
     if "thumbnail_path" not in cols:
         conn.execute("ALTER TABLE documents ADD COLUMN thumbnail_path TEXT")
+    # Migrate specs table
+    spec_cols = {r[1] for r in conn.execute("PRAGMA table_info(specs)").fetchall()}
+    if "media_type" not in spec_cols:
+        conn.execute("ALTER TABLE specs ADD COLUMN media_type TEXT DEFAULT 'text'")
     conn.commit()
     conn.close()
 

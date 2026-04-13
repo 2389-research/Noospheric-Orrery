@@ -88,13 +88,23 @@ async def _evaluate_image(relay: Relay, model: str, img_path: Path, spec: str) -
             )},
         ]}],
     )
-    # Parse JSON from response
+    # Parse JSON from response — local models often wrap in markdown
     text = response.text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    if "```" in text:
+        import re
+        match = re.search(r'```(?:json)?\s*\n?(.*?)```', text, re.DOTALL)
+        if match:
+            text = match.group(1).strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
+        import re
+        match = re.search(r'\{.*"entities".*\}', text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
         return {"entities": [], "description": text[:200], "tags": []}
 
 
@@ -155,11 +165,30 @@ async def _score_iteration(relay: Relay, model: str, reviews: list[dict],
         )}],
     )
     text = response.text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    # Strip markdown fences
+    if "```" in text:
+        import re
+        match = re.search(r'```(?:json)?\s*\n?(.*?)```', text, re.DOTALL)
+        if match:
+            text = match.group(1).strip()
+    # Try to find JSON object in the response
     try:
         return json.loads(text)
     except json.JSONDecodeError:
+        # Extract JSON from surrounding text
+        import re
+        match = re.search(r'\{[^{}]*"scores"[^{}]*\{[^}]*\}[^}]*\}', text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+        # Last resort: try to extract scores from text
+        score_pattern = re.findall(r'(\w+)[:\s]+(\d+)/10', text)
+        if score_pattern:
+            scores = {k.lower(): int(v) for k, v in score_pattern}
+            composite = round(sum(scores.values()) / len(scores), 1) if scores else 0
+            return {"scores": scores, "composite": composite, "asi": text[:500], "key_change": f"iteration-{iteration}"}
         return {"scores": {}, "composite": 0, "asi": text[:500], "key_change": "parse error"}
 
 

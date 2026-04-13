@@ -154,7 +154,8 @@ CREATE TABLE IF NOT EXISTS specs (
     spec_content TEXT,
     golden_set TEXT,
     score REAL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    media_type TEXT DEFAULT 'text'
 );
 """
 
