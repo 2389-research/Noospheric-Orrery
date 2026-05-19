@@ -5,6 +5,7 @@ import { SimmerJobDetail, SimmerIteration } from "@/lib/types";
 const PHASE_LABELS: Record<string, string> = {
   golden_set: "Golden Set",
   extraction_spec: "Extraction Spec",
+  domain_image_spec: "Domain Image Spec",
 };
 
 function bestComposite(iterations: SimmerIteration[]): number | null {
@@ -19,9 +20,10 @@ interface PhaseTabsProps {
 }
 
 export function PhaseTabs({ job, activePhase, onPhaseChange }: PhaseTabsProps) {
-  // Golden set runs first, extraction spec second
-  const PHASE_ORDER = ["golden_set", "extraction_spec"];
-  const phases = PHASE_ORDER.filter((p) => p in job.phases || PHASE_ORDER.includes(p));
+  // Text simmers use golden_set + extraction_spec; image simmers use domain_image_spec.
+  // Only render phases that actually have iterations so a text job doesn't show an empty image tab.
+  const PHASE_ORDER = ["golden_set", "extraction_spec", "domain_image_spec"];
+  const phases = PHASE_ORDER.filter((p) => (job.phases[p]?.length ?? 0) > 0);
 
   return (
     <div className="flex gap-0 border-b border-border/30">

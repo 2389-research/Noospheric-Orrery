@@ -8,7 +8,7 @@ interface FileUploadProps {
   onError: (error: string) => void;
 }
 
-const TEXT_EXTS = [".txt", ".md", ".json", ".csv"];
+const TEXT_EXTS = [".txt", ".md", ".json", ".csv", ".dip"];
 const IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
 const ALL_EXTS = [...TEXT_EXTS, ...IMAGE_EXTS];
 
@@ -82,7 +82,7 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
               Documents — drop files or click to browse
             </p>
             <p className="text-[10px] text-muted-foreground/50 mt-2">
-              .txt .md .json .csv — multiple files supported
+              .txt .md .json .csv .dip — multiple files supported
             </p>
           </>
         )}
@@ -90,7 +90,7 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
           id="text-file-input"
           type="file"
           multiple
-          accept=".txt,.md,.json,.csv"
+          accept=".txt,.md,.json,.csv,.dip"
           className="hidden"
           onChange={(e) => handleFiles(e.target.files, "text")}
         />

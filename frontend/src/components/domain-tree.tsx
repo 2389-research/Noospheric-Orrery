@@ -16,7 +16,7 @@ function SimmerAction({ domain: d, jobs, onSimmerText, onSimmerImage }: {
   domain: DomainInfo;
   jobs: JobInfo[];
   onSimmerText: (path: string) => void;
-  onSimmerImage: () => void;
+  onSimmerImage: (path: string) => void;
 }) {
   const noosphereId = useNoosphereId();
   const isRunning = jobs.some(j => j.type.startsWith("simmer") && j.target === d.path && (j.status === "running" || j.status === "queued"));
@@ -46,9 +46,9 @@ function SimmerAction({ domain: d, jobs, onSimmerText, onSimmerImage }: {
       )}
       {imageCount >= 3 && (
         <button
-          onClick={onSimmerImage}
+          onClick={() => onSimmerImage(d.path)}
           className="text-[9px] px-1.5 py-0.5 rounded border border-emerald-500/20 text-emerald-400/70 hover:text-emerald-400 hover:border-emerald-500/40 transition-colors"
-          title={`Refine image extraction spec (${imageCount} images)`}
+          title={`Refine image extraction spec for this domain (${imageCount} images)`}
         >
           img
         </button>
@@ -96,8 +96,8 @@ export function DomainTree({ domains, jobs = [] }: { domains: DomainInfo[]; jobs
     try { await api.triggerDomainSimmer(path); } catch (e) { console.error(e); }
   };
 
-  const handleSimmerImage = async () => {
-    try { await api.triggerGeneralImageSimmer(); } catch (e) { console.error(e); }
+  const handleSimmerImage = async (path: string) => {
+    try { await api.triggerDomainImageSimmer(path); } catch (e) { console.error(e); }
   };
 
   return (

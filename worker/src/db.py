@@ -175,6 +175,10 @@ def init_db(db_path: str) -> None:
     spec_cols = {r[1] for r in conn.execute("PRAGMA table_info(specs)").fetchall()}
     if "media_type" not in spec_cols:
         conn.execute("ALTER TABLE specs ADD COLUMN media_type TEXT DEFAULT 'text'")
+    # Migrate chunks table — SigLIP image embedding column
+    chunk_cols = {r[1] for r in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+    if "image_embedding" not in chunk_cols:
+        conn.execute("ALTER TABLE chunks ADD COLUMN image_embedding BLOB")
     # Backfill: tag legacy image rows by file extension
     conn.execute("""
         UPDATE documents SET content_type = 'image'

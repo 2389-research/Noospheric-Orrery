@@ -2,6 +2,8 @@
 .env
 .env.local
 .env*.local
+.env.*.bak
+.env.*.backup
 __pycache__/
 *.pyc
 node_modules/
@@ -10,3 +12,10 @@ data/
 test_docs/
 orrery-data/
 .venv/
+firestore-debug.log
+firebase-debug.log
+*.log
+# Vendored simmer-sdk copies used by some build paths; the canonical install is via pip
+worker-cloud/simmer-sdk/
+orchestrator/worker-cloud/
+worker/simmer-sdk/

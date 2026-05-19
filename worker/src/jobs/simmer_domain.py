@@ -27,18 +27,19 @@ async def run_simmer_domain(job: dict, db_path: str) -> None:
 
     conn = get_connection(db_path)
 
-    # Get docs in this domain
-    docs = conn.execute(
-        """SELECT d.id, d.title, d.content FROM documents d
+    # Sample chunks from documents in this domain (stratified across docs)
+    sample_chunks = conn.execute(
+        """SELECT c.id, c.text, d.title FROM chunks c
+           JOIN documents d ON c.document_id = d.id
            JOIN document_domains dd ON d.id = dd.document_id
            WHERE dd.domain_path = ? AND d.status IN ('classified', 'extracted', 'enriched')
            ORDER BY RANDOM() LIMIT 10""",
         (domain_path,),
     ).fetchall()
 
-    if not docs:
+    if not sample_chunks:
         conn.close()
-        raise ValueError(f"No documents in domain {domain_path}")
+        raise ValueError(f"No chunks in domain {domain_path}")
 
     # Get the general spec to use as starting point
     general_spec = conn.execute(
@@ -89,19 +90,21 @@ Read every sample document and list ALL entities you find as a JSON array:
 ]
 ```"""
 
-    # Write samples and seed
+    # Write sample chunks and seed
     specs_dir = Path(settings.specs_dir)
     domain_dir = specs_dir / f"domain_{domain_path.replace('/', '_')}"
     domain_dir.mkdir(parents=True, exist_ok=True)
     sample_dir = domain_dir / "samples"
-    # Clear old samples so only this run's docs are used
+    # Clear old samples so only this run's chunks are used
     if sample_dir.exists():
         for old_file in sample_dir.glob("*.txt"):
             old_file.unlink()
     sample_dir.mkdir(exist_ok=True)
 
-    for doc in docs:
-        (sample_dir / f"{doc[0]}.txt").write_text(doc[2])
+    for chunk in sample_chunks:
+        # chunk row: (id, text, title)
+        content = f"[Source: {chunk[2]}]\n\n{chunk[1]}"
+        (sample_dir / f"{chunk[0]}.txt").write_text(content)
 
     seed_path = domain_dir / "seed.md"
     seed_path.write_text(seed_content)
@@ -109,7 +112,8 @@ Read every sample document and list ALL entities you find as a JSON array:
 
     # LLM provider config
     backend = settings.anthropic_backend
-    provider_kwargs = {"api_provider": backend}
+    api_provider = "anthropic" if backend == "gateway" else backend
+    provider_kwargs = {"api_provider": api_provider}
     if backend == "bedrock":
         provider_kwargs.update({
             "aws_access_key": settings.aws_access_key,
@@ -120,60 +124,68 @@ Read every sample document and list ALL entities you find as a JSON array:
         provider_kwargs["ollama_url"] = settings.ollama_url
 
     job_id = job["id"]
-    print(f"Simmering domain spec for: {domain_path} ({len(docs)} docs, job {job_id})", flush=True)
+    resume = config.get("resume", False)
+    golden_set_path = domain_dir / "golden_set.md"
 
     # Phase 1: Golden set simmering (domain-specific) — type taxonomy + reference entities
-    golden_result = await refine(
-        artifact=str(seed_path),
-        criteria={
-            "coverage": f"The reference entity list contains every named entity found in the {domain_path} sample documents — no entity left behind",
-            "precision": "Every entity in the reference list actually appears in at least one sample document — no hallucinated entities",
-            "domain_specificity": f"Entity types include categories specific to {domain_path} that the general spec misses — not just generic Person/Organization",
-        },
-        primary="coverage",
-        iterations=iterations,
-        judge_mode="board",
-        judge_panel=[
-            {
-                "name": "Coverage & Depth",
-                "lens": (
-                    "Read every sample document carefully. Cross-reference the reference entity JSON list against the documents. "
-                    f"Are there {domain_path}-specific entities mentioned in the docs that are missing from the list? "
-                    "The list must be exhaustive."
-                ),
+    # Skip if resuming and a golden set already exists from a previous run
+    if resume and golden_set_path.exists():
+        golden_best = golden_set_path.read_text()
+        print(f"Resuming domain spec for: {domain_path} — reusing existing golden set ({len(golden_best)} chars, job {job_id})", flush=True)
+    else:
+        print(f"Simmering domain spec for: {domain_path} ({len(sample_chunks)} chunks, job {job_id})", flush=True)
+        golden_result = await refine(
+            artifact=str(seed_path),
+            criteria={
+                "coverage": f"The reference entity list contains every named entity found in the {domain_path} sample documents — no entity left behind",
+                "precision": "Every entity in the reference list actually appears in at least one sample document — no hallucinated entities",
+                "domain_specificity": f"Entity types include categories specific to {domain_path} that the general spec misses — not just generic Person/Organization",
             },
-            {
-                "name": "Precision & Quality",
-                "lens": (
-                    "For each entity in the reference JSON list, verify it actually appears in at least one sample document. "
-                    "Check that entity types are correct and domain-specific where appropriate. "
-                    "Flag any hallucinated entities not grounded in the source text."
-                ),
-            },
-        ],
-        output_dir=domain_dir / "golden",
-        generator_model=settings.classification_model,
-        judge_model=settings.classification_model,
-        clerk_model=settings.classification_model,
-        background=(
-            f"Sample documents from domain '{domain_path}' are in {sample_dir}. Read ALL of them.\n\n"
-            f"The golden set must contain TWO things:\n"
-            f"1. An entity type taxonomy (including {domain_path}-specific types)\n"
-            f"2. A JSON array of EVERY entity found in the sample documents\n\n"
-            f"The reference entity list is the ground truth — extraction specs will be empirically "
-            f"tested against it. Be thorough."
-        ),
-        on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(domain_dir / "golden")),
-        **provider_kwargs,
-    )
+            primary="coverage",
+            iterations=iterations,
+            judge_mode="board",
+            judge_panel=[
+                {
+                    "name": "Coverage & Depth",
+                    "lens": (
+                        "Read every sample document carefully. Cross-reference the reference entity JSON list against the documents. "
+                        f"Are there {domain_path}-specific entities mentioned in the docs that are missing from the list? "
+                        "The list must be exhaustive."
+                    ),
+                },
+                {
+                    "name": "Precision & Quality",
+                    "lens": (
+                        "For each entity in the reference JSON list, verify it actually appears in at least one sample document. "
+                        "Check that entity types are correct and domain-specific where appropriate. "
+                        "Flag any hallucinated entities not grounded in the source text."
+                    ),
+                },
+            ],
+            output_dir=domain_dir / "golden",
+            generator_model=settings.classification_model,
+            judge_model=settings.classification_model,
+            clerk_model=settings.classification_model,
+            background=(
+                f"Sample chunks from domain '{domain_path}' are in {sample_dir}. Read ALL of them.\n"
+                f"Each file is a chunk from a larger document (source title in the header).\n\n"
+                f"The golden set must contain TWO things:\n"
+                f"1. An entity type taxonomy (including {domain_path}-specific types)\n"
+                f"2. A JSON array of EVERY entity found in the sample chunks\n\n"
+                f"The reference entity list is the ground truth — extraction specs will be empirically "
+                f"tested against it. Be thorough."
+            ),
+            on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(domain_dir / "golden")),
+            **provider_kwargs,
+        )
+        golden_best = golden_result.best_candidate
+        golden_set_path.write_text(golden_best)
 
     # Phase 2: Extraction spec simmering (with empirical evaluator)
-    golden_set_path = domain_dir / "golden_set.md"
-    golden_set_path.write_text(golden_result.best_candidate)
     evaluator_script = Path(__file__).resolve().parent / "evaluate_spec.py"
 
     spec_result = await refine(
-        artifact=golden_result.best_candidate,
+        artifact=golden_best,
         criteria={
             "coverage": "Finds all domain-specific entities from the golden set",
             "precision": "Zero false positives",
@@ -221,7 +233,7 @@ Read every sample document and list ALL entities you find as a JSON array:
         ),
         background=(
             f"This spec will be executed by Haiku on documents in domain '{domain_path}'.\n"
-            f"Golden set: {golden_result.best_candidate[:2000]}\n\n"
+            f"Golden set: {golden_best[:2000]}\n\n"
             f"IMPORTANT: Each iteration, the evaluator runs the candidate spec against sample docs using Haiku.\n"
             f"Raw extraction results are written to eval-N/ directories in the output directory.\n"
             f"READ the raw extraction JSON files — don't just trust the quantitative summary.\n"
@@ -243,7 +255,7 @@ Read every sample document and list ALL entities you find as a JSON array:
     spec_id = str(uuid.uuid4())
     conn.execute(
         "INSERT INTO specs (id, domain_path, version, spec_content, golden_set, score) VALUES (?, ?, ?, ?, ?, ?)",
-        (spec_id, domain_path, version, spec_result.best_candidate, golden_result.best_candidate, spec_result.composite),
+        (spec_id, domain_path, version, spec_result.best_candidate, golden_best, spec_result.composite),
     )
 
     # Update domain spec_version

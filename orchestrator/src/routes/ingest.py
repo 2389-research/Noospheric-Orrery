@@ -283,13 +283,32 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
     entity_count = len(entities)
     store.documents.update_status(doc_id, "extracted")
 
-    # Rebuild search index
+    # Rebuild search index — text (sentence-transformers) for compatibility
     try:
         from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
         embed_new_entities(store.conn)
         embed_new_chunks(store.conn)
     except Exception as e:
         print(f"Search index update after image ingest: {e}")
+
+    # SigLIP embedding — populates chunks.image_embedding for cross-modal search.
+    # Prefers pixel embedding; falls back to description text in the same SigLIP latent space.
+    try:
+        import numpy as np
+        from ..pipeline.image_embedding import embed_image, embed_image_text
+
+        img_emb = embed_image(Path(image_path))
+        if img_emb is None and description:
+            img_emb = embed_image_text(description)
+
+        if img_emb is not None:
+            store.conn.execute(
+                "UPDATE chunks SET image_embedding = ? WHERE id = ?",
+                (img_emb.astype(np.float32).tobytes(), chunk_id),
+            )
+            store.conn.commit()
+    except Exception as e:
+        print(f"SigLIP embedding after image ingest: {e}", flush=True)
 
     return {
         "document_id": doc_id, "title": title, "domains": domains,
@@ -331,7 +350,7 @@ async def ingest_directory(request: DirectoryIngestRequest, auth: AuthStore = De
     store = auth.store
     results = []
     try:
-        text_exts = {".txt", ".md", ".json", ".csv"}
+        text_exts = {".txt", ".md", ".json", ".csv", ".dip"}
         image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
         for file_path in sorted(dir_path.rglob("*")):
             if not file_path.is_file():

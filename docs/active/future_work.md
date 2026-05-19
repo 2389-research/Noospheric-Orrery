@@ -4,6 +4,12 @@ Tracked improvements and architecture changes.
 
 ---
 
+## DONE (2026-05-19)
+
+- **SigLIP wiring restored** — `_ingest_image` populates `chunks.image_embedding`; `_search_images` uses SigLIP text encoder for cross-modal query against pixel/description embeddings. Sentence-transformers and SQL LIKE remain as fallbacks. Regressed during the local-first rewrite (commit 848817c); now restored.
+- **Per-domain image simmer** — `simmer_domain_image` worker job, `POST /simmer/{domain_path}/image` route, UI button on the domain tree. Takes static general image spec as seed (entity types are universal), adds domain recognition vocabulary in a single simmer loop (no golden set phase — simpler than text).
+- **General image simmer removed** — `simmer_general_image` / `simmer_image_local` / `POST /simmer/general/image` deleted. Universal image structure lives in static `orchestrator/specs/general_image.md`; only domain recognition needs empirical refinement.
+
 ## DONE (2026-04-11)
 
 - **Local-first simplification** — removed all Firebase/Firestore/Google Cloud dependencies. SQLite is the only backend. No auth required. Archive tags `firebase-archive-v1` and `firebase-archive-v1-restore` preserve the cloud work.
@@ -35,9 +41,6 @@ Duplicate domains from format inconsistency (underscores vs hyphens). Apply the 
 
 ### Re-simmer Button in UI
 No way to re-trigger a simmer run from the UI once one has completed.
-
-### Image Pipeline — Local Storage Adaptation
-Image upload/extract/search pipeline is functional (see DONE 2026-04-08). Remaining work: verify local filesystem storage paths are consistent across Docker and native dev, and add tests for image ingest flow.
 
 ---
 
