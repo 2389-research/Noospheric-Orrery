@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     offset INTEGER,
     length INTEGER,
     text TEXT,
-    embedding BLOB
+    embedding BLOB,
+    image_embedding BLOB
 );
 
 CREATE TABLE IF NOT EXISTS domains (

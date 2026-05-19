@@ -18,5 +18,5 @@ firebase-debug.log
 *.log
 # Vendored simmer-sdk copies used by some build paths; the canonical install is via pip
 worker-cloud/simmer-sdk/
-orchestrator/worker-cloud/
+orchestrator/worker-cloud/simmer-sdk/
 worker/simmer-sdk/

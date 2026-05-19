@@ -37,15 +37,26 @@ _active_workspace: str | None = None
 
 
 async def call_api(path: str, method: str = "GET", body: dict | None = None) -> dict:
+    """Call the orchestrator API. Returns the JSON body on success, or a
+    {"detail": ...} dict on transport / status / decode errors so MCP tools
+    can surface a readable message instead of crashing."""
     headers = {}
     if _active_workspace:
         headers["X-Workspace-Id"] = _active_workspace
-    async with httpx.AsyncClient() as client:
-        if method == "GET":
-            resp = await client.get(f"{ORCHESTRATOR_URL}{path}", headers=headers, timeout=30)
-        else:
-            resp = await client.post(f"{ORCHESTRATOR_URL}{path}", headers=headers, json=body, timeout=30)
-        return resp.json()
+    try:
+        async with httpx.AsyncClient() as client:
+            if method == "GET":
+                resp = await client.get(f"{ORCHESTRATOR_URL}{path}", headers=headers, timeout=30)
+            else:
+                resp = await client.post(f"{ORCHESTRATOR_URL}{path}", headers=headers, json=body, timeout=30)
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        return {"detail": f"API {e.response.status_code}: {e.response.text[:200]}"}
+    except httpx.RequestError as e:
+        return {"detail": f"Connection error: {e}"}
+    except json.JSONDecodeError:
+        return {"detail": "Invalid (non-JSON) response from orchestrator"}
 
 
 # ── Session ─────────────────────────────────────────────────────────────────
