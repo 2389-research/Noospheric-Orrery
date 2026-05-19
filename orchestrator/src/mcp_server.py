@@ -64,9 +64,9 @@ async def call_api(path: str, method: str = "GET", body: dict | None = None) -> 
 @mcp.tool()
 async def list_noospheres() -> str:
     """List all available noospheres (workspaces). Use select_noosphere() to pick one before querying."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(f"{ORCHESTRATOR_URL}/workspaces", timeout=30)
-        workspaces = resp.json()
+    workspaces = await call_api("/workspaces")
+    if isinstance(workspaces, dict) and "detail" in workspaces:
+        return f"Error: {workspaces['detail']}"
     lines = ["Available noospheres:\n"]
     for ws in workspaces:
         active = " ← active" if _active_workspace == ws["id"] else ""
@@ -80,9 +80,9 @@ async def list_noospheres() -> str:
 async def select_noosphere(name_or_id: str) -> str:
     """Select a noosphere (workspace) by name or ID. All subsequent tool calls will query this noosphere."""
     global _active_workspace
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(f"{ORCHESTRATOR_URL}/workspaces", timeout=30)
-        workspaces = resp.json()
+    workspaces = await call_api("/workspaces")
+    if isinstance(workspaces, dict) and "detail" in workspaces:
+        return f"Error: {workspaces['detail']}"
     match = next(
         (ws for ws in workspaces
          if ws["id"] == name_or_id or ws["name"].lower() == name_or_id.lower()),
@@ -111,6 +111,8 @@ async def search_knowledge_graph(query: str, top_k: int = 15, include_images: bo
     The galaxy visualization will light up showing where the results live in the graph."""
     inc = "true" if include_images else "false"
     result = await call_api(f"/search?q={quote(query)}&top_k={top_k}&expand=true&include_images={inc}")
+    if "detail" in result and "query" not in result:
+        return f"Search error: {result['detail']}"
     lines = [f"Search: \"{result['query']}\" — {result['total_entities']} entities, {result['total_chunks']} chunks"]
     if result.get("sub_queries_used"):
         lines.append(f"Sub-queries: {', '.join(result['sub_queries_used'])}")
@@ -141,6 +143,8 @@ async def search_images(query: str, top_k: int = 10) -> str:
     etc., even when the query text doesn't appear in the image description.
     Falls back to sentence-transformer text similarity on descriptions if SigLIP is unavailable."""
     result = await call_api(f"/search?q={quote(query)}&top_k={top_k}&expand=false&include_images=true")
+    if "detail" in result and "query" not in result:
+        return f"Image search error: {result['detail']}"
     images = result.get("images") or []
     if not images:
         return f"No image documents matched \"{query}\"."
@@ -167,7 +171,7 @@ async def get_entity(name: str) -> str:
     if detail.get("merge_history"):
         lines.append(f"Also known as: {', '.join(detail['merge_history'])}")
     if coocs:
-        lines.append(f"\nOften appears with:")
+        lines.append("\nOften appears with:")
         for c in coocs[:8]:
             lines.append(f"  • {c['canonical_name']} ({c['type']}) — weight {c['weight']}")
     return "\n".join(lines)
@@ -190,7 +194,7 @@ async def get_document(title: str) -> str:
         lines.append(f"Image URL: /images/{doc['id']}")
     lines.append(f"Entities: {len(reader['entities'])} | Mentions: {reader['total_mentions']}")
     lines.append(f"Domains: {', '.join(doc['domains'])}")
-    lines.append(f"\n--- Content ---")
+    lines.append("\n--- Content ---")
     text = "".join(seg["text"] for seg in reader["segments"])
     lines.append(text[:2000])
     if len(text) > 2000:
@@ -314,7 +318,7 @@ async def get_subgraph(entity_names: list[str], max_hops: int = 1) -> str:
     # Show strongest edges
     if result["edges"]:
         top_edges = sorted(result["edges"], key=lambda e: -e["weight"])[:10]
-        lines.append(f"\n  Strongest connections:")
+        lines.append("\n  Strongest connections:")
         # Build name lookup
         name_map = {n["id"]: n["name"] for n in result["nodes"]}
         for e in top_edges:
@@ -338,17 +342,17 @@ async def explore_domain(domain_path: str) -> str:
         lines.append(f"    • {doc['title']} ({doc['content_type']})")
     # Entity type distribution
     if result["entity_type_distribution"]:
-        lines.append(f"\n  Entity types:")
+        lines.append("\n  Entity types:")
         for etype, count in sorted(result["entity_type_distribution"].items(), key=lambda x: -x[1]):
             lines.append(f"    {etype}: {count}")
     # Top entities
     if result["top_entities"]:
-        lines.append(f"\n  Top entities:")
+        lines.append("\n  Top entities:")
         for e in result["top_entities"][:15]:
             lines.append(f"    • {e['name']} ({e['type']}) — in {e['doc_count']} docs")
     # Related domains
     if result["related_domains"]:
-        lines.append(f"\n  Related domains:")
+        lines.append("\n  Related domains:")
         for rd in result["related_domains"]:
             lines.append(f"    • {rd['path']} ({rd['shared_entities']} shared entities)")
     return "\n".join(lines)
