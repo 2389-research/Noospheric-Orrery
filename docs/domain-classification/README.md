@@ -1,6 +1,8 @@
 # Domain Classification
 
-How documents get assigned to semantic topic categories in the adaptive knowledge graph. This is the least formalized piece of the pipeline and the most recent area of active experimentation.
+How documents get assigned to semantic topic categories in the adaptive knowledge graph.
+
+**Current implementation note:** the live pipeline classifies each document/image against the current taxonomy, stores the assigned paths immediately, and creates new domain rows as needed. Domain label normalization is currently conservative: `domain_merge_map` lookup, exact path match, then insert. The embedding/cluster/LLM review process below remains useful design history, but it is not wired into the ingest path today.
 
 ## What Is a Domain?
 
@@ -10,7 +12,7 @@ A domain is an **inferred meta-category** describing what a document is about.
 |----------|-------------|
 | Not explicit | Does not have to appear in the text. Inferred from entity profile + context. |
 | Hierarchical | Tree paths: `techniques/blending/wet-on-wet` |
-| Multi-assigned | Each document gets 1-3 domains with weights |
+| Multi-assigned | Each document gets one primary domain and 0-3 secondary domains with confidence values |
 | Open-ended | New domains can be proposed by the classifier at any time |
 | Emergent | Taxonomy grows from the data, not from a predefined schema |
 
@@ -25,15 +27,16 @@ A domain is an **inferred meta-category** describing what a document is about.
 
 ### Step 1: Generate
 
-For each document, a classifier reads the entity profile (not just the title) and proposes 1-3 hierarchical domain paths.
+For each document, a classifier reads an adaptive excerpt plus the existing taxonomy and proposes one primary and 0-3 secondary hierarchical domain paths. Images are described/classified by the vision-capable classification model and then stored as image documents.
 
-**Input:** Document title + top entities with types
-**Output:** Domain paths with a primary designation
+**Input:** Document title/content excerpt, or an image plus optional caption, and the current taxonomy.
+**Output:** `primary_domain`, `secondary_domains`, and `confidence`.
 
 ```json
 {
-  "domains": ["techniques/blending", "fundamentals/beginner-tips"],
-  "primary": "techniques/blending"
+  "primary_domain": "techniques/blending",
+  "secondary_domains": ["fundamentals/beginner-tips"],
+  "confidence": 0.82
 }
 ```
 
@@ -46,9 +49,16 @@ For each document, a classifier reads the entity profile (not just the title) an
 
 ### Step 2: Normalize
 
-Raw domain labels get clustered and merged because different documents will independently propose "NMM Techniques" vs "Non-Metallic Metal" vs "Advanced Metal Painting."
+Raw domain labels can proliferate because different documents may independently propose labels like "NMM Techniques" vs "Non-Metallic Metal" vs "Advanced Metal Painting."
 
-**Process:**
+**Live implementation:**
+1. Check `domain_merge_map` for a known alias
+2. Reuse an exact existing domain path when present
+3. Otherwise insert a new `domains` row with `parent_path` derived from the slash-separated path
+4. Assign the document in `document_domains` and increment `domains.document_count`
+
+**Experimental/desired clustering process:**
+
 1. Embed all unique domain labels with all-MiniLM-L6-v2
 2. Cluster by cosine similarity
 3. A reviewer (LLM) examines each cluster and picks canonical names
@@ -76,7 +86,7 @@ Raw domain labels get clustered and merged because different documents will inde
 
 ### Step 3: Reclassify After Simmering
 
-When a domain spec is simmered (adaptive extraction), the enriched entity profiles may reveal subdomains. The V3 adaptive spec discovered 9 new subdomains from 20 tutorials:
+When a domain spec is simmered, the enriched entity profiles may reveal subdomains. In the live app this is exposed separately through `POST /discover-subdomains`, which adds subdomain tags to existing documents without removing earlier assignments. The V3 adaptive experiment discovered 9 new subdomains from 20 tutorials:
 
 ```
 techniques/airbrush/equipment-and-setup
@@ -91,7 +101,7 @@ theory/value-and-contrast/monochrome
 styles/grimdark/oil-paint-methods
 ```
 
-Each subdomain is a deeper specialization that the general extraction spec wouldn't have caught. The reclassification adds these as additional domain assignments to the affected documents.
+Each subdomain is a deeper specialization that the general extraction spec would not have caught. Reclassification/subdomain discovery is additive: affected documents gain additional domain assignments.
 
 ## The Taxonomy (Final State)
 
@@ -152,7 +162,7 @@ Domain classification is **Operation A** from the adaptive extraction design:
 
 1. **Cold start:** Classifier proposes domains from scratch for each document. Taxonomy grows organically.
 2. **Steady state:** Classifier sees existing taxonomy. Assigns to known domains or proposes new branches.
-3. **After simmering:** Enriched entity profiles reveal subdomains. Documents get reclassified.
+3. **After simmering:** Enriched entity profiles can reveal subdomains. `POST /discover-subdomains` can add them as extra assignments.
 4. **Validation (optional):** Entity co-occurrence graph confirms domain coherence. Not the driver — just a quality check.
 
 **Leiden/Louvain community detection** was considered for domain discovery but rejected:
@@ -194,7 +204,7 @@ DS-scratch/warhammer_mini_sizes/experiments/domain-classification/
 
 1. **Weighting domains per document.** Currently flat (document is "in" a domain or not). Should be weighted (60% NMM, 30% Character Painting). The entity profile can provide this — ratio of entities matching each domain's signature.
 
-2. **Domain lifecycle.** When does a domain get promoted from "tentative tag" to "real domain with its own spec"? The adaptive spec says threshold=100 documents, but that's arbitrary.
+2. **Domain lifecycle.** The current text auto-trigger is `DOMAIN_SPEC_THRESHOLD` (default 20 documents), while the UI exposes manual refine buttons at smaller counts for testing. The original adaptive spec's 100-document threshold is design history, not the current default.
 
 3. **Domain name quality.** LLM-generated names can be inconsistent. Need a naming convention or a dedicated naming step post-normalization.
 

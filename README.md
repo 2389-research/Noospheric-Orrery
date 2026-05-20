@@ -8,7 +8,7 @@ An adaptive knowledge graph pipeline. Upload documents and images, the system cl
 2. **Classify** — LLM assigns documents to a hierarchical domain taxonomy it builds incrementally
 3. **Extract** — entities extracted immediately using built-in general specs (text + image)
 4. **Simmer** — background worker iteratively refines domain-specific extraction specs
-5. **Normalize** — entities deduplicated via string rules + embedding similarity + LLM review
+5. **Normalize** — entities deduplicated via string rules, embedding similarity, and review queue
 6. **Visualize** — interactive galaxy map with UMAP-based semantic domain layout
 
 The system is queryable from the first upload. Domain-specific richness comes later as simmering completes.
@@ -96,8 +96,9 @@ All LLM calls go through `orrery-relay` (`packages/orrery-relay/`), which handle
 - ImagePane renders actual images with entity tags
 
 ### Simmering (Spec Refinement)
-- **Text**: 2-phase (golden set → extraction spec), board judge with 2 panelists
-- **Image**: Single-phase with vision review, deterministic steps for Ollama
+- **General specs**: Static built-in text/image specs make every upload queryable immediately; `/simmer/general` can still refine the text general spec manually
+- **Text domains**: 2-phase (golden set → extraction spec), board judge with 2 panelists
+- **Image domains**: Single-phase per-domain recognition context layered on the static general image spec
 - **API backends**: Uses simmer-sdk direct API agent loop (2x faster than CLI, no hangs)
 - **Ollama**: Deterministic pipeline — pre-scan → evaluate → review → score → generate
 - Pipeline page shows per-domain text/image breakdown with conditional refine buttons
@@ -152,8 +153,8 @@ docker run --rm \
 | `GET` | `/graph` | Graph data (UMAP positions, entities, trade routes) |
 | `GET` | `/images/{id}` | Serve image file |
 | `POST` | `/simmer/general` | Trigger text spec simmering |
-| `POST` | `/simmer/general/image` | Trigger image spec simmering |
-| `POST` | `/simmer/{domain_path}` | Trigger domain-specific simmering |
+| `POST` | `/simmer/{domain_path}` | Trigger domain-specific text simmering |
+| `POST` | `/simmer/{domain_path}/image` | Trigger domain-specific image simmering |
 | `GET` | `/stats` | Counts (documents, entities, domains, images, active jobs) |
 | `GET` | `/workspaces` | List workspaces |
 | `POST` | `/workspaces` | Create workspace |

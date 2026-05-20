@@ -1,8 +1,10 @@
 # Adaptive Knowledge Graph Extraction System
 
 **Date:** 2026-03-24
-**Status:** Draft
+**Status:** Draft / design history
 **Authors:** Michael Sugimura, Claude
+
+> Current implementation note: this file describes the original adaptive design. The live Noospheric Orrery pipeline has since changed: built-in general text/image specs run immediately on upload, `simmer_general` is manual for text only, domain text specs are auto-queued by `DOMAIN_SPEC_THRESHOLD` or manually from the UI, and domain image specs refine recognition context rather than image entity types. See `docs/ARCHITECTURE.md` and `docs/orchestrator/design.md` for the current operational flow.
 
 ## Problem Statement
 
@@ -36,7 +38,7 @@ Domain Registry
     │
     ├─ Domain count < threshold → document waits with rough entities
     │
-    ├─ Domain count crosses threshold (N=100 default)
+    ├─ Domain count crosses threshold (original design: N=100)
     │   │
     │   ▼
     │   Spec Simmering (iterative refinement loop)
@@ -106,7 +108,7 @@ A lightweight data store tracking:
 | `spec_version` | Current extraction spec version (null if none) |
 | `spec_created_at` | When the current spec was simmered |
 | `spec_doc_count` | How many documents the current spec was built from |
-| `threshold` | Document count that triggers spec creation (default: 100) |
+| `threshold` | Document count that triggers spec creation (the original design used 100) |
 | `status` | `accumulating`, `simmering`, `active`, `re-simmering` |
 
 **Trigger logic:**
