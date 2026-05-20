@@ -174,13 +174,18 @@ async def get_entity(name: str) -> str:
     if isinstance(detail, dict) and "canonical_name" not in detail:
         return f"Error fetching entity detail: {detail.get('detail', detail)}"
     coocs = await call_api(f"/entities/{match['id']}/cooccurrences")
+    cooc_warning: str | None = None
     if isinstance(coocs, dict) and "detail" in coocs:
-        coocs = []  # non-fatal — entity info is still useful without co-occurrences
+        # Distinguish "fetch failed" from "no co-occurrences" so the agent isn't misled.
+        cooc_warning = coocs["detail"]
+        coocs = []
     lines = [f"{detail['canonical_name']} ({detail['type']})"]
     lines.append(f"Sources: {len(detail['sources'])} mentions across {len(set(s['document_id'] for s in detail['sources']))} docs")
     if detail.get("merge_history"):
         lines.append(f"Also known as: {', '.join(detail['merge_history'])}")
-    if coocs:
+    if cooc_warning:
+        lines.append(f"Co-occurrences unavailable: {cooc_warning}")
+    elif coocs:
         lines.append("\nOften appears with:")
         for c in coocs[:8]:
             lines.append(f"  • {c['canonical_name']} ({c['type']}) — weight {c['weight']}")
