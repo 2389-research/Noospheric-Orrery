@@ -32,7 +32,11 @@ ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8100")
 
 mcp = FastMCP("noospheric-orrery")
 
-# Session-level workspace selection
+# Session-level workspace selection.
+# Safe as a module global: FastMCP runs as a per-client subprocess via stdio,
+# so each MCP client launches its own server process and this state is
+# effectively per-client. If we ever expose this server over SSE/HTTP with
+# multiple concurrent clients, move this onto the connection context.
 _active_workspace: str | None = None
 
 
@@ -161,11 +165,17 @@ async def search_images(query: str, top_k: int = 10) -> str:
 async def get_entity(name: str) -> str:
     """Look up a specific entity by name. Returns its type, source documents, merge history, and co-occurring entities."""
     entities = await call_api("/entities?limit=500")
+    if isinstance(entities, dict) and "detail" in entities:
+        return f"Error: {entities['detail']}"
     match = next((e for e in entities if e["canonical_name"].lower() == name.lower()), None)
     if not match:
         return f"Entity '{name}' not found"
     detail = await call_api(f"/entities/{match['id']}")
+    if isinstance(detail, dict) and "canonical_name" not in detail:
+        return f"Error fetching entity detail: {detail.get('detail', detail)}"
     coocs = await call_api(f"/entities/{match['id']}/cooccurrences")
+    if isinstance(coocs, dict) and "detail" in coocs:
+        coocs = []  # non-fatal — entity info is still useful without co-occurrences
     lines = [f"{detail['canonical_name']} ({detail['type']})"]
     lines.append(f"Sources: {len(detail['sources'])} mentions across {len(set(s['document_id'] for s in detail['sources']))} docs")
     if detail.get("merge_history"):
@@ -183,10 +193,14 @@ async def get_document(title: str) -> str:
     For image documents the body is the vision-model description, and the result notes the content_type
     so the agent knows to fetch the raw image via /images/{document_id} if needed."""
     docs = await call_api("/documents")
+    if isinstance(docs, dict) and "detail" in docs:
+        return f"Error: {docs['detail']}"
     match = next((d for d in docs if title.lower() in d["title"].lower()), None)
     if not match:
         return f"Document matching '{title}' not found"
     reader = await call_api(f"/documents/{match['id']}/reader")
+    if isinstance(reader, dict) and "detail" in reader and "document" not in reader:
+        return f"Error reading document: {reader['detail']}"
     doc = reader["document"]
     content_type = doc.get("content_type") or match.get("content_type") or "text"
     lines = [f"Document: {doc['title']} ({content_type})"]
