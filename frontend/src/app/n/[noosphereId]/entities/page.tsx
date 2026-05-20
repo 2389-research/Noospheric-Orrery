@@ -32,7 +32,7 @@ export default function EntitiesPage() {
   const [searchFilter, setSearchFilter] = useState("");
 
   useEffect(() => {
-    api.getEntities({ limit: 2000 }).then((data) => {
+    api.getEntities({ limit: 10000 }).then((data) => {
       setAllEntities(data);
       setEntities(data);
     }).catch(console.error);

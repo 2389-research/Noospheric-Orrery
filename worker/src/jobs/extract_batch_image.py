@@ -26,10 +26,21 @@ async def run_extract_batch_image(job: dict, db_path: str) -> None:
     spec = spec_row[0]
     spec_version = spec_row[1]
 
-    # Get all image docs
-    docs = conn.execute(
-        "SELECT id, title, source_path FROM documents WHERE content_type = 'image' AND status IN ('classified', 'extracted')"
-    ).fetchall()
+    # Get image docs — scope to a domain when requested (mirrors extract_batch.py)
+    scope = config.get("scope", "all_images")
+    if scope == "domain":
+        domain = config.get("domain")
+        docs = conn.execute(
+            """SELECT d.id, d.title, d.source_path FROM documents d
+               JOIN document_domains dd ON d.id = dd.document_id
+               WHERE dd.domain_path = ? AND d.content_type = 'image'
+                 AND d.status IN ('classified', 'extracted', 'enriched')""",
+            (domain,),
+        ).fetchall()
+    else:
+        docs = conn.execute(
+            "SELECT id, title, source_path FROM documents WHERE content_type = 'image' AND status IN ('classified', 'extracted')"
+        ).fetchall()
     conn.close()
 
     schema = {

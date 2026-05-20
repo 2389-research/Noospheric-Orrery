@@ -200,32 +200,39 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
     iterations = config.get("iterations", settings.simmer_iterations)
     conn = get_connection(db_path)
 
-    docs = conn.execute(
-        "SELECT id, title, content FROM documents WHERE status IN ('classified', 'extracted') ORDER BY RANDOM() LIMIT 10"
+    # Sample chunks (stratified across documents) instead of full docs
+    sample_chunks = conn.execute(
+        """SELECT c.id, c.text, d.title FROM chunks c
+           JOIN documents d ON c.document_id = d.id
+           WHERE d.status IN ('classified', 'extracted')
+           ORDER BY RANDOM() LIMIT 20"""
     ).fetchall()
 
-    if not docs:
+    if not sample_chunks:
         conn.close()
-        raise ValueError("No documents available to simmer general spec")
+        raise ValueError("No chunks available to simmer general spec")
 
     specs_dir = Path(settings.specs_dir)
     specs_dir.mkdir(parents=True, exist_ok=True)
     sample_dir = specs_dir / "general_samples"
-    # Clear old samples so only this run's docs are used
+    # Clear old samples so only this run's chunks are used
     if sample_dir.exists():
         for old_file in sample_dir.glob("*.txt"):
             old_file.unlink()
     sample_dir.mkdir(exist_ok=True)
 
-    for doc in docs:
-        (sample_dir / f"{doc[0]}.txt").write_text(doc[2])
+    for chunk in sample_chunks:
+        # chunk row: (id, text, title)
+        content = f"[Source: {chunk[2]}]\n\n{chunk[1]}"
+        (sample_dir / f"{chunk[0]}.txt").write_text(content)
 
     seed_path = specs_dir / "general_seed.md"
     seed_path.write_text(SEED_GOLDEN_SET)
     conn.close()
 
     backend = settings.anthropic_backend
-    provider_kwargs = {"api_provider": backend}
+    api_provider = "anthropic" if backend == "gateway" else backend
+    provider_kwargs = {"api_provider": api_provider}
     if backend == "bedrock":
         provider_kwargs.update({
             "aws_access_key": settings.aws_access_key,
@@ -236,61 +243,69 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         provider_kwargs["ollama_url"] = settings.ollama_url
 
     job_id = job["id"]
-    print(f"Simmering general spec (job {job_id})", flush=True)
+    resume = config.get("resume", False)
+    golden_set_path = specs_dir / "general_golden_set.md"
 
     # Phase 1: Golden set simmering — produces type taxonomy + reference entity list
-    golden_result = await refine(
-        artifact=str(seed_path),
-        criteria={
-            "coverage": "The reference entity list contains every named entity found in the sample documents — no entity left behind",
-            "precision": "Every entity in the reference list actually appears in at least one sample document — no hallucinated entities",
-            "taxonomy_quality": "Entity types are meaningful, consistent, and correctly assigned — each entity has the right type",
-        },
-        primary="coverage",
-        iterations=iterations,
-        judge_mode="board",
-        judge_panel=[
-            {
-                "name": "Coverage & Depth",
-                "lens": (
-                    "Read every sample document carefully. Cross-reference the reference entity JSON list against the documents. "
-                    "Are there people, organizations, products, places, or events mentioned in the docs that are missing from the list? "
-                    "The list must be exhaustive — every named entity in the corpus should appear."
-                ),
+    # Skip if resuming and a golden set already exists from a previous run
+    if resume and golden_set_path.exists():
+        golden_best = golden_set_path.read_text()
+        print(f"Resuming general spec — reusing existing golden set ({len(golden_best)} chars, job {job_id})", flush=True)
+    else:
+        print(f"Simmering general spec ({len(sample_chunks)} chunks, job {job_id})", flush=True)
+        golden_result = await refine(
+            artifact=str(seed_path),
+            criteria={
+                "coverage": "The reference entity list contains every named entity found in the sample documents — no entity left behind",
+                "precision": "Every entity in the reference list actually appears in at least one sample document — no hallucinated entities",
+                "taxonomy_quality": "Entity types are meaningful, consistent, and correctly assigned — each entity has the right type",
             },
-            {
-                "name": "Precision & Quality",
-                "lens": (
-                    "For each entity in the reference JSON list, verify it actually appears in at least one sample document. "
-                    "Check that entity types are correct — is a product labeled as an organization? Is a technology labeled as a thing? "
-                    "Flag any hallucinated entities not grounded in the source text."
-                ),
-            },
-        ],
-        output_dir=specs_dir / "general_golden",
-        generator_model=settings.classification_model,
-        judge_model=settings.classification_model,
-        clerk_model=settings.classification_model,
-        background=(
-            f"Sample documents are in {sample_dir}. Read ALL of them.\n\n"
-            f"The golden set must contain TWO things:\n"
-            f"1. An entity type taxonomy (the categories)\n"
-            f"2. A JSON array of EVERY entity found in the sample documents\n\n"
-            f"The reference entity list is the ground truth — extraction specs will be empirically "
-            f"tested against it. If an entity is missing from this list, we can't measure whether "
-            f"the extraction spec finds it. Be thorough."
-        ),
-        on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(specs_dir / "general_golden")),
-        **provider_kwargs,
-    )
+            primary="coverage",
+            iterations=iterations,
+            judge_mode="board",
+            judge_panel=[
+                {
+                    "name": "Coverage & Depth",
+                    "lens": (
+                        "Read every sample document carefully. Cross-reference the reference entity JSON list against the documents. "
+                        "Are there people, organizations, products, places, or events mentioned in the docs that are missing from the list? "
+                        "The list must be exhaustive — every named entity in the corpus should appear."
+                    ),
+                },
+                {
+                    "name": "Precision & Quality",
+                    "lens": (
+                        "For each entity in the reference JSON list, verify it actually appears in at least one sample document. "
+                        "Check that entity types are correct — is a product labeled as an organization? Is a technology labeled as a thing? "
+                        "Flag any hallucinated entities not grounded in the source text."
+                    ),
+                },
+            ],
+            output_dir=specs_dir / "general_golden",
+            generator_model=settings.classification_model,
+            judge_model=settings.classification_model,
+            clerk_model=settings.classification_model,
+            background=(
+                f"Sample chunks are in {sample_dir}. Read ALL of them.\n"
+                f"Each file is a chunk from a larger document (source title in the header).\n\n"
+                f"The golden set must contain TWO things:\n"
+                f"1. An entity type taxonomy (the categories)\n"
+                f"2. A JSON array of EVERY entity found in the sample chunks\n\n"
+                f"The reference entity list is the ground truth — extraction specs will be empirically "
+                f"tested against it. If an entity is missing from this list, we can't measure whether "
+                f"the extraction spec finds it. Be thorough."
+            ),
+            on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(specs_dir / "general_golden")),
+            **provider_kwargs,
+        )
+        golden_best = golden_result.best_candidate
+        golden_set_path.write_text(golden_best)
 
     # Phase 2: Extraction spec simmering (with empirical evaluator)
-    golden_set_path = specs_dir / "general_golden_set.md"
-    golden_set_path.write_text(golden_result.best_candidate)
     evaluator_script = Path(__file__).resolve().parent / "evaluate_spec.py"
 
     spec_result = await refine(
-        artifact=golden_result.best_candidate,
+        artifact=golden_best,
         criteria={
             "coverage": "When run on sample docs, the spec finds all entities from the golden set",
             "precision": "Zero false positives",
@@ -338,7 +353,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         ),
         background=(
             f"This spec will be executed by Haiku to extract entities from documents.\n"
-            f"Golden set: {golden_result.best_candidate[:2000]}\n\n"
+            f"Golden set: {golden_best[:2000]}\n\n"
             f"IMPORTANT: Each iteration, the evaluator runs the candidate spec against sample docs using Haiku.\n"
             f"Raw extraction results are written to eval-N/ directories in the output directory.\n"
             f"READ the raw extraction JSON files — don't just trust the quantitative summary.\n"
@@ -353,7 +368,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
     spec_id = str(uuid.uuid4())
     conn.execute(
         "INSERT INTO specs (id, domain_path, version, spec_content, golden_set, score) VALUES (?, NULL, 1, ?, ?, ?)",
-        (spec_id, spec_result.best_candidate, golden_result.best_candidate, spec_result.composite),
+        (spec_id, spec_result.best_candidate, golden_best, spec_result.composite),
     )
 
     # Queue batch extraction
@@ -365,232 +380,3 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
     conn.commit()
     conn.close()
 
-
-async def run_simmer_general_image(job: dict, db_path: str) -> None:
-    """Simmer an image extraction spec — single-stage domain context approach.
-
-    Unlike text (2-stage: golden set → extraction spec), images use one loop:
-    - Seed = general image spec (entity types, format, rules)
-    - Simmering adds domain-specific recognition context
-    - Evaluator runs Haiku on sample images each iteration
-    - Judges propose domain context additions via ASI
-
-    The general spec handles structure. Domain context adds recognition
-    (type vocabulary, naming conventions, domain knowledge).
-    """
-    settings = get_settings()
-    config = json.loads(job["config"]) if job.get("config") else {}
-    iterations = config.get("iterations", settings.simmer_iterations)
-    conn = get_connection(db_path)
-
-    # Get sample images
-    docs = conn.execute(
-        "SELECT id, title, source_path FROM documents WHERE content_type = 'image' AND status IN ('classified', 'extracted', 'enriched') ORDER BY RANDOM() LIMIT 5"
-    ).fetchall()
-
-    if not docs:
-        conn.close()
-        raise ValueError("No image documents available to simmer image spec")
-
-    specs_dir = Path(settings.specs_dir)
-    specs_dir.mkdir(parents=True, exist_ok=True)
-    sample_dir = specs_dir / "image_samples"
-    if sample_dir.exists():
-        for old_file in sample_dir.glob("*"):
-            old_file.unlink()
-    sample_dir.mkdir(exist_ok=True)
-
-    import shutil
-    for doc in docs:
-        src = Path(doc["source_path"])
-        if src.exists():
-            shutil.copy2(src, sample_dir / f"{doc['id']}{src.suffix}")
-
-    conn.close()
-
-    # Pre-scan with Haiku
-    prescan_dir = specs_dir / "image_prescans"
-    if prescan_dir.exists():
-        for old_file in prescan_dir.glob("*"):
-            old_file.unlink()
-    prescan_dir.mkdir(exist_ok=True)
-
-    relay = Relay.from_settings(settings)
-    import base64
-    print(f"  Pre-scanning {len(docs)} images with Haiku...", flush=True)
-    for img_file in sorted(sample_dir.glob("*.jpg")) + sorted(sample_dir.glob("*.png")):
-        try:
-            b64 = base64.b64encode(img_file.read_bytes()).decode()
-            media_type = "image/jpeg" if img_file.suffix.lower() in (".jpg", ".jpeg") else "image/png"
-            prescan = await relay.complete_structured(
-                model=settings.extraction_model, max_tokens=2048,
-                messages=[{"role": "user", "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
-                    {"type": "text", "text": "Describe everything visible. List entities, materials, colors, techniques, setting. Be exhaustive."},
-                ]}],
-                schema={"type": "object", "properties": {
-                    "entities": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "type": {"type": "string"}}, "required": ["name", "type"]}},
-                    "description": {"type": "string"},
-                    "details": {"type": "string"},
-                }, "required": ["entities", "description", "details"]},
-                tool_name="prescan", tool_description="Pre-scan image",
-            )
-            lines = [f"IMAGE: {img_file.name}", f"DESCRIPTION: {prescan.get('description', '')}", "", "ENTITIES:"]
-            for e in prescan.get("entities", []):
-                if isinstance(e, dict) and "name" in e:
-                    lines.append(f"  - {e['name']} ({e.get('type', 'Unknown')})")
-            lines.extend(["", "DETAILS:", prescan.get("details", "")])
-            (prescan_dir / f"{img_file.stem}.txt").write_text("\n".join(lines))
-        except Exception as exc:
-            print(f"  Warning: pre-scan failed for {img_file.name}: {exc}", flush=True)
-    print(f"  Pre-scans written to {prescan_dir}", flush=True)
-
-    # Build golden set from pre-scans for evaluator
-    golden_entries = []
-    for txt_file in sorted(prescan_dir.glob("*.txt")):
-        content = txt_file.read_text()
-        entities = []
-        for line in content.split("\n"):
-            line = line.strip()
-            if line.startswith("- ") and "(" in line:
-                name = line[2:line.rfind("(")].strip()
-                etype = line[line.rfind("(")+1:line.rfind(")")].strip()
-                entities.append({"name": name.lower(), "type": etype.lower()})
-        desc_match = content.split("DESCRIPTION: ", 1)
-        desc = desc_match[1].split("\n")[0] if len(desc_match) > 1 else ""
-        golden_entries.append({"image": txt_file.stem, "entities": entities, "description": desc, "tags": []})
-
-    golden_path = specs_dir / "image_golden_from_prescans.md"
-    golden_path.write_text("# Golden Set\n\n```json\n" + json.dumps(golden_entries, indent=2) + "\n```\n")
-
-    # Provider config
-    backend = settings.anthropic_backend
-    provider_kwargs = {"api_provider": backend}
-    if backend == "bedrock":
-        provider_kwargs.update({
-            "aws_access_key": settings.aws_access_key,
-            "aws_secret_key": settings.aws_secret_key,
-            "aws_region": settings.aws_region,
-        })
-    elif backend == "ollama":
-        provider_kwargs["ollama_url"] = settings.ollama_url
-
-    job_id = job["id"]
-    print(f"Simmering general IMAGE spec (job {job_id})", flush=True)
-
-    # query_image tool
-    async def query_image(image_path: str, question: str) -> str:
-        img_path = Path(image_path)
-        if not img_path.exists():
-            img_path = sample_dir / image_path
-        if not img_path.exists():
-            return f"Image not found: {image_path}"
-        try:
-            b64 = base64.b64encode(img_path.read_bytes()).decode()
-            media_type = "image/jpeg" if img_path.suffix.lower() in (".jpg", ".jpeg") else "image/png"
-            result = await relay.complete(
-                model=settings.extraction_model, max_tokens=1024,
-                messages=[{"role": "user", "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
-                    {"type": "text", "text": question},
-                ]}],
-            )
-            return result.text
-        except Exception as e:
-            return f"Error: {e}"
-
-    image_tools = {
-        "query_image": {
-            "function": query_image,
-            "schema": {
-                "type": "function",
-                "function": {
-                    "name": "query_image",
-                    "description": "Ask Haiku to look at an image and answer a question.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "image_path": {"type": "string"},
-                            "question": {"type": "string"},
-                        },
-                        "required": ["image_path", "question"],
-                    },
-                },
-            },
-        },
-    }
-
-    # Write seed — general image spec with empty domain context
-    seed_path = specs_dir / "image_seed.md"
-    seed_path.write_text(SEED_IMAGE_GOLDEN_SET)
-
-    evaluator_script = Path(__file__).resolve().parent / "evaluate_image_spec.py"
-
-    # Single-stage simmer: general spec seed → add domain context
-    spec_result = await refine(
-        artifact=str(seed_path),
-        criteria={
-            "extraction_quality": "When run on sample images, the spec + domain context produces accurate, specific entities",
-            "description_quality": "Descriptions are accurate, specific, and searchable — improved by domain knowledge",
-            "domain_specificity": "The domain context helps Haiku recognize domain-specific things it would miss with the general spec alone",
-        },
-        primary="extraction_quality",
-        iterations=iterations,
-        judge_mode="board",
-        judge_panel=[
-            {
-                "name": "Extraction & Description",
-                "lens": (
-                    "Read eval-*/*.json for extractions. Compare to pre-scans in image_prescans/*.txt. "
-                    "Does the domain context help the model be more specific?"
-                ),
-            },
-            {
-                "name": "Generalizability & Domain Fit",
-                "lens": (
-                    "Read the spec itself. Is the domain context accurate and helpful? "
-                    "Does it add real recognition value or just repeat the general spec? "
-                    "Would it cause hallucinations on images outside this domain?"
-                ),
-            },
-        ],
-        output_dir=specs_dir / "image_spec",
-        generator_model=settings.classification_model,
-        judge_model=settings.classification_model,
-        clerk_model=settings.classification_model,
-        evaluator=(
-            f"uv run python {shlex.quote(str(evaluator_script))}"
-            f" --candidate {{candidate_path}}"
-            f" --samples-dir {shlex.quote(str(sample_dir))}"
-            f" --golden-set {shlex.quote(str(golden_path))}"
-            f" --output-dir {{output_dir}}"
-            f" --iteration {{iteration}}"
-        ),
-        background=(
-            f"This is an image spec simmer. The seed is the general image extraction spec.\n"
-            f"Your job: add domain-specific recognition context to help Haiku extract better.\n\n"
-            f"Pre-scans (raw observations) are in {prescan_dir}/*.txt\n"
-            f"Evaluator runs the spec on each image each iteration — results in eval-N/*.json\n\n"
-            f"The general spec structure (entity types, rules, output format) should stay intact.\n"
-            f"Add domain knowledge that helps Haiku recognize what it's looking at."
-        ),
-        on_iteration=_make_iteration_recorder(job_id, "domain_spec", db_path, str(specs_dir / "image_spec")),
-        **provider_kwargs,
-    )
-
-    # Store spec
-    conn = get_connection(db_path)
-    spec_id = str(uuid.uuid4())
-    conn.execute(
-        "INSERT INTO specs (id, domain_path, version, spec_content, golden_set, score, media_type) VALUES (?, NULL, 1, ?, ?, ?, 'image')",
-        (spec_id, spec_result.best_candidate, "", spec_result.composite),
-    )
-
-    # Queue batch extraction for images
-    batch_job_id = str(uuid.uuid4())
-    conn.execute(
-        "INSERT INTO jobs (id, type, target, status, config) VALUES (?, 'extract_batch_image', 'general', 'queued', ?)",
-        (batch_job_id, json.dumps({"spec_id": spec_id, "scope": "all_images"})),
-    )
-    conn.commit()
-    conn.close()

@@ -23,6 +23,11 @@ services:
       - DOCUMENTS_DIR=/data/documents
       - SPECS_DIR=/data/specs
       - AUTH_REQUIRED=false
+      # Threadsafe Numba — sentence-transformers/UMAP can be hit concurrently
+      # (workspace switch fires multiple parallel queries) and the default
+      # workqueue layer crashes the process. OpenMP is threadsafe and works
+      # on both arm64 and x86_64 (Intel TBB has no arm64 wheel).
+      - NUMBA_THREADING_LAYER=omp
       # No torch in Docker — circular layout. For UMAP, run natively.
 
   worker:

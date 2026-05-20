@@ -217,7 +217,8 @@ def full_fit(store_or_conn):
             random_state=42, init=init_method,
         )
         coords = reducer.fit_transform(embeddings)
-    except Exception:
+    except Exception as e:
+        print(f"[domain_layout] UMAP fit_transform failed, falling back to circular layout: {type(e).__name__}: {e}", flush=True)
         positions = _circular_layout(user_paths)
         for path, pos in positions.items():
             _store_position(store_or_conn, path, pos["x"], pos["y"])

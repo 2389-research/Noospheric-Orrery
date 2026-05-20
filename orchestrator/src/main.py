@@ -40,6 +40,7 @@ from .routes.reclassify import router as reclassify_router
 from .routes.auth_routes import router as auth_router
 from .routes.workspace_routes import router as workspace_router
 from .routes.image_files import router as image_files_router
+from .routes.graph_ops import router as graph_ops_router
 
 app.include_router(ingest_router)
 app.include_router(documents_router)
@@ -57,6 +58,7 @@ app.include_router(reclassify_router)
 app.include_router(image_files_router)
 app.include_router(auth_router)
 app.include_router(workspace_router)
+app.include_router(graph_ops_router)
 
 from fastapi import WebSocket as WS
 from .broadcast import ws_endpoint

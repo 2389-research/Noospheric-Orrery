@@ -1,0 +1,451 @@
+# ABOUTME: Graph exploration endpoints for agent-driven knowledge graph traversal.
+# ABOUTME: Neighborhood, shared context, path finding, subgraph, and domain overview.
+# ABOUTME: All endpoints broadcast entity names to the viz via WebSocket.
+
+from collections import defaultdict, deque
+from fastapi import APIRouter, HTTPException, Depends, Query
+from ..dependencies import get_auth_store, AuthStore
+from ..broadcast import broadcast_search
+
+router = APIRouter(prefix="/graph")
+
+
+def _resolve_entity(store, name_or_id: str):
+    """Look up an entity by ID or case-insensitive name."""
+    entity = store.entities.get(name_or_id)
+    if entity:
+        return entity
+    # Fall back to name lookup
+    entities = store.entities.list(limit=500)
+    match = next((e for e in entities if e.canonical_name.lower() == name_or_id.lower()), None)
+    if not match:
+        raise HTTPException(status_code=404, detail=f"Entity not found: {name_or_id}")
+    return match
+
+
+def _get_adjacency(conn, entity_ids: list[str]) -> dict[str, list[dict]]:
+    """Get co-occurrence neighbors for a set of entity IDs. Returns {entity_id: [{id, name, type, weight}]}."""
+    if not entity_ids:
+        return {}
+    ph = ",".join("?" * len(entity_ids))
+    rows = conn.execute(f"""
+        SELECT r.from_entity, r.to_entity, e1.canonical_name as from_name, e1.type as from_type,
+               e2.canonical_name as to_name, e2.type as to_type, r.weight
+        FROM relationships r
+        JOIN entities e1 ON r.from_entity = e1.id
+        JOIN entities e2 ON r.to_entity = e2.id
+        WHERE r.type = 'co_occurs' AND (r.from_entity IN ({ph}) OR r.to_entity IN ({ph}))
+    """, entity_ids + entity_ids).fetchall()
+
+    adj: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        if r["from_entity"] in entity_ids:
+            adj[r["from_entity"]].append({
+                "id": r["to_entity"], "name": r["to_name"],
+                "type": r["to_type"], "weight": r["weight"],
+            })
+        if r["to_entity"] in entity_ids:
+            adj[r["to_entity"]].append({
+                "id": r["from_entity"], "name": r["from_name"],
+                "type": r["from_type"], "weight": r["weight"],
+            })
+    return adj
+
+
+@router.get("/neighborhood/{entity_id_or_name}")
+async def get_neighborhood(
+    entity_id_or_name: str,
+    depth: int = Query(1, ge=1, le=3),
+    max_nodes: int = Query(30, ge=1, le=100),
+    auth: AuthStore = Depends(get_auth_store),
+):
+    """Multi-hop neighborhood around an entity. Returns nodes and edges within `depth` hops."""
+    store = auth.store
+    conn = store._conn if hasattr(store, '_conn') else store.entities._conn
+    entity = _resolve_entity(store, entity_id_or_name)
+    seed_id = entity.id
+
+    # BFS expansion
+    visited: dict[str, dict] = {}  # id -> {name, type, depth, source_count}
+    edges: list[dict] = []
+    edge_set: set[tuple] = set()
+    frontier = [seed_id]
+
+    # Add seed
+    visited[seed_id] = {
+        "id": seed_id, "name": entity.canonical_name,
+        "type": entity.type, "depth": 0, "source_count": entity.source_count,
+    }
+
+    for current_depth in range(1, depth + 1):
+        if len(visited) >= max_nodes or not frontier:
+            break
+        adj = _get_adjacency(conn, frontier)
+        next_frontier = []
+        for src_id in frontier:
+            for neighbor in sorted(adj.get(src_id, []), key=lambda x: -x["weight"]):
+                nid = neighbor["id"]
+                # Add edge
+                edge_key = tuple(sorted([src_id, nid]))
+                if edge_key not in edge_set:
+                    edge_set.add(edge_key)
+                    edges.append({
+                        "source": src_id, "target": nid,
+                        "weight": neighbor["weight"],
+                    })
+                # Add node if new
+                if nid not in visited and len(visited) < max_nodes:
+                    visited[nid] = {
+                        "id": nid, "name": neighbor["name"],
+                        "type": neighbor["type"], "depth": current_depth,
+                        "source_count": 0,
+                    }
+                    next_frontier.append(nid)
+        frontier = next_frontier
+
+    # Backfill source counts for discovered nodes
+    if visited:
+        ph = ",".join("?" * len(visited))
+        counts = conn.execute(f"""
+            SELECT entity_id, COUNT(DISTINCT document_id) as cnt
+            FROM entity_sources WHERE entity_id IN ({ph}) GROUP BY entity_id
+        """, list(visited.keys())).fetchall()
+        for r in counts:
+            if r["entity_id"] in visited:
+                visited[r["entity_id"]]["source_count"] = r["cnt"]
+
+    store.close()
+
+    result = {
+        "seed": {"id": seed_id, "name": entity.canonical_name, "type": entity.type},
+        "depth": depth,
+        "nodes": list(visited.values()),
+        "edges": edges,
+        "node_count": len(visited),
+        "edge_count": len(edges),
+    }
+
+    # Broadcast to viz — light up the neighborhood
+    entity_names = [n["name"] for n in result["nodes"]]
+    await broadcast_search(f"neighborhood:{entity.canonical_name}", entity_names)
+
+    return result
+
+
+@router.get("/shared-context/{entity_a}/{entity_b}")
+async def get_shared_context(
+    entity_a: str,
+    entity_b: str,
+    auth: AuthStore = Depends(get_auth_store),
+):
+    """Find shared context between two entities: shared documents, shared neighbors, shared domains."""
+    store = auth.store
+    conn = store._conn if hasattr(store, '_conn') else store.entities._conn
+    ea = _resolve_entity(store, entity_a)
+    eb = _resolve_entity(store, entity_b)
+
+    # Shared documents
+    docs_a = set()
+    docs_b = set()
+    doc_titles = {}
+    rows_a = conn.execute(
+        "SELECT DISTINCT d.id, d.title FROM entity_sources es JOIN documents d ON es.document_id = d.id WHERE es.entity_id = ?",
+        (ea.id,),
+    ).fetchall()
+    for r in rows_a:
+        docs_a.add(r["id"])
+        doc_titles[r["id"]] = r["title"]
+    rows_b = conn.execute(
+        "SELECT DISTINCT d.id, d.title FROM entity_sources es JOIN documents d ON es.document_id = d.id WHERE es.entity_id = ?",
+        (eb.id,),
+    ).fetchall()
+    for r in rows_b:
+        docs_b.add(r["id"])
+        doc_titles[r["id"]] = r["title"]
+
+    shared_doc_ids = docs_a & docs_b
+    shared_documents = [{"id": did, "title": doc_titles[did]} for did in shared_doc_ids]
+
+    # Shared neighbors (entities that co-occur with BOTH)
+    neighbors_a = {n.id: n for n in store.relationships.get_cooccurrences(ea.id, limit=50)}
+    neighbors_b = {n.id: n for n in store.relationships.get_cooccurrences(eb.id, limit=50)}
+    shared_neighbor_ids = set(neighbors_a.keys()) & set(neighbors_b.keys())
+    shared_neighbors = []
+    for nid in shared_neighbor_ids:
+        n = neighbors_a[nid]
+        shared_neighbors.append({
+            "id": n.id, "name": n.canonical_name, "type": n.type,
+            "weight_to_a": n.weight, "weight_to_b": neighbors_b[nid].weight,
+        })
+    shared_neighbors.sort(key=lambda x: -(x["weight_to_a"] + x["weight_to_b"]))
+
+    # Shared domains
+    domains_a = set()
+    for did in docs_a:
+        for dd in store.domains.get_domains_for_document(did):
+            domains_a.add(dd.domain_path)
+    domains_b = set()
+    for did in docs_b:
+        for dd in store.domains.get_domains_for_document(did):
+            domains_b.add(dd.domain_path)
+    shared_domains = sorted(domains_a & domains_b)
+
+    # Direct relationship weight
+    direct_weight = 0
+    if ea.id in neighbors_b:
+        direct_weight = neighbors_b[ea.id].weight
+    elif eb.id in neighbors_a:
+        direct_weight = neighbors_a[eb.id].weight
+
+    store.close()
+
+    result = {
+        "entity_a": {"id": ea.id, "name": ea.canonical_name, "type": ea.type},
+        "entity_b": {"id": eb.id, "name": eb.canonical_name, "type": eb.type},
+        "direct_weight": direct_weight,
+        "shared_documents": shared_documents,
+        "shared_neighbors": shared_neighbors[:15],
+        "shared_domains": shared_domains,
+        "summary": {
+            "docs_in_common": len(shared_doc_ids),
+            "neighbors_in_common": len(shared_neighbor_ids),
+            "domains_in_common": len(shared_domains),
+        },
+    }
+
+    # Broadcast to viz — light up both entities + their shared neighbors
+    entity_names = [ea.canonical_name, eb.canonical_name] + [n["name"] for n in shared_neighbors[:10]]
+    await broadcast_search(f"shared:{ea.canonical_name}↔{eb.canonical_name}", entity_names)
+
+    return result
+
+
+@router.get("/paths/{entity_a}/{entity_b}")
+async def find_paths(
+    entity_a: str,
+    entity_b: str,
+    max_depth: int = Query(4, ge=1, le=6),
+    auth: AuthStore = Depends(get_auth_store),
+):
+    """Find shortest path(s) between two entities through co-occurrence edges."""
+    store = auth.store
+    conn = store._conn if hasattr(store, '_conn') else store.entities._conn
+    ea = _resolve_entity(store, entity_a)
+    eb = _resolve_entity(store, entity_b)
+
+    if ea.id == eb.id:
+        store.close()
+        return {"paths": [], "message": "Same entity"}
+
+    # BFS for shortest path(s)
+    queue = deque([(ea.id, [ea.id])])
+    visited = {ea.id}
+    found_paths = []
+    found_depth = None
+
+    while queue:
+        current, path = queue.popleft()
+        if found_depth is not None and len(path) > found_depth:
+            break
+        if len(path) > max_depth + 1:
+            break
+
+        neighbors = conn.execute("""
+            SELECT CASE WHEN r.from_entity = ? THEN r.to_entity ELSE r.from_entity END as neighbor_id,
+                   r.weight
+            FROM relationships r
+            WHERE (r.from_entity = ? OR r.to_entity = ?) AND r.type = 'co_occurs'
+        """, (current, current, current)).fetchall()
+
+        for row in neighbors:
+            nid = row["neighbor_id"]
+            if nid == eb.id:
+                full_path = path + [nid]
+                found_paths.append(full_path)
+                found_depth = len(full_path)
+                continue
+            if nid not in visited and len(path) < max_depth:
+                visited.add(nid)
+                queue.append((nid, path + [nid]))
+
+    # Resolve entity names for paths
+    all_ids = set()
+    for p in found_paths:
+        all_ids.update(p)
+    entity_map = {}
+    if all_ids:
+        ph = ",".join("?" * len(all_ids))
+        rows = conn.execute(f"SELECT id, canonical_name, type FROM entities WHERE id IN ({ph})", list(all_ids)).fetchall()
+        entity_map = {r["id"]: {"id": r["id"], "name": r["canonical_name"], "type": r["type"]} for r in rows}
+
+    resolved_paths = []
+    for p in found_paths[:5]:  # Return at most 5 paths
+        resolved_paths.append({
+            "length": len(p) - 1,
+            "nodes": [entity_map.get(eid, {"id": eid, "name": "?", "type": "?"}) for eid in p],
+        })
+
+    store.close()
+
+    result = {
+        "entity_a": {"id": ea.id, "name": ea.canonical_name, "type": ea.type},
+        "entity_b": {"id": eb.id, "name": eb.canonical_name, "type": eb.type},
+        "paths": resolved_paths,
+        "path_count": len(resolved_paths),
+        "searched_depth": max_depth,
+    }
+
+    # Broadcast to viz — light up all entities along the paths
+    path_entities = set()
+    for p in resolved_paths:
+        for node in p["nodes"]:
+            path_entities.add(node["name"])
+    if path_entities:
+        await broadcast_search(f"path:{ea.canonical_name}→{eb.canonical_name}", list(path_entities))
+
+    return result
+
+
+@router.post("/subgraph")
+async def get_subgraph(
+    body: dict,
+    auth: AuthStore = Depends(get_auth_store),
+):
+    """Get the subgraph connecting a set of entities. Pass {"entity_names": [...], "max_hops": 1}."""
+    store = auth.store
+    conn = store._conn if hasattr(store, '_conn') else store.entities._conn
+    entity_names = body.get("entity_names", [])
+    max_hops = min(body.get("max_hops", 1), 2)
+
+    if not entity_names:
+        store.close()
+        raise HTTPException(status_code=400, detail="entity_names required")
+
+    # Resolve all seed entities
+    seeds = {}
+    for name in entity_names:
+        try:
+            e = _resolve_entity(store, name)
+            seeds[e.id] = {"id": e.id, "name": e.canonical_name, "type": e.type, "is_seed": True}
+        except HTTPException:
+            continue
+
+    if not seeds:
+        store.close()
+        raise HTTPException(status_code=404, detail="No matching entities found")
+
+    # Expand neighborhood
+    all_nodes = dict(seeds)
+    frontier = list(seeds.keys())
+    edge_set: set[tuple] = set()
+    edges = []
+
+    for _ in range(max_hops):
+        adj = _get_adjacency(conn, frontier)
+        next_frontier = []
+        for src_id in frontier:
+            for neighbor in adj.get(src_id, []):
+                nid = neighbor["id"]
+                edge_key = tuple(sorted([src_id, nid]))
+                if edge_key not in edge_set:
+                    edge_set.add(edge_key)
+                    edges.append({"source": src_id, "target": nid, "weight": neighbor["weight"]})
+                if nid not in all_nodes:
+                    all_nodes[nid] = {
+                        "id": nid, "name": neighbor["name"],
+                        "type": neighbor["type"], "is_seed": False,
+                    }
+                    next_frontier.append(nid)
+        frontier = next_frontier
+
+    # Filter edges to only those between nodes in our set
+    final_edges = [e for e in edges if e["source"] in all_nodes and e["target"] in all_nodes]
+
+    store.close()
+
+    result = {
+        "seeds": list(seeds.values()),
+        "nodes": list(all_nodes.values()),
+        "edges": final_edges,
+        "node_count": len(all_nodes),
+        "edge_count": len(final_edges),
+    }
+
+    # Broadcast to viz — light up all nodes in the subgraph
+    entity_names_out = [n["name"] for n in result["nodes"][:30]]
+    seed_names = [s["name"] for s in result["seeds"]]
+    await broadcast_search(f"subgraph:{','.join(seed_names)}", entity_names_out)
+
+    return result
+
+
+@router.get("/domain-overview/{domain_path:path}")
+async def explore_domain(
+    domain_path: str,
+    auth: AuthStore = Depends(get_auth_store),
+):
+    """Overview of a domain: top entities, entity type distribution, document list, related domains."""
+    store = auth.store
+    conn = store._conn if hasattr(store, '_conn') else store.entities._conn
+
+    domain = store.domains.get(domain_path)
+    if not domain:
+        store.close()
+        raise HTTPException(status_code=404, detail=f"Domain not found: {domain_path}")
+
+    # Documents in this domain
+    doc_rows = conn.execute("""
+        SELECT d.id, d.title, d.content_type FROM documents d
+        JOIN document_domains dd ON d.id = dd.document_id
+        WHERE dd.domain_path = ? ORDER BY d.created_at DESC
+    """, (domain_path,)).fetchall()
+    documents = [{"id": r["id"], "title": r["title"], "content_type": r["content_type"] or "text"} for r in doc_rows]
+
+    # Top entities in this domain (by source count within domain docs)
+    doc_ids = [d["id"] for d in documents]
+    top_entities = []
+    type_counts: dict[str, int] = defaultdict(int)
+    if doc_ids:
+        ph = ",".join("?" * len(doc_ids))
+        entity_rows = conn.execute(f"""
+            SELECT e.id, e.canonical_name, e.type, COUNT(DISTINCT es.document_id) as doc_count
+            FROM entity_sources es
+            JOIN entities e ON es.entity_id = e.id
+            WHERE es.document_id IN ({ph})
+            GROUP BY e.id ORDER BY doc_count DESC LIMIT 30
+        """, doc_ids).fetchall()
+        for r in entity_rows:
+            top_entities.append({
+                "id": r["id"], "name": r["canonical_name"],
+                "type": r["type"], "doc_count": r["doc_count"],
+            })
+            type_counts[r["type"]] += 1
+
+    # Related domains (share entities via trade routes)
+    related_rows = conn.execute("""
+        SELECT dd2.domain_path, COUNT(DISTINCT es1.entity_id) as shared_entities
+        FROM document_domains dd1
+        JOIN entity_sources es1 ON dd1.document_id = es1.document_id
+        JOIN entity_sources es2 ON es1.entity_id = es2.entity_id AND es1.document_id != es2.document_id
+        JOIN document_domains dd2 ON es2.document_id = dd2.document_id
+        WHERE dd1.domain_path = ? AND dd2.domain_path != ?
+        GROUP BY dd2.domain_path ORDER BY shared_entities DESC LIMIT 10
+    """, (domain_path, domain_path)).fetchall()
+    related_domains = [{"path": r["domain_path"], "shared_entities": r["shared_entities"]} for r in related_rows]
+
+    store.close()
+
+    result = {
+        "domain": {"path": domain_path, "document_count": len(documents), "spec_version": domain.spec_version},
+        "documents": documents,
+        "top_entities": top_entities,
+        "entity_type_distribution": dict(type_counts),
+        "related_domains": related_domains,
+    }
+
+    # Broadcast to viz — light up top entities in this domain
+    entity_names = [e["name"] for e in top_entities[:15]]
+    if entity_names:
+        await broadcast_search(f"domain:{domain_path}", entity_names)
+
+    return result

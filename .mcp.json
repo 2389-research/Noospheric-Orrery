@@ -5,7 +5,7 @@
       "args": ["-m", "src.mcp_server"],
       "cwd": "/Users/michaelsugimura/Documents/GitHub/Noospheric-Orrery/orchestrator",
       "env": {
-        "ORCHESTRATOR_URL": "https://orrery-orchestrator-469580747258.us-central1.run.app"
+        "ORCHESTRATOR_URL": "http://localhost:8100"
       }
     }
   }

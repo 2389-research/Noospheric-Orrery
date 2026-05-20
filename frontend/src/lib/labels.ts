@@ -6,11 +6,13 @@
 const JOB_TYPE_LABELS: Record<string, string> = {
   simmer_general: "General Spec Refinement",
   simmer_domain: "Domain Spec Refinement",
+  simmer_domain_image: "Domain Image Spec Refinement",
   simmer_golden_set: "Golden Set Refinement",
   simmer_extraction_spec: "Extraction Spec Refinement",
   simmer_domain_golden_set: "Domain Golden Set",
   simmer_domain_extraction_spec: "Domain Extraction Spec",
   extract_batch: "Batch Extraction",
+  extract_batch_image: "Batch Image Extraction",
   post_process: "Post-Processing",
 };
 
