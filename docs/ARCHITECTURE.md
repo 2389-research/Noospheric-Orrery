@@ -1,6 +1,6 @@
 # Noospheric Orrery — Architecture Reference
 
-**Date:** 2026-03-27
+**Date:** 2026-05-20
 
 Deep reference for anyone making structural changes to the system.
 
@@ -43,9 +43,10 @@ Deep reference for anyone making structural changes to the system.
 │  worker  (Python asyncio, no HTTP port)                        │
 │                                                                 │
 │  Polls jobs table every 5s                                     │
-│  simmer_general  → golden set + general extraction spec        │
-│  simmer_domain   → golden set + domain extraction spec         │
-│  extract_batch   → run spec against all target documents       │
+│  simmer_general       → optional text general spec refinement  │
+│  simmer_domain        → domain text extraction spec            │
+│  simmer_domain_image  → domain image recognition context       │
+│  extract_batch(_image) → run spec against target documents     │
 │                                                                 │
 │  Uses simmer-sdk for iterative refinement loops                │
 └─────────────────────────────────────────────────────────────────┘
@@ -69,36 +70,39 @@ Deep reference for anyone making structural changes to the system.
 
 **Trigger:** Immediately after store (synchronous, ~2-3s)
 
-**Model:** `claude-sonnet-4` via Bedrock
+**Model:** `CLASSIFICATION_MODEL` via `orrery-relay` (`bedrock`, `gateway`, or `ollama`)
 
 **Input:**
 - Adaptive excerpt: whole doc if < 6K chars; otherwise title + first 2K + middle 2K + last 2K chars
 - Existing domain taxonomy (all paths from `domains` table)
 
-**Output from Sonnet:**
+**Output from classifier:**
 - `primary_domain` — the main domain path
 - `secondary_domains` — additional relevant paths
-- `new_domain_proposals` — new paths not in the taxonomy
+- `confidence` — confidence score for the primary assignment
 
-**Domain Normalization Cascade (inline):**
-```
+**Domain Normalization (inline):**
+```text
 For each proposed domain label:
 1. Check domain_merge_map — if seen before, use canonical path
-2. Embed the label (all-MiniLM-L6-v2)
-3. Compare cosine similarity to existing domain embeddings
-4. similarity > 0.85 → merge into existing domain (auto)
-5. 0.70–0.85 → flag for LLM review (Sonnet confirms merge or keep separate)
-6. < 0.70 → insert as new domain
-7. Update domain_merge_map with decision
+2. Exact-match domains.path — if present, reuse existing path
+3. Otherwise insert a new domain row
+4. Set parent_path from the slash-separated path
 ```
+
+Embedding/LLM domain clustering exists in older design notes but is not part of the live ingest path today.
 
 **State changes:** `document_domains` rows inserted; `domains.document_count` incremented; document status → `classified`
 
-### Stage 3 — General Extraction (if spec exists)
+### Stage 3 — General Extraction
 
 **Trigger:** Immediately after classification
 
-**Model:** `claude-haiku-4` via Bedrock, with simmered general spec
+**Model:** `EXTRACTION_MODEL` via `orrery-relay`
+
+Text documents prefer the latest simmered general spec; if none exists, they use the built-in `orchestrator/specs/general_text.md`.
+
+Images are first described by the vision-capable classification model, stored as image documents, and then extracted from that description. Current image ingest checks the same general-spec slot; if no general spec exists, it uses the built-in `orchestrator/specs/general_image.md`.
 
 **Process:**
 ```
@@ -146,29 +150,26 @@ After all domain specs: recompute all co-occurrence edges
 **Trigger:** After all extraction steps
 
 ```
-No general spec exists?
-  → Queue simmer_general job (if not already queued/running)
-  → This happens on the very first upload
-
 Each domain this doc belongs to:
   document_count >= DOMAIN_SPEC_THRESHOLD AND no spec yet?
   → Queue simmer_domain job for that domain
 ```
 
+The general text spec is built in, so ingest no longer auto-queues `simmer_general` on cold start. General text simmering is manual through `POST /simmer/general`. Domain image simmering is also manual through `POST /simmer/{domain_path}/image`; the UI shows the image refine action when a domain has enough image examples.
+
 ### Stage 6 — Simmering (async, worker)
 
-The worker picks up `simmer_general` and `simmer_domain` jobs.
+The worker picks up `simmer_general`, `simmer_domain`, and `simmer_domain_image` jobs from each workspace database.
 
 **Phase 1 — Golden Set Simmering:**
-```
-Select ~10 representative documents from corpus (or domain)
+```text
+Select representative chunks from corpus (or domain)
 Review existing entities on those docs (don't re-find obvious ones)
-Send docs to Sonnet: "Build a comprehensive entity set for these docs"
+Send docs to CLASSIFICATION_MODEL: "Build a comprehensive entity set for these docs"
 Seed ontology: Person, Organization, Topic, Event, Location, Thing
                 (domain specs start from general spec's types)
 
-simmer-sdk refine() loop (default 5 iterations):
-  Evaluator: score_golden_set.py --docs {candidate_path}
+simmer-sdk refine() loop (default SIMMER_ITERATIONS):
   Criteria:
     coverage — captures everything a domain expert would want
     precision — no noise or hallucinated entities
@@ -180,13 +181,12 @@ Store in specs table (golden_set column)
 ```
 
 **Phase 2 — Extraction Spec Simmering:**
-```
+```text
 Template a Haiku prompt from the golden set
   (entity types from golden set, examples, normalization hints)
 
-simmer-sdk refine() loop (default 5 iterations):
-  Evaluator: eval_runner_haiku.py runs spec against held-out docs
-  Scorer: eval_scorer.py fuzzy-matches extracted vs golden set
+simmer-sdk refine() loop (default SIMMER_ITERATIONS):
+  Evaluator: worker/src/jobs/evaluate_spec.py runs spec against staged samples
   Criteria:
     coverage — recall against golden set entities
     precision — zero false positives
@@ -196,6 +196,8 @@ simmer-sdk refine() loop (default 5 iterations):
 Output: simmered extraction spec (the prompt text)
 Store in specs table (spec_content column), version incremented
 ```
+
+Domain image simmering is single-phase. It starts from a static visual taxonomy, pre-scans up to five images from the domain, and asks simmer-sdk to add domain recognition context: vocabulary, naming conventions, and visual cues. It stores the result with `media_type='image'` and queues `extract_batch_image`.
 
 Each simmer iteration is recorded in `simmer_iterations` and `simmer_criterion_details`.
 
@@ -235,6 +237,8 @@ documents (
   source_path  TEXT,               -- original file path
   content      TEXT,
   content_hash TEXT,               -- sha256, used for dedup
+  content_type TEXT,               -- text | image
+  thumbnail_path TEXT,
   metadata     TEXT,               -- JSON blob (author, channel, etc.)
   created_at   TIMESTAMP,
   status       TEXT                -- pending | classified | extracted | enriched
@@ -248,7 +252,9 @@ chunks (
   chunk_index  INTEGER,            -- order within document
   offset       INTEGER,            -- char offset in content
   length       INTEGER,
-  text         TEXT
+  text         TEXT,
+  embedding    BLOB,
+  image_embedding BLOB
 );
 
 -- Hierarchical domain taxonomy
@@ -313,7 +319,7 @@ relationships (
 -- Pipeline jobs
 jobs (
   id           TEXT PRIMARY KEY,
-  type         TEXT,               -- simmer_general | simmer_domain | extract_batch
+  type         TEXT,               -- simmer_general | simmer_domain | simmer_domain_image | extract_batch | extract_batch_image
   target       TEXT,               -- domain path or "general"
   status       TEXT DEFAULT 'queued',  -- queued | running | completed | failed
   config       TEXT,               -- JSON blob
@@ -327,7 +333,7 @@ jobs (
 simmer_iterations (
   id              TEXT PRIMARY KEY,
   job_id          TEXT REFERENCES jobs(id),
-  phase           TEXT,            -- 'golden_set' | 'extraction_spec'
+  phase           TEXT,            -- 'golden_set' | 'extraction_spec' | 'domain_image_spec'
   iteration       INTEGER,
   scores          TEXT,            -- JSON: {criterion: score}
   composite       REAL,
@@ -359,6 +365,7 @@ specs (
   spec_content TEXT,               -- the extraction prompt
   golden_set   TEXT,               -- JSON: the golden entity set
   score        REAL,               -- composite score from simmering
+  media_type   TEXT DEFAULT 'text', -- text | image
   created_at   TIMESTAMP
 );
 
@@ -540,7 +547,7 @@ Response: `{ "job_id": "uuid", "status": "queued" }`
 
 **`GET /stats`**
 
-Response: `{ "document_count", "entity_count", "domain_count", "active_jobs" }`
+Response: `{ "document_count", "entity_count", "domain_count", "active_jobs", "image_count" }`
 
 ---
 
@@ -550,11 +557,11 @@ Response: `{ "document_count", "entity_count", "domain_count", "active_jobs" }`
 
 Runs the full normalization cascade on all entities. Synchronous — may take several seconds on large corpora.
 
-Response: `{ "merges": int, "reviewed": int, "queued_for_review": int }`
+Response: `{ "plural_merges": int, "embedding_merges": int, "queued_for_review": int, "total_entities_before": int, "total_entities_after": int }`
 
 **`GET /normalize/summary`**
 
-Response: `{ "merges_by_method": { "embed_auto": int, "llm_review": int }, "total_merges": int, "pending_reviews": int, "recent_merges": [{ "from", "to", "method", "similarity", "date" }] }`
+Response: `{ "merges_by_method": { "embedding": int, "llm_review": int, "plural": int }, "total_merges": int, "pending_reviews": int, "recent_merges": [{ "from", "to", "method", "similarity", "date" }] }`
 
 **`GET /normalize/review`**
 
@@ -571,7 +578,7 @@ Response: `{ "status": "resolved", "action": "merge" }`
 
 **`POST /discover-subdomains`**
 
-Uses Sonnet to analyze extracted content and propose subdomain splits for domains that have grown large enough to warrant it. Results are inserted into the `domains` table.
+Uses `CLASSIFICATION_MODEL` to analyze extracted entities for each extracted/enriched document and propose more specific child-domain tags. Results are additive: new `domains` rows are inserted as needed and documents gain extra `document_domains` assignments.
 
 ---
 
@@ -605,9 +612,16 @@ Response:
 
 Response: `{ "status": "ok" }`
 
-## Three-Tier Normalization Cascade
+## Normalization
 
-Both entity normalization and domain normalization follow the same three-tier pattern:
+Entity normalization has two paths:
+
+- **Inline during ingest/extraction:** lowercase and strip the name, check `merge_map`, exact-match `(canonical_name, type)`, otherwise create a new entity.
+- **Batch normalization via `POST /normalize`:** plural collapse, embedding similarity, and review-queue creation for ambiguous pairs.
+
+Domain normalization in the current implementation uses a conservative path: `domain_merge_map`, exact path reuse, otherwise insert a new domain. Domain embedding/LLM clustering is planned/experimental, not current runtime behavior.
+
+The batch entity cascade follows this pattern:
 
 ```
 Tier 1 — String Rules (deterministic, free)
@@ -622,8 +636,8 @@ Tier 2 — Embedding Similarity (scalable)
   similarity > 0.85 → auto-merge (use highest-frequency member as canonical)
   similarity 0.70–0.85 → queue for LLM review
 
-Tier 3 — LLM Review (accurate, expensive, only for ambiguous tail)
-  Sonnet reviews each flagged pair
+Tier 3 — Review Queue (accurate, only for ambiguous tail)
+  Ambiguous pairs are queued for explicit merge/keep resolution
   "dark beige" ≠ "light beige" (similarity high but semantically distinct)
   "3d printer" ≠ "3d printing" (tool vs technique)
   Decision stored in merge_map (never re-evaluated)
@@ -661,12 +675,11 @@ The `entity_sources.extraction_pass` field (`general` vs `domain-specific`) lets
 
 `POST /discover-subdomains` runs `pipeline/subdomain_discovery.py`:
 
-1. For each domain with enough documents, sample representative docs
-2. Send to Sonnet with existing taxonomy: "What distinct sub-topics do you see?"
-3. Parse proposed subdomain paths
-4. Run domain normalization cascade on proposals
-5. Insert new subdomains with `parent_path` set
-6. Re-classify documents that should move to the more specific domain
+1. Iterate extracted/enriched documents
+2. Gather each document's current domains and extracted entity profile
+3. Ask the classification model whether more specific child domains are warranted
+4. Normalize each proposed subdomain with the same domain merge-map/exact/insert path
+5. Add new `document_domains` rows without removing existing assignments
 
 This runs on-demand — not automatically triggered. Use it when a domain is growing large and taxonomy resolution is getting blurry.
 
@@ -715,11 +728,11 @@ All settings are in `orchestrator/src/config.py` and `worker/src/config.py` (ide
 | `AWS_ACCESS_KEY` | required | Bedrock auth |
 | `AWS_SECRET_KEY` | required | Bedrock auth |
 | `AWS_REGION` | `us-east-1` | Bedrock region |
-| `CLASSIFICATION_MODEL` | `us.anthropic.claude-sonnet-4-20250514-v1:0` | Must include `us.` prefix and `-v1:0` suffix |
-| `EXTRACTION_MODEL` | `us.anthropic.claude-haiku-4-20250514-v1:0` | Same format requirement |
-| `GENERAL_SPEC_THRESHOLD` | `10` | Docs before auto-simmering general spec |
-| `DOMAIN_SPEC_THRESHOLD` | `20` | Docs in domain before auto-simmering domain spec |
-| `SIMMER_ITERATIONS` | `5` | Refinement iterations per simmer phase |
+| `CLASSIFICATION_MODEL` | `claude-sonnet-4-6` | Classifier, simmer generator, and judges |
+| `EXTRACTION_MODEL` | `claude-haiku-4-5` | Entity extraction and simmer evaluators |
+| `GENERAL_SPEC_THRESHOLD` | `10` | Legacy setting; general text simmer is manual because built-in specs exist |
+| `DOMAIN_SPEC_THRESHOLD` | `20` | Text docs in domain before auto-simmering domain text spec |
+| `SIMMER_ITERATIONS` | `3` | Refinement iterations per simmer phase |
 | `CHUNK_SIZE` | `2000` | Characters per extraction chunk |
 | `WORKER_POLL_INTERVAL` | `5` | Seconds between job queue polls |
 | `DB_PATH` | `$XDG_DATA_HOME/orrery/orrery.db` | SQLite path |

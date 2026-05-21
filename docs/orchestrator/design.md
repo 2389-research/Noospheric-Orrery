@@ -1,22 +1,24 @@
 # Orchestrator Service — Design Spec
 
-**Date:** 2026-03-27
-**Status:** Approved
+**Date:** 2026-05-20
+**Status:** Current implementation reference
 **Purpose:** FastAPI orchestrator + simmer worker + Next.js dashboard to wire together the validated extraction pipeline
 
-## Current State (as of 2026-03-27)
+## Current State (as of 2026-05-20)
 
 This section documents what has been built relative to what was originally planned. Updated at implementation time.
 
 ### Built and Shipped
 
 - [x] **Three-container architecture** — orchestrator (FastAPI :8100), worker (asyncio poll loop), frontend (Next.js :3100) via `docker compose up`
-- [x] **Full ingest pipeline** — upload file or directory, classify (Sonnet/Bedrock), extract with general spec, cascade domain specs, compute co-occurrence edges
-- [x] **Domain normalization** — inline during classification; embed + cosine similarity + LLM review for ambiguous pairs; `domain_merge_map` persistence
+- [x] **Full ingest pipeline** — upload text/image file or directory, classify through `orrery-relay`, extract with built-in or simmered general spec, cascade domain text specs, compute co-occurrence edges
+- [x] **Domain normalization** — inline during classification; `domain_merge_map` lookup, exact path reuse, otherwise insert new domain with derived `parent_path`
 - [x] **Entity normalization** — per-entity `merge_map` check at ingest time; batch cascade via `POST /normalize`; `normalization_review_queue` for manual resolution
-- [x] **simmer_general job** — Phase 1 golden set + Phase 2 extraction spec, tracked per-iteration in `simmer_iterations` and `simmer_criterion_details`
+- [x] **Built-in general specs** — `orchestrator/specs/general_text.md` and `general_image.md` keep cold starts queryable without waiting for simmering
+- [x] **simmer_general job** — Optional/manual text general refinement, tracked per-iteration in `simmer_iterations` and `simmer_criterion_details`
 - [x] **simmer_domain job** — Same two-phase loop for domain-specific specs
-- [x] **extract_batch job** — Worker runs simmered spec against all target documents
+- [x] **simmer_domain_image job** — Single-phase per-domain image recognition-context refinement
+- [x] **extract_batch / extract_batch_image jobs** — Worker runs simmered spec against target documents/images
 - [x] **Domain spec cascade** — Deepest-first ancestor walk; additive extraction on top of general pass
 - [x] **Content hash dedup** — Skip re-ingesting identical documents
 - [x] **`GET /graph`** — cosmic_data_v4 format; golden-ratio color distribution; branching-level domain layout; trade routes; entity domain weights
@@ -25,25 +27,25 @@ This section documents what has been built relative to what was originally plann
 - [x] **Simmer detail page** — `/simmer/{id}` with phase tabs, iteration list, per-criterion scores and evidence
 - [x] **Extraction detail page** — `/extraction/{id}` with docs, entities (is_new flag), type distribution, normalization summary, reader pane
 - [x] **Document reader** — `/documents/{id}/reader` with entity span highlighting, mention count, context snippets
-- [x] **Subdomain discovery** — `POST /discover-subdomains` using Sonnet to propose taxonomy splits
+- [x] **Subdomain discovery** — `POST /discover-subdomains` using `CLASSIFICATION_MODEL` to propose additive subdomain tags
 - [x] **Upload page** (`/`) — drag-and-drop file upload + directory path ingest
 - [x] **Pipeline page** (`/pipeline`) — stats bar, domain taxonomy, job list, simmer trigger buttons
 - [x] **Entities page** (`/entities`) — paginated table with type/domain filters
 
 ### Originally Planned, Now Deferred or Changed
 
-- **Phase B: Cosmic viz integration** — Shipped as part of Phase A (not deferred). Viz connects to live pipeline data via `/graph`.
+- **Phase B: Cosmic viz integration** — Shipped. Viz connects to live pipeline data via `/graph`.
 - **Phase C: Search page** — Still deferred. The underlying retrieval capability exists (separate spark service); UI not built in this codebase yet.
 - **User feedback / entity editing** — Not built. Would require new UI + entity edit endpoints.
 - **Cloud deployment / Postgres migration** — Not done. Running on SQLite WAL locally.
 - **Re-simmering triggers** — Auto-queue on threshold only. Quality-degradation-based re-simmering not implemented.
-- **Sentence-transformers embedding** — Commented out in `pyproject.toml`. Batch normalization scaffolding exists but embedding is deferred.
+- **Domain embedding normalization** — Design exists, but live domain normalization is merge-map/exact-match only.
 
 ### Schema Additions Beyond Original Design
 
 The original design doc listed a simpler schema. The following tables were added during implementation:
 
-- `entity_embeddings` — cached embeddings (deferred feature)
+- `entity_embeddings` — cached entity embeddings for batch normalization
 - `normalization_log` — audit trail for all merge decisions
 - `normalization_review_queue` — ambiguous pairs for manual review
 - `simmer_iterations` — per-iteration history from simmer-sdk
@@ -72,11 +74,11 @@ docker compose up
 │   ├── /domains — taxonomy view
 │   ├── /entities — extracted entities
 │   ├── /jobs — pipeline status
-│   └── /simmer — manual trigger for general or domain spec
+│   └── /simmer — manual trigger for general, domain text, or domain image spec
 │
 ├── simmer-worker (Python, polls job queue)
 │   ├── Watches SQLite jobs table every 5s
-│   ├── Runs simmer-sdk refine() for general + domain specs
+│   ├── Runs simmer-sdk refine() for general + domain text/image specs
 │   └── Writes results back to SQLite
 │
 ├── frontend (Next.js, port 3000)
@@ -92,11 +94,10 @@ docker compose up
 
 Three containers via docker compose. Orchestrator and simmer-worker share SQLite via volume mount. Frontend talks to orchestrator API.
 
-## Roadmap
+## Roadmap Snapshot
 
-- **Phase A (this spec):** Upload + classify + extract + admin dashboard
-- **Phase B (later):** Embed cosmic visualization, graph wired to live pipeline state
-- **Phase C (later):** Search page, full Noospheric app integration
+- **Shipped:** Upload, classify, extract, image ingest/search, admin dashboard, cosmic visualization, multi-workspace support
+- **Still active:** Search UX, entity editing/feedback, cloud deployment/Postgres migration, quality-based re-simmering triggers
 
 ## Data Model (SQLite)
 
@@ -109,7 +110,10 @@ documents (
   title         TEXT,
   source_path   TEXT,               -- original file path
   content       TEXT,
+  content_hash  TEXT,               -- sha256 dedup key
   metadata      TEXT,               -- JSON: author, channel, source type, etc.
+  content_type  TEXT,               -- text | image
+  thumbnail_path TEXT,
   created_at    TIMESTAMP,
   status        TEXT                -- pending | classified | extracted | enriched
 )
@@ -121,7 +125,9 @@ chunks (
   chunk_index   INTEGER,            -- order within document
   offset        INTEGER,            -- char offset in content
   length        INTEGER,
-  text          TEXT
+  text          TEXT,
+  embedding     BLOB,
+  image_embedding BLOB
 )
 
 -- Domain taxonomy
@@ -162,7 +168,8 @@ entity_sources (
   document_id   TEXT,               -- FK
   chunk_id      TEXT,               -- FK to chunks.id
   extraction_pass TEXT,             -- general | domain-specific
-  spec_version  INTEGER
+  spec_version  INTEGER,
+  job_id        TEXT
 )
 
 -- Entity merge map (normalization cache)
@@ -184,7 +191,7 @@ relationships (
 -- Pipeline jobs (simmering, batch extraction)
 jobs (
   id            TEXT PRIMARY KEY,   -- uuid
-  type          TEXT,               -- simmer_general | simmer_domain | extract_batch
+  type          TEXT,               -- simmer_general | simmer_domain | simmer_domain_image | extract_batch | extract_batch_image
   target        TEXT,               -- domain path, or "general"
   status        TEXT,               -- queued | running | completed | failed
   config        TEXT,               -- JSON blob
@@ -202,6 +209,7 @@ specs (
   spec_content  TEXT,               -- the actual prompt/spec
   golden_set    TEXT,               -- JSON — golden entities
   score         REAL,               -- composite score from simmering
+  media_type    TEXT DEFAULT 'text',
   created_at    TIMESTAMP
 )
 ```
@@ -221,7 +229,9 @@ GET  /entities/{id}       Single entity with sources and merge history
 
 GET  /jobs                Pipeline job status list
 POST /simmer/general      Manually trigger general spec simmering
-POST /simmer/{domain}     Manually trigger domain-specific simmering
+POST /simmer/{domain}     Manually trigger domain-specific text simmering
+POST /simmer/{domain}/image
+                          Manually trigger domain-specific image simmering
 
 GET  /stats               Dashboard summary counts
 ```
@@ -236,34 +246,36 @@ POST /ingest (file upload)
 ├── 1. Store document in SQLite + documents/ volume
 │   └── Chunk document → store chunks in chunks table
 │
-├── 2. Classify (Sonnet, ~2-3s)
+├── 2. Classify (CLASSIFICATION_MODEL, ~2-3s)
 │   ├── Build classification excerpt:
 │   │   ├── Doc < 6K chars → send whole thing
 │   │   ├── Doc has structure → title + first section + last section + heading list
 │   │   └── Doc > 6K chars → title + first 2K + middle 2K + last 2K chars
-│   ├── Send excerpt + existing taxonomy to Sonnet
-│   ├── Get back: primary domain, secondary domains, new domain proposals
+│   ├── Send excerpt + existing taxonomy to CLASSIFICATION_MODEL
+│   ├── Get back: primary domain, secondary domains, confidence
 │   ├── Normalize proposed domains against domain_merge_map
 │   ├── Insert new domains into taxonomy if proposed (after normalization)
 │   └── Update document status → "classified"
 │
-├── 3. Has simmered general spec?
-│   ├── YES → Extract with general spec (Haiku) + compute co-occurrence edges
-│   │   └── Update document status → "extracted"
-│   └── NO → Document stays "classified", awaiting spec
+├── 3. General extraction
+│   ├── Use latest simmered general text spec if one exists
+│   ├── Otherwise use built-in general_text.md / general_image.md
+│   ├── Extract entities + compute co-occurrence edges
+│   └── Update document status → "extracted"
 │
-├── 4. Check thresholds + triggers
-│   ├── No general spec → Auto-queue simmer_general job
-│   │   (first upload triggers this — user watches simmering happen)
-│   ├── Domain has specific spec → Queue domain re-extraction (async, additive)
-│   └── Domain has no spec + doc count >= threshold → Queue simmer_domain job
+├── 4. Domain spec cascade
+│   ├── For each assigned domain, walk ancestors deepest-first
+│   ├── Run every available domain text spec not already seen for the doc
+│   └── Add domain-specific entities on top of the general pass
 │
-└── Return: document ID, domains assigned, entity count (if spec exists), jobs queued
+├── 5. Check thresholds + triggers
+│   └── Domain has no text spec + doc count >= DOMAIN_SPEC_THRESHOLD
+│       → Queue simmer_domain job
+│
+└── Return: document ID, domains assigned, entity count, jobs queued
 ```
 
-**Cold start: simmering IS the first step.** When a user uploads their first batch of documents, the system classifies them into domains, then immediately begins simmering a general spec tailored to this corpus. The user watches the simmering job progress in the UI. Once the general spec completes, batch extraction runs on all classified documents. There is no throwaway seed extraction — the first extraction uses a spec built for this corpus.
-
-The first simmer triggers on the first upload, not at a threshold. The user experience is: upload → classify (fast) → simmer general spec (minutes, visible progress) → extract everything (fast). The wait is the point — the system is learning what matters in your corpus.
+**Cold start is immediate extraction.** Built-in general text and image specs make the graph queryable from the first upload. General text simmering still exists, but it is a manual refinement path through `POST /simmer/general`, not an automatic first-upload gate.
 
 **Domain extraction is additive.** A document extracted through the general spec keeps those entities. Domain-specific extraction adds richer, domain-specific entities on top. Status progresses: extracted → enriched.
 
@@ -272,10 +284,10 @@ The first simmer triggers on the first upload, not at a threshold. The user expe
 **Entity extraction** is the priority and where simmering applies. All extraction (general, domain) follows this pattern:
 
 ```
-Pass 1: Entity extraction (LLM — simmered spec via Haiku)
+Pass 1: Entity extraction (LLM — built-in, simmered general, or simmered domain spec)
 ├── Run spec on each chunk → extract entities only
 ├── Deduplicate within document
-├── Normalize: merge_map check → embed → compare to existing clusters
+├── Normalize inline: merge_map check → exact canonical name/type match → insert
 └── Insert entities into entities table
 
 Pass 2: Co-occurrence relationships (statistical — no LLM needed)
@@ -300,42 +312,39 @@ When the classifier proposes new domains, they go through normalization before i
 
 ```
 1. Check domain_merge_map — if this label was seen before, use canonical
-2. Embed proposed label (all-MiniLM-L6-v2)
-3. Compare to existing domain embeddings (cosine similarity)
-4. If similarity > 0.85 to existing domain → merge (use existing)
-5. If 0.7-0.85 → flag for LLM review (Sonnet confirms merge or keep)
-6. If < 0.7 → new domain, insert into taxonomy
-7. Update domain_merge_map with decision
+2. Exact-match domains.path — if present, reuse existing path
+3. Otherwise insert a new domain row
+4. Derive parent_path from the slash-separated path
 ```
 
-Runs inline during classification. Prevents domain proliferation.
+Runs inline during classification. Embedding similarity and LLM review for domain labels are planned/experimental, not current runtime behavior.
 
 ### Simmer Jobs (async, simmer-worker)
 
-```
-Simmer Job (general or domain-specific)
+```text
+Simmer Job (general text, domain text, or domain image)
 │
 ├── 1. Gather ~10 representative samples
-│   ├── For general: diverse docs across domains
-│   └── For domain: docs from that domain, varied subtopics
+│   ├── For general text: diverse chunks across documents
+│   ├── For domain text: chunks from that domain
+│   └── For domain image: images from that domain plus pre-scan notes
 │
 ├── 2. Phase 1: Golden set simmering
-│   ├── Sonnet reads samples deeply
+│   ├── CLASSIFICATION_MODEL reads samples deeply
 │   ├── Builds comprehensive entity set with types + relationships
 │   ├── Seed ontology: Person, Organization, Topic, Event, Location, Thing
 │   │   (for general spec — domain specs start from general spec types)
 │   ├── Simmer-sdk refine() loop
-│   │   ├── Evaluator: score_golden_set.py --docs {candidate_path}
 │   │   ├── Judges evaluate: coverage, precision, taxonomy quality
-│   │   └── ~4-5 iterations
+│   │   └── SIMMER_ITERATIONS
 │   └── Output: golden set (entities + types + relationships)
 │
 ├── 3. Phase 2: Extraction spec simmering
 │   ├── Template a Haiku prompt from the golden set
 │   ├── Simmer-sdk refine() loop
-│   │   ├── Evaluator: eval_runner_haiku.py runs spec against held-out docs
-│   │   ├── Scorer: eval_scorer.py does fuzzy match against golden set
-│   │   └── ~4-5 iterations
+│   │   ├── Evaluator: worker/src/jobs/evaluate_spec.py runs the candidate spec
+│   │   ├── Judges review quantitative summary and raw eval JSON files
+│   │   └── SIMMER_ITERATIONS
 │   └── Output: simmered extraction spec (the prompt Haiku runs)
 │
 ├── 4. Store spec + golden set in specs table
@@ -343,12 +352,9 @@ Simmer Job (general or domain-specific)
 └── 5. Queue extract_batch for all target docs
 ```
 
-**Evaluator scripts** live in the simmer-worker container at `/app/evaluators/`:
-- `score_golden_set.py` — scores golden set candidates on coverage, precision, taxonomy quality
-- `eval_runner_haiku.py` — runs an extraction spec against sample documents via Haiku
-- `eval_scorer.py` — fuzzy-matches extracted entities against golden set (precision + recall)
+Domain image simmering is single-phase. It starts from a static general image spec, builds a pre-scan-derived golden file, and refines only the `Domain Recognition Context` section. Image entity types are intentionally universal.
 
-These are the same scripts validated in the extraction pipeline experiments.
+The text evaluator used by current jobs is `worker/src/jobs/evaluate_spec.py`; image jobs use `worker/src/jobs/evaluate_image_spec.py`.
 
 ### Batch Extraction (async, simmer-worker)
 
@@ -358,7 +364,7 @@ extract_batch job
 ├── For each document in target set:
 │   ├── Run entity spec via Haiku on each chunk
 │   │   ├── Deduplicate within document
-│   │   ├── Normalize: merge_map check → embed → compare to existing clusters
+│   │   ├── Normalize inline: merge_map check → exact match → insert
 │   │   └── Insert entities
 │   ├── Compute co-occurrence edges from extraction output
 │   │   └── Insert relationships (type: co_occurs, weight: chunk frequency)
@@ -373,8 +379,7 @@ extract_batch job
 
 - Drag-and-drop zone for files
 - Text field to paste a local directory path
-- Real-time status per file: uploading → classifying → classified (awaiting spec)
-- When general spec completes: extracting → done
+- Real-time status per file: uploading → classifying → extracting → done
 - Summary: "5 files uploaded, 3 domains detected" then later "47 entities extracted"
 - Simmering progress visible (links to Pipeline page job status)
 - Temporary landing page — will be replaced with something better later
@@ -384,8 +389,8 @@ extract_batch job
 - Stats bar: total docs, entities, domains, active jobs
 - Domain taxonomy as tree/table: path, doc count, spec status (none | simmering | v1 | v2)
 - Jobs list: type, target, status, timestamps
-- "Simmer General Spec" button (enabled when no spec + docs >= 10)
-- "Simmer Domain" button per domain row
+- "Simmer General Spec" button for manual text general refinement
+- Domain refine actions per row: text when enough text docs exist, image when enough image docs exist
 
 ### Entities Page (`/entities`)
 
@@ -416,16 +421,16 @@ Simmering discovers domain-specific entity types (Technique, Paint, Model, Facti
 | Storage | SQLite WAL mode, volume-mounted | Simple, portable. WAL for concurrent writers. Swap to Postgres at prod |
 | Containers | 3 via docker compose | Orchestrator + simmer worker + frontend. User runs `docker compose up` |
 | Job queue | SQLite polling (5s) | No Redis/RabbitMQ needed at this scale |
-| Classification | Sonnet, synchronous | Fast enough (~2-3s), needs quality for domain discovery |
-| Cold start | Simmer general spec on first upload | No throwaway extraction — first spec is tailored to this corpus |
-| General extraction | Haiku with simmered spec | Cheap, proven from experiments |
+| Classification | `CLASSIFICATION_MODEL`, synchronous | Fast enough (~2-3s), needs quality for domain discovery |
+| Cold start | Built-in general specs run immediately | The graph is queryable from the first upload; simmering improves later |
+| General extraction | Built-in spec, or latest manual simmered general text spec | Cheap baseline with optional corpus-specific refinement |
 | Relationships V1 | Co-occurrence + mentions (both computed, no LLM) | Free from extraction output, proven in warhammer pipeline. LLM relationship pass deferred to V2 |
-| Frontend | Next.js + shadcn/ui | Matches existing Noospheric app stack, easy to integrate cosmic viz in phase B |
-| General spec | Simmered, not hardcoded | Seed ontology + simmer discovers corpus-specific types |
-| Entity normalization | Incremental (merge_map + embed), full batch periodic | Fast per-entity, accurate over time |
-| Domain normalization | Inline during classification (embed + compare + LLM review) | Prevents domain proliferation |
+| Frontend | Next.js + shadcn/ui | Matches existing Noospheric app stack and live graph views |
+| General spec | Built-in, with optional manual text simmer | Avoids a cold-start wait while preserving a refinement path |
+| Entity normalization | Inline merge_map/exact match; batch embedding normalization via `/normalize` | Fast per-entity, accurate over time |
+| Domain normalization | Inline merge_map/exact match/new insert | Conservative and predictable; embedding domain merges remain future work |
 | Classification excerpt | Adaptive by doc size | < 6K whole doc, > 6K sample beginning + middle + end |
-| Simmer trigger | Auto at threshold + manual button | Auto for convenience, manual for testing |
+| Simmer trigger | Text domains auto at threshold; general text and domain image are manual | Keeps ingest immediate while letting users refine high-value areas |
 | Golden set sample | 10 docs | Configurable, start conservative |
 
 ## Configuration
@@ -433,20 +438,19 @@ Simmering discovers domain-specific entity types (Technique, Paint, Model, Facti
 ```yaml
 # docker-compose.yml environment variables
 ANTHROPIC_API_KEY: required
-CLASSIFICATION_MODEL: claude-sonnet-4-20250514
-EXTRACTION_MODEL: claude-haiku-4-20250514
-GENERAL_SPEC_THRESHOLD: 10        # docs before auto-simmering general spec
+CLASSIFICATION_MODEL: claude-sonnet-4-6
+EXTRACTION_MODEL: claude-haiku-4-5
+GENERAL_SPEC_THRESHOLD: 10        # legacy setting; general text simmer is manual
 DOMAIN_SPEC_THRESHOLD: 20         # docs in domain before auto-simmering domain spec
-SIMMER_ITERATIONS: 5              # refinement iterations per simmer run
+SIMMER_ITERATIONS: 3              # refinement iterations per simmer run
 CHUNK_SIZE: 2000                  # chars per extraction chunk
 WORKER_POLL_INTERVAL: 5           # seconds between job queue polls
 ```
 
 ## What This Does NOT Include (Deferred)
 
-- Cosmic visualization integration (Phase B)
 - Search page (Phase C)
 - User feedback / entity editing
 - Cloud deployment / Postgres migration
-- Multi-modal document support (images, audio)
+- Audio support
 - Re-simmering triggers (quality degradation signals)
