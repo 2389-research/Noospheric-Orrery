@@ -82,7 +82,7 @@ Deep reference for anyone making structural changes to the system.
 - `confidence` — confidence score for the primary assignment
 
 **Domain Normalization (inline):**
-```
+```text
 For each proposed domain label:
 1. Check domain_merge_map — if seen before, use canonical path
 2. Exact-match domains.path — if present, reuse existing path
@@ -100,7 +100,9 @@ Embedding/LLM domain clustering exists in older design notes but is not part of 
 
 **Model:** `EXTRACTION_MODEL` via `orrery-relay`
 
-Text documents use the latest simmered general spec if one exists; otherwise they use the built-in `orchestrator/specs/general_text.md`. Images are first described by the vision-capable classification model, stored as image documents, and then extracted from the description. Current image ingest checks the same general-spec slot; if no general spec exists it uses the built-in `orchestrator/specs/general_image.md`.
+Text documents prefer the latest simmered general spec; if none exists, they use the built-in `orchestrator/specs/general_text.md`.
+
+Images are first described by the vision-capable classification model, stored as image documents, and then extracted from that description. Current image ingest checks the same general-spec slot; if no general spec exists, it uses the built-in `orchestrator/specs/general_image.md`.
 
 **Process:**
 ```
@@ -160,7 +162,7 @@ The general text spec is built in, so ingest no longer auto-queues `simmer_gener
 The worker picks up `simmer_general`, `simmer_domain`, and `simmer_domain_image` jobs from each workspace database.
 
 **Phase 1 — Golden Set Simmering:**
-```
+```text
 Select representative chunks from corpus (or domain)
 Review existing entities on those docs (don't re-find obvious ones)
 Send docs to CLASSIFICATION_MODEL: "Build a comprehensive entity set for these docs"
@@ -179,7 +181,7 @@ Store in specs table (golden_set column)
 ```
 
 **Phase 2 — Extraction Spec Simmering:**
-```
+```text
 Template a Haiku prompt from the golden set
   (entity types from golden set, examples, normalization hints)
 
@@ -235,6 +237,8 @@ documents (
   source_path  TEXT,               -- original file path
   content      TEXT,
   content_hash TEXT,               -- sha256, used for dedup
+  content_type TEXT,               -- text | image
+  thumbnail_path TEXT,
   metadata     TEXT,               -- JSON blob (author, channel, etc.)
   created_at   TIMESTAMP,
   status       TEXT                -- pending | classified | extracted | enriched
@@ -615,7 +619,7 @@ Entity normalization has two paths:
 - **Inline during ingest/extraction:** lowercase and strip the name, check `merge_map`, exact-match `(canonical_name, type)`, otherwise create a new entity.
 - **Batch normalization via `POST /normalize`:** plural collapse, embedding similarity, and review-queue creation for ambiguous pairs.
 
-Domain normalization is deliberately simpler in the live path: `domain_merge_map`, exact path reuse, otherwise insert a new domain. Domain embedding/LLM clustering is a planned improvement, not current runtime behavior.
+Domain normalization in the current implementation uses a conservative path: `domain_merge_map`, exact path reuse, otherwise insert a new domain. Domain embedding/LLM clustering is planned/experimental, not current runtime behavior.
 
 The batch entity cascade follows this pattern:
 

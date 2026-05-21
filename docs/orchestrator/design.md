@@ -321,7 +321,7 @@ Runs inline during classification. Embedding similarity and LLM review for domai
 
 ### Simmer Jobs (async, simmer-worker)
 
-```
+```text
 Simmer Job (general text, domain text, or domain image)
 │
 ├── 1. Gather ~10 representative samples

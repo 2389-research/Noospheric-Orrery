@@ -12,7 +12,7 @@ A domain is an **inferred meta-category** describing what a document is about.
 |----------|-------------|
 | Not explicit | Does not have to appear in the text. Inferred from entity profile + context. |
 | Hierarchical | Tree paths: `techniques/blending/wet-on-wet` |
-| Multi-assigned | Each document gets one primary domain and 0-3 secondary domains with confidence values |
+| Multi-assigned | Each document gets one primary domain and any secondary domains returned by the classifier, with confidence values |
 | Open-ended | New domains can be proposed by the classifier at any time |
 | Emergent | Taxonomy grows from the data, not from a predefined schema |
 
@@ -27,7 +27,7 @@ A domain is an **inferred meta-category** describing what a document is about.
 
 ### Step 1: Generate
 
-For each document, a classifier reads an adaptive excerpt plus the existing taxonomy and proposes one primary and 0-3 secondary hierarchical domain paths. Images are described/classified by the vision-capable classification model and then stored as image documents.
+For each document, a classifier reads an adaptive excerpt plus the existing taxonomy and proposes one primary domain plus any relevant secondary hierarchical domain paths. Images are described/classified by the vision-capable classification model and then stored as image documents.
 
 **Input:** Document title/content excerpt, or an image plus optional caption, and the current taxonomy.
 **Output:** `primary_domain`, `secondary_domains`, and `confidence`.

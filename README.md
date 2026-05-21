@@ -96,7 +96,7 @@ All LLM calls go through `orrery-relay` (`packages/orrery-relay/`), which handle
 - ImagePane renders actual images with entity tags
 
 ### Simmering (Spec Refinement)
-- **General specs**: Static built-in text/image specs make every upload queryable immediately; `/simmer/general` can still refine the text general spec manually
+- **General specs**: Built-in defaults for text and image make every upload queryable immediately; `/simmer/general` can manually refine the text general spec for a corpus
 - **Text domains**: 2-phase (golden set → extraction spec), board judge with 2 panelists
 - **Image domains**: Single-phase per-domain recognition context layered on the static general image spec
 - **API backends**: Uses simmer-sdk direct API agent loop (2x faster than CLI, no hangs)
