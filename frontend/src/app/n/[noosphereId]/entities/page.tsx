@@ -137,9 +137,11 @@ export default function EntitiesPage() {
             value={searchFilter}
             onChange={(e) => setSearchFilter(e.target.value)}
             placeholder="search entities..."
+            aria-label="Search entities by name"
             className="flex-1 bg-card/30 border border-border/30 rounded px-3 py-1.5 text-xs text-foreground/90 placeholder:text-muted-foreground/50 outline-none focus:border-border/60"
           />
           <select
+            aria-label="Filter entities by type"
             className="bg-card border border-border/30 rounded px-3 py-1.5 text-xs text-muted-foreground"
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}
