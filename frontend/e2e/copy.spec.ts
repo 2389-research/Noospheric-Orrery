@@ -23,6 +23,28 @@ test.describe("copy: no raw identifiers leak to the UI", () => {
   });
 });
 
+test.describe("copy: input placeholders", () => {
+  // Issue #7 (Margaret): placeholders should be sentence-cased and not
+  // end with trailing dots. Lock in the convention on the inputs we have.
+  const ROUTES_WITH_INPUTS = [
+    { route: "entities", expected: /^Search entities$/ },
+    { route: "orrery", expected: /^Search the knowledge graph$/ },
+  ];
+
+  for (const { route, expected } of ROUTES_WITH_INPUTS) {
+    test(`${route} search input has sentence-cased placeholder`, async ({ page, noosphereId }) => {
+      await page.goto(`/n/${noosphereId}/${route}`);
+      await page.waitForLoadState("domcontentloaded");
+      const searchInput = page.locator('input[type="text"][placeholder]').first();
+      const placeholder = await searchInput.getAttribute("placeholder");
+      expect(placeholder).toMatch(expected);
+      // Belt-and-suspenders: no trailing dots, no lowercase first letter.
+      expect(placeholder).not.toMatch(/\.{1,3}$/);
+      expect(placeholder?.[0]).toMatch(/[A-Z]/);
+    });
+  }
+});
+
 test.describe("copy: timestamps", () => {
   test("timeSince renders 'just now' (not '0s ago') for fresh timestamps", async ({ page }) => {
     // Probe the helper directly by mounting it on the home page through a

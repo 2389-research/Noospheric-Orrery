@@ -31,12 +31,13 @@ for (const route of ROUTES) {
     expect(results.violations, `${results.violations.length} WCAG-A violations on /${route}`).toEqual([]);
   });
 
-  // AA tier reports informationally for now. Flip the .fixme to a regular
-  // test once issue #7 P1/P2 backlog is cleared.
-  test.fixme(`a11y Level AA: /n/{id}/${route} (informational)`, async ({ page, noosphereId }) => {
+  test(`a11y Level AA: /n/{id}/${route}`, async ({ page, noosphereId }) => {
     await page.goto(`/n/${noosphereId}/${route}`);
     await page.waitForLoadState("domcontentloaded");
     const results = await new AxeBuilder({ page }).withTags(["wcag2aa"]).analyze();
-    expect(results.violations).toEqual([]);
+    if (results.violations.length > 0) {
+      console.log(`\n[${route}] ${results.violations.length} Level AA violation(s):\n${formatViolations(results.violations)}`);
+    }
+    expect(results.violations, `${results.violations.length} WCAG-AA violations on /${route}`).toEqual([]);
   });
 }
