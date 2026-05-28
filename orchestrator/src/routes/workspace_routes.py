@@ -72,6 +72,11 @@ async def create_workspace(
         "status": "active", "createdAt": datetime.now(timezone.utc).isoformat(),
     })
     _save_registry(registry)
+    # Pre-create the workspace DB now so the first ingest request doesn't run
+    # migrations under a write lock on the request hot path.
+    from ..db import init_db
+    from ..repositories.factory import _sqlite_workspace_db_path
+    init_db(_sqlite_workspace_db_path(ws_id))
     return {"workspaceId": ws_id, "name": req.name}
 
 

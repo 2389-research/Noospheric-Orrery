@@ -1,6 +1,13 @@
 import sqlite3
 import os
+import threading
 from pathlib import Path
+
+# Paths already migrated by init_db in this process. The schema + migrations
+# only need to run once per DB file per process — repeating them takes a write
+# lock and contends with concurrent requests / the worker.
+_initialized: set[str] = set()
+_init_lock = threading.Lock()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -176,39 +183,58 @@ CREATE TABLE IF NOT EXISTS specs (
 """
 
 def init_db(db_path: str) -> None:
-    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.executescript(SCHEMA)
-    # Migrate: add columns for image support if missing
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
-    if "content_type" not in cols:
-        conn.execute("ALTER TABLE documents ADD COLUMN content_type TEXT DEFAULT 'text'")
-    if "thumbnail_path" not in cols:
-        conn.execute("ALTER TABLE documents ADD COLUMN thumbnail_path TEXT")
-    # Migrate specs table
-    spec_cols = {r[1] for r in conn.execute("PRAGMA table_info(specs)").fetchall()}
-    if "media_type" not in spec_cols:
-        conn.execute("ALTER TABLE specs ADD COLUMN media_type TEXT DEFAULT 'text'")
-    # Migrate chunks table — SigLIP image embedding column
-    chunk_cols = {r[1] for r in conn.execute("PRAGMA table_info(chunks)").fetchall()}
-    if "image_embedding" not in chunk_cols:
-        conn.execute("ALTER TABLE chunks ADD COLUMN image_embedding BLOB")
-    # Backfill: tag legacy image rows by file extension
-    conn.execute("""
-        UPDATE documents SET content_type = 'image'
-        WHERE (content_type IS NULL OR content_type = 'text')
-        AND (source_path LIKE '%.jpg' OR source_path LIKE '%.jpeg'
-             OR source_path LIKE '%.png' OR source_path LIKE '%.webp'
-             OR source_path LIKE '%.gif')
-    """)
-    conn.commit()
-    conn.close()
+    # Fast path: skip migrations if we've already initialized this DB in this process.
+    if db_path in _initialized:
+        return
+    with _init_lock:
+        if db_path in _initialized:
+            return
+        os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.executescript(SCHEMA)
+            # Migrate: add columns for image support if missing
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
+            if "content_type" not in cols:
+                conn.execute("ALTER TABLE documents ADD COLUMN content_type TEXT DEFAULT 'text'")
+            if "thumbnail_path" not in cols:
+                conn.execute("ALTER TABLE documents ADD COLUMN thumbnail_path TEXT")
+            # Migrate specs table
+            spec_cols = {r[1] for r in conn.execute("PRAGMA table_info(specs)").fetchall()}
+            if "media_type" not in spec_cols:
+                conn.execute("ALTER TABLE specs ADD COLUMN media_type TEXT DEFAULT 'text'")
+            # Migrate chunks table — SigLIP image embedding column
+            chunk_cols = {r[1] for r in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+            if "image_embedding" not in chunk_cols:
+                conn.execute("ALTER TABLE chunks ADD COLUMN image_embedding BLOB")
+            # Backfill: tag legacy image rows by file extension
+            conn.execute("""
+                UPDATE documents SET content_type = 'image'
+                WHERE (content_type IS NULL OR content_type = 'text')
+                AND (source_path LIKE '%.jpg' OR source_path LIKE '%.jpeg'
+                     OR source_path LIKE '%.png' OR source_path LIKE '%.webp'
+                     OR source_path LIKE '%.gif')
+            """)
+            conn.commit()
+        finally:
+            conn.close()
+        _initialized.add(db_path)
+
+
+def reset_initialized(db_path: str | None = None) -> None:
+    """Test helper: clear the init guard for a path (or all paths)."""
+    with _init_lock:
+        if db_path is None:
+            _initialized.clear()
+        else:
+            _initialized.discard(db_path)
+
 
 def get_connection(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
