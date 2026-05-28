@@ -19,17 +19,27 @@ async def lifespan(app: FastAPI):
     registry_path = os.path.join(
         os.path.dirname(get_settings().db_path), "workspaces", "registry.json"
     )
+    registry: list[dict] = []
     try:
         import json
         if os.path.exists(registry_path):
             with open(registry_path) as f:
-                for ws in json.load(f):
-                    if ws.get("status") == "archived":
-                        continue
-                    init_db(_sqlite_workspace_db_path(ws["id"]))
+                registry = json.load(f)
     except Exception as e:
-        # Non-fatal: per-request init_db will still run if warmup misses one.
-        logger.warning("Noosphere warmup failed for %s: %s", registry_path, e)
+        # File missing or unparseable — skip warmup; lazy init still works.
+        logger.warning("Noosphere registry unreadable (%s): %s", registry_path, e)
+    for ws in registry:
+        if ws.get("status") == "archived":
+            continue
+        ws_id = ws.get("id")
+        if not ws_id:
+            logger.warning("Skipping registry entry without id: %r", ws)
+            continue
+        try:
+            init_db(_sqlite_workspace_db_path(ws_id))
+        except Exception:
+            # One bad noosphere shouldn't stop the others from being warmed.
+            logger.warning("Noosphere warmup failed for %s", ws_id, exc_info=True)
     # Pre-warm SentenceTransformer model so first /graph request isn't slow
     try:
         from .pipeline.domain_layout import _embed_texts
