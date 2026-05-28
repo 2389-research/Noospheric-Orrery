@@ -6,7 +6,7 @@ import os
 import json
 import hashlib
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Response, status
 from orrery_relay import Relay
 
 from ..config import get_settings
@@ -316,8 +316,12 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
     }
 
 
-@router.post("/ingest", response_model=IngestResult)
-async def ingest_file(file: UploadFile = File(...), auth: AuthStore = Depends(get_auth_store)):
+@router.post("/ingest", response_model=IngestResult, status_code=status.HTTP_201_CREATED)
+async def ingest_file(
+    response: Response,
+    file: UploadFile = File(...),
+    auth: AuthStore = Depends(get_auth_store),
+):
     file_bytes = await file.read()
     title = file.filename or "untitled"
     settings = get_settings()
@@ -338,6 +342,9 @@ async def ingest_file(file: UploadFile = File(...), auth: AuthStore = Depends(ge
             result = await _ingest_document(store, title, content, doc_path)
     finally:
         store.close()
+    doc_id = result.get("document_id") if isinstance(result, dict) else getattr(result, "document_id", None)
+    if doc_id:
+        response.headers["Location"] = f"/documents/{doc_id}"
     return result
 
 
