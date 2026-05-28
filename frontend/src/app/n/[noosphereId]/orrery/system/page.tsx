@@ -119,7 +119,7 @@ function SystemPageInner() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-          placeholder="search entities..."
+          placeholder="Search entities"
           style={{
             width: 320, padding: "8px 14px", fontSize: 12,
             fontFamily: "'Courier New', monospace",

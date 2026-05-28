@@ -67,32 +67,32 @@ export default function EntitiesPage() {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h1 className="text-sm tracking-[4px] text-muted-foreground uppercase">Entities</h1>
-          <span className="text-xs text-muted-foreground/60">{allEntities.length} total</span>
+          <span className="text-xs text-muted-foreground/70">{allEntities.length} total</span>
         </div>
 
         <div className="grid grid-cols-4 gap-3">
           <div className="rounded border border-border/30 p-3">
-            <div className="text-[9px] tracking-[2px] text-muted-foreground/60 uppercase mb-1">Total</div>
+            <div className="text-[9px] tracking-[2px] text-muted-foreground/70 uppercase mb-1">Total</div>
             <div className="text-2xl font-light text-foreground/90">{allEntities.length}</div>
           </div>
           <div className="rounded border border-border/30 p-3">
-            <div className="text-[9px] tracking-[2px] text-muted-foreground/60 uppercase mb-1">Types</div>
+            <div className="text-[9px] tracking-[2px] text-muted-foreground/70 uppercase mb-1">Types</div>
             <div className="text-2xl font-light text-foreground/90">{typeCounts.length}</div>
           </div>
           <div className="rounded border border-border/30 p-3">
-            <div className="text-[9px] tracking-[2px] text-muted-foreground/60 uppercase mb-1">Most Common</div>
+            <div className="text-[9px] tracking-[2px] text-muted-foreground/70 uppercase mb-1">Most Common</div>
             <div className="text-lg font-light text-foreground/90">{typeCounts[0]?.[0] || "—"}</div>
-            <div className="text-[10px] text-muted-foreground/50">{typeCounts[0]?.[1] || 0} entities</div>
+            <div className="text-[10px] text-muted-foreground/70">{typeCounts[0]?.[1] || 0} entities</div>
           </div>
           <div className="rounded border border-border/30 p-3">
-            <div className="text-[9px] tracking-[2px] text-muted-foreground/60 uppercase mb-1">Most Referenced</div>
+            <div className="text-[9px] tracking-[2px] text-muted-foreground/70 uppercase mb-1">Most Referenced</div>
             <div className="text-lg font-light text-foreground/90 truncate">{topEntities[0]?.canonical_name || "—"}</div>
-            <div className="text-[10px] text-muted-foreground/50">{topEntities[0]?.source_count || 0} docs</div>
+            <div className="text-[10px] text-muted-foreground/70">{topEntities[0]?.source_count || 0} docs</div>
           </div>
         </div>
 
         <div className="rounded border border-border/30 p-3">
-          <div className="text-[9px] tracking-[2px] text-muted-foreground/60 uppercase mb-3">By Type</div>
+          <div className="text-[9px] tracking-[2px] text-muted-foreground/70 uppercase mb-3">By Type</div>
           <div className="space-y-1.5">
             {typeCounts.map(([type, count]) => {
               const pct = allEntities.length > 0 ? (count / allEntities.length) * 100 : 0;
@@ -105,7 +105,7 @@ export default function EntitiesPage() {
                   <div className="flex-1 h-3 bg-card/30 rounded-sm overflow-hidden">
                     <div className="h-full rounded-sm transition-all" style={{ width: `${pct}%`, background: color, opacity: isActive ? 0.5 : 0.2 }} />
                   </div>
-                  <span className={`text-[10px] w-8 text-right shrink-0 ${isActive ? "text-foreground/80" : "text-muted-foreground/50"}`}>{count}</span>
+                  <span className={`text-[10px] w-8 text-right shrink-0 ${isActive ? "text-foreground/80" : "text-muted-foreground/70"}`}>{count}</span>
                 </button>
               );
             })}
@@ -113,7 +113,7 @@ export default function EntitiesPage() {
         </div>
 
         <div className="rounded border border-border/30 p-3">
-          <div className="text-[9px] tracking-[2px] text-muted-foreground/60 uppercase mb-2">Top Entities by References</div>
+          <div className="text-[9px] tracking-[2px] text-muted-foreground/70 uppercase mb-2">Top Entities by References</div>
           <div className="flex gap-3 flex-wrap">
             {topEntities.map((e) => (
               <a
@@ -123,7 +123,7 @@ export default function EntitiesPage() {
               >
                 <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: TYPE_COLORS[e.type] || "#8A8A8A" }} />
                 <span className="text-[11px] text-foreground/80">{e.canonical_name}</span>
-                <span className="text-[9px] text-muted-foreground/50">{e.source_count}</span>
+                <span className="text-[9px] text-muted-foreground/70">{e.source_count}</span>
               </a>
             ))}
           </div>
@@ -136,9 +136,9 @@ export default function EntitiesPage() {
             type="text"
             value={searchFilter}
             onChange={(e) => setSearchFilter(e.target.value)}
-            placeholder="search entities..."
+            placeholder="Search entities"
             aria-label="Search entities by name"
-            className="flex-1 bg-card/30 border border-border/30 rounded px-3 py-1.5 text-xs text-foreground/90 placeholder:text-muted-foreground/50 outline-none focus:border-border/60"
+            className="flex-1 bg-card/30 border border-border/30 rounded px-3 py-1.5 text-xs text-foreground/90 placeholder:text-muted-foreground/70 outline-none focus:border-border/60"
           />
           <select
             aria-label="Filter entities by type"
@@ -152,12 +152,12 @@ export default function EntitiesPage() {
             ))}
           </select>
           {(typeFilter || searchFilter) && (
-            <button onClick={() => { setTypeFilter(""); setSearchFilter(""); }} className="text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors">
+            <button onClick={() => { setTypeFilter(""); setSearchFilter(""); }} className="text-[10px] text-muted-foreground/70 hover:text-muted-foreground transition-colors">
               clear
             </button>
           )}
         </div>
-        <div className="text-[10px] text-muted-foreground/50">Showing {entities.length} of {allEntities.length}</div>
+        <div className="text-[10px] text-muted-foreground/70">Showing {entities.length} of {allEntities.length}</div>
         <EntityTable entities={entities} />
       </div>
     </div>

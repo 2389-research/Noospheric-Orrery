@@ -81,7 +81,7 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
             <p className="text-xs text-muted-foreground/90">
               Documents — drop files or click to browse
             </p>
-            <p className="text-[10px] text-muted-foreground/50 mt-2">
+            <p className="text-[10px] text-muted-foreground/70 mt-2">
               .txt .md .json .csv .dip — multiple files supported
             </p>
           </>
@@ -127,7 +127,7 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
             <p className="text-xs text-muted-foreground/90">
               Images — drop files or click to browse
             </p>
-            <p className="text-[10px] text-muted-foreground/50 mt-2">
+            <p className="text-[10px] text-muted-foreground/70 mt-2">
               .jpg .png .webp .gif — entities extracted on upload
             </p>
           </>
@@ -146,7 +146,7 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
       {!uploadingType && (
         <button
           onClick={() => document.getElementById("dir-input")?.click()}
-          className="w-full text-[10px] text-muted-foreground/50 hover:text-muted-foreground/80 transition-colors py-1"
+          className="w-full text-[10px] text-muted-foreground/70 hover:text-muted-foreground/80 transition-colors py-1"
         >
           or select a folder (text + images)
         </button>

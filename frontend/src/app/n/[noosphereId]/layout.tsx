@@ -49,7 +49,7 @@ export default function NoosphereLayout({
   if (!ready) {
     return (
       <div className="flex items-center justify-center h-64">
-        <span className="text-[10px] text-muted-foreground/40 font-mono">loading noosphere...</span>
+        <span className="text-[10px] text-muted-foreground/70 font-mono">loading noosphere...</span>
       </div>
     );
   }

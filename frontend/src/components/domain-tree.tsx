@@ -108,8 +108,8 @@ export function DomainTree({ domains, jobs = [] }: { domains: DomainInfo[]; jobs
           type="text"
           value={filter}
           onChange={(e) => { setFilter(e.target.value); setPage(0); }}
-          placeholder="filter domains..."
-          className="flex-1 text-xs bg-card/30 border border-border/30 rounded px-2 py-1 text-foreground/90 placeholder:text-muted-foreground/50 outline-none focus:border-border/60"
+          placeholder="Filter domains"
+          className="flex-1 text-xs bg-card/30 border border-border/30 rounded px-2 py-1 text-foreground/90 placeholder:text-muted-foreground/70 outline-none focus:border-border/60"
         />
         <div className="flex gap-1">
           {(["total", "text", "images", "name", "spec"] as SortKey[]).map((key) => (
@@ -119,7 +119,7 @@ export function DomainTree({ domains, jobs = [] }: { domains: DomainInfo[]; jobs
               className={`text-[9px] tracking-wider uppercase px-2 py-0.5 rounded border transition-colors ${
                 sortBy === key
                   ? "border-primary/50 text-primary bg-primary/10"
-                  : "border-border/20 text-muted-foreground/60 hover:text-muted-foreground/90"
+                  : "border-border/20 text-muted-foreground/70 hover:text-muted-foreground/90"
               }`}
             >
               {key}
@@ -161,7 +161,7 @@ export function DomainTree({ domains, jobs = [] }: { domains: DomainInfo[]; jobs
           );
         })}
         {visible.length === 0 && (
-          <div className="px-3 py-3 text-xs text-muted-foreground/50">No domains match &ldquo;{filter}&rdquo;</div>
+          <div className="px-3 py-3 text-xs text-muted-foreground/70">No domains match &ldquo;{filter}&rdquo;</div>
         )}
       </div>
       <div className="flex items-center justify-between text-xs text-muted-foreground/85">

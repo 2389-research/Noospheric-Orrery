@@ -40,7 +40,7 @@ export function InviteModal({
           <>
             <h2 className="text-foreground text-sm mb-5">Invite to your Noospheres</h2>
 
-            <label className="block text-muted-foreground/60 text-xs mb-1">Email</label>
+            <label className="block text-muted-foreground/70 text-xs mb-1">Email</label>
             <input
               autoFocus
               type="email"
@@ -51,7 +51,7 @@ export function InviteModal({
               className="w-full bg-background border border-border/30 rounded px-3 py-2 text-foreground text-sm mb-4 focus:outline-none focus:border-border/60"
             />
 
-            <label className="block text-muted-foreground/60 text-xs mb-2">Role</label>
+            <label className="block text-muted-foreground/70 text-xs mb-2">Role</label>
             <div className="flex gap-3 mb-5">
               {(["editor", "viewer"] as const).map((r) => (
                 <button
@@ -64,7 +64,7 @@ export function InviteModal({
                   }`}
                 >
                   <div className="capitalize">{r}</div>
-                  <div className="text-[10px] mt-0.5 text-muted-foreground/60">
+                  <div className="text-[10px] mt-0.5 text-muted-foreground/70">
                     {r === "editor" ? "Can upload & run pipeline" : "Read-only access"}
                   </div>
                 </button>
@@ -74,7 +74,7 @@ export function InviteModal({
             {error && <p className="text-red-400 text-xs mb-3">{error}</p>}
 
             <div className="flex justify-end gap-2">
-              <button onClick={onClose} className="px-4 py-2 text-xs text-muted-foreground/60 hover:text-muted-foreground">
+              <button onClick={onClose} className="px-4 py-2 text-xs text-muted-foreground/70 hover:text-muted-foreground">
                 Cancel
               </button>
               <button
@@ -99,7 +99,7 @@ export function InviteModal({
               <code className="text-accent text-xs flex-1 truncate">{appUrl}</code>
               <button
                 onClick={() => navigator.clipboard.writeText(appUrl)}
-                className="text-muted-foreground/50 hover:text-muted-foreground text-xs"
+                className="text-muted-foreground/70 hover:text-muted-foreground text-xs"
               >
                 Copy
               </button>

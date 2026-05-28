@@ -46,7 +46,7 @@ export function TypeDistribution({ entities, activeType, onTypeClick }: TypeDist
       </div>
       <div className="p-3 space-y-2">
         {types.length === 0 ? (
-          <p className="text-[10px] text-muted-foreground/60 py-2">no entities yet</p>
+          <p className="text-[10px] text-muted-foreground/70 py-2">no entities yet</p>
         ) : (
           types.map((type) => {
             const count = countByType[type] ?? 0;
@@ -83,7 +83,7 @@ export function TypeDistribution({ entities, activeType, onTypeClick }: TypeDist
                   {newCount > 0 ? (
                     <span className="text-emerald-400/90">+{newCount}</span>
                   ) : (
-                    <span className="text-muted-foreground/40">—</span>
+                    <span className="text-muted-foreground/70">—</span>
                   )}
                 </span>
               </button>

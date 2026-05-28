@@ -35,14 +35,14 @@ function WorkspaceRow({ workspace }: { workspace: Workspace }) {
           <span className="text-foreground text-xs">{workspace.name}</span>
         )}
         {workspace.description && (
-          <div className="text-[10px] text-muted-foreground/50 mt-0.5">{workspace.description}</div>
+          <div className="text-[10px] text-muted-foreground/70 mt-0.5">{workspace.description}</div>
         )}
       </div>
 
       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={() => setEditing(true)}
-          className="text-muted-foreground/50 hover:text-muted-foreground text-xs px-2 py-1"
+          className="text-muted-foreground/70 hover:text-muted-foreground text-xs px-2 py-1"
         >
           Rename
         </button>
@@ -55,7 +55,7 @@ function WorkspaceRow({ workspace }: { workspace: Workspace }) {
           </button>
         ) : (
           <div className="flex items-center gap-1">
-            <span className="text-muted-foreground/50 text-[10px]">Sure?</span>
+            <span className="text-muted-foreground/70 text-[10px]">Sure?</span>
             <button
               onClick={async () => {
                 await api.archiveWorkspace(workspace.id);
@@ -67,7 +67,7 @@ function WorkspaceRow({ workspace }: { workspace: Workspace }) {
             </button>
             <button
               onClick={() => setConfirming(false)}
-              className="text-muted-foreground/50 text-xs px-2 py-1"
+              className="text-muted-foreground/70 text-xs px-2 py-1"
             >
               No
             </button>
@@ -102,7 +102,7 @@ export default function NoospheresSettingsPage() {
       </div>
 
       {loading ? (
-        <p className="text-muted-foreground/50 text-xs">Loading...</p>
+        <p className="text-muted-foreground/70 text-xs">Loading...</p>
       ) : (
         <div className="space-y-2">
           {workspaces.map((ws) => (

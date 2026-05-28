@@ -18,7 +18,7 @@ export function DocList({ docs, selectedDocId, onSelectDoc, isRunning }: DocList
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border/20 shrink-0">
         <span className="text-[9px] tracking-[3px] text-muted-foreground/90 uppercase">Documents</span>
-        <span className="text-[10px] text-muted-foreground/60">{docs.length} docs</span>
+        <span className="text-[10px] text-muted-foreground/70">{docs.length} docs</span>
       </div>
 
       {/* Doc rows */}
@@ -42,7 +42,7 @@ export function DocList({ docs, selectedDocId, onSelectDoc, isRunning }: DocList
                 </span>
               </div>
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[9px] text-muted-foreground/60 truncate max-w-[120px]">
+                <span className="text-[9px] text-muted-foreground/70 truncate max-w-[120px]">
                   {doc.domains[0] ?? "—"}
                 </span>
                 <span className="text-[9px] text-muted-foreground/80 shrink-0 ml-1">

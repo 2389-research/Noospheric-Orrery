@@ -77,7 +77,7 @@ export function ReaderTooltip({ entity, x, y }: ReaderTooltipProps) {
         {/* Snippets */}
         {snippets.length > 0 && (
           <div className="space-y-1.5">
-            <div className="text-[9px] tracking-[1px] uppercase text-muted-foreground/60 border-t border-border/20 pt-2">
+            <div className="text-[9px] tracking-[1px] uppercase text-muted-foreground/70 border-t border-border/20 pt-2">
               Mentions in doc
             </div>
             {snippets.map((snippet, i) => (

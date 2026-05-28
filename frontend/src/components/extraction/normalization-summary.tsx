@@ -27,7 +27,7 @@ export function NormalizationSummary({ data }: NormalizationSummaryProps) {
           <span className="text-[9px] tracking-[3px] text-muted-foreground/90 uppercase">Normalization</span>
         </div>
         <div className="p-3">
-          <p className="text-[10px] text-muted-foreground/60 animate-pulse">loading…</p>
+          <p className="text-[10px] text-muted-foreground/70 animate-pulse">loading…</p>
         </div>
       </div>
     );
@@ -45,7 +45,7 @@ export function NormalizationSummary({ data }: NormalizationSummaryProps) {
       <div className="divide-y divide-border/20">
         {noMerges ? (
           <div className="px-4 py-3">
-            <p className="text-[10px] text-muted-foreground/50">no merges — all entities distinct</p>
+            <p className="text-[10px] text-muted-foreground/70">no merges — all entities distinct</p>
           </div>
         ) : (
           <>
@@ -72,7 +72,7 @@ export function NormalizationSummary({ data }: NormalizationSummaryProps) {
             <div>
               <span className="text-[11px] text-foreground/80">Manual review</span>
               {data.pending_reviews === 0 ? (
-                <p className="text-[9px] text-muted-foreground/50 mt-0.5">0 pending</p>
+                <p className="text-[9px] text-muted-foreground/70 mt-0.5">0 pending</p>
               ) : (
                 <p className="text-[9px] text-amber-400/80 mt-0.5">{data.pending_reviews} pending</p>
               )}

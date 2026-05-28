@@ -47,7 +47,7 @@ export function NoosphereSwitcher({ currentId }: { currentId: string }) {
         className="flex items-center gap-2 px-3 py-1 rounded border border-border/30 text-muted-foreground hover:text-foreground hover:border-border/50 text-xs transition-colors"
       >
         <span className="max-w-[180px] truncate">{currentName}</span>
-        <span className="text-muted-foreground/40">▾</span>
+        <span className="text-muted-foreground/70">▾</span>
       </button>
 
       {open && (

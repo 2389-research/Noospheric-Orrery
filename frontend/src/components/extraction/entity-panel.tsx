@@ -132,7 +132,7 @@ export function EntityPanel({
       <div className="p-3">
         {sorted.length === 0 ? (
           <div className="flex items-center justify-center py-12">
-            <p className="text-[11px] text-muted-foreground/60">
+            <p className="text-[11px] text-muted-foreground/70">
               {activeTab === "new"
                 ? "no new entities in this batch"
                 : activeTab === "all"

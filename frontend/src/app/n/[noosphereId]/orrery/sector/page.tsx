@@ -137,7 +137,7 @@ function SectorPageInner() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-          placeholder="search the knowledge graph..."
+          placeholder="Search the knowledge graph"
           style={{
             width: 320, padding: "8px 14px", fontSize: 12,
             fontFamily: "'Courier New', monospace",

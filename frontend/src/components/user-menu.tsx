@@ -20,14 +20,14 @@ export function UserMenu() {
   }, []);
 
   if (loading) {
-    return <span className="text-[10px] text-muted-foreground/40">...</span>;
+    return <span className="text-[10px] text-muted-foreground/70">...</span>;
   }
 
   if (!user) {
     return (
       <button
         onClick={signIn}
-        className="text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors border border-border/30 rounded px-2 py-1"
+        className="text-[10px] text-muted-foreground/70 hover:text-muted-foreground transition-colors border border-border/30 rounded px-2 py-1"
       >
         sign in
       </button>
@@ -61,7 +61,7 @@ export function UserMenu() {
           <div className="px-3 py-2 border-b border-border/30">
             <div className="text-[10px] text-foreground/80 truncate">{user.email}</div>
             {session?.role && (
-              <div className="text-[9px] text-muted-foreground/50 mt-0.5 capitalize">{session.role}</div>
+              <div className="text-[9px] text-muted-foreground/70 mt-0.5 capitalize">{session.role}</div>
             )}
           </div>
 
@@ -90,7 +90,7 @@ export function UserMenu() {
               setOpen(false);
               signOut();
             }}
-            className="w-full text-left px-3 py-2 text-xs text-muted-foreground/60 hover:text-muted-foreground hover:bg-accent/30 transition-colors"
+            className="w-full text-left px-3 py-2 text-xs text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent/30 transition-colors"
           >
             Sign out
           </button>
