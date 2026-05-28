@@ -1,11 +1,11 @@
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures";
 
-// Run axe against each top-level route. We assert WCAG 2.0 Level A as the
-// floor — these are the must-fix violations from issue #7 (Raj). AA tier
-// is run separately below so we can lock in the Level A baseline even
-// while AA work is in flight.
-const ROUTES = ["upload", "pipeline", "entities", "orrery"] as const;
+// Run axe against every user-facing route. We assert WCAG 2.1 A + AA —
+// these are the bars issue #7 (Raj) measured against. Any violation
+// fails the build.
+const NOOSPHERE_ROUTES = ["upload", "pipeline", "entities", "orrery"] as const;
+const SETTINGS_ROUTES = ["/settings/noospheres", "/settings/team"] as const;
 
 function formatViolations(violations: Awaited<ReturnType<AxeBuilder["analyze"]>>["violations"]) {
   return violations
@@ -17,27 +17,33 @@ function formatViolations(violations: Awaited<ReturnType<AxeBuilder["analyze"]>>
     .join("\n");
 }
 
-for (const route of ROUTES) {
-  test(`a11y Level A: /n/{id}/${route}`, async ({ page, noosphereId }) => {
-    await page.goto(`/n/${noosphereId}/${route}`);
-    // Avoid networkidle — the orrery page keeps a websocket open.
-    await page.waitForLoadState("domcontentloaded");
+async function scan(page: import("@playwright/test").Page, tags: string[]) {
+  await page.waitForLoadState("domcontentloaded");
+  return new AxeBuilder({ page }).withTags(tags).analyze();
+}
 
-    const results = await new AxeBuilder({ page }).withTags(["wcag2a"]).analyze();
+for (const route of NOOSPHERE_ROUTES) {
+  for (const [label, tags] of [["A", ["wcag2a"]], ["AA", ["wcag2aa"]]] as const) {
+    test(`a11y Level ${label}: /n/{id}/${route}`, async ({ page, noosphereId }) => {
+      await page.goto(`/n/${noosphereId}/${route}`);
+      const results = await scan(page, tags as string[]);
+      if (results.violations.length > 0) {
+        console.log(`\n[${route}] ${results.violations.length} Level ${label} violation(s):\n${formatViolations(results.violations)}`);
+      }
+      expect(results.violations, `${results.violations.length} WCAG-${label} violations on /${route}`).toEqual([]);
+    });
+  }
+}
 
-    if (results.violations.length > 0) {
-      console.log(`\n[${route}] ${results.violations.length} Level A violation(s):\n${formatViolations(results.violations)}`);
-    }
-    expect(results.violations, `${results.violations.length} WCAG-A violations on /${route}`).toEqual([]);
-  });
-
-  test(`a11y Level AA: /n/{id}/${route}`, async ({ page, noosphereId }) => {
-    await page.goto(`/n/${noosphereId}/${route}`);
-    await page.waitForLoadState("domcontentloaded");
-    const results = await new AxeBuilder({ page }).withTags(["wcag2aa"]).analyze();
-    if (results.violations.length > 0) {
-      console.log(`\n[${route}] ${results.violations.length} Level AA violation(s):\n${formatViolations(results.violations)}`);
-    }
-    expect(results.violations, `${results.violations.length} WCAG-AA violations on /${route}`).toEqual([]);
-  });
+for (const route of SETTINGS_ROUTES) {
+  for (const [label, tags] of [["A", ["wcag2a"]], ["AA", ["wcag2aa"]]] as const) {
+    test(`a11y Level ${label}: ${route}`, async ({ page }) => {
+      await page.goto(route);
+      const results = await scan(page, tags as string[]);
+      if (results.violations.length > 0) {
+        console.log(`\n[${route}] ${results.violations.length} Level ${label} violation(s):\n${formatViolations(results.violations)}`);
+      }
+      expect(results.violations, `${results.violations.length} WCAG-${label} violations on ${route}`).toEqual([]);
+    });
+  }
 }
