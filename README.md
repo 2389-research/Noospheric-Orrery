@@ -130,6 +130,8 @@ cd frontend && NEXT_PUBLIC_AUTH_MODE=noop BACKEND_URL=http://localhost:8000 npm 
 
 ## Testing
 
+### Backend (pytest)
+
 ```bash
 # Run in Docker (recommended — matches production environment)
 docker run --rm \
@@ -138,10 +140,29 @@ docker run --rm \
   -v $(pwd)/orchestrator/specs:/app/orchestrator/specs \
   -w /app/orchestrator \
   ghcr.io/2389-research/orrery-orchestrator:latest \
-  sh -c "uv pip install pytest httpx && uv run python -m pytest tests/ -v"
+  sh -c "uv pip install pytest httpx pytest-asyncio && uv run python -m pytest tests/ -v"
 ```
 
-61 tests covering: DB schema + migrations, config defaults, auth/workspace CRUD, ingest pipeline, image pipeline, entity normalization, domain layout, search, simmer triggers.
+73+ tests covering: DB schema + migrations, config defaults, auth/noosphere CRUD, ingest pipeline, image pipeline, entity normalization, domain layout, search, simmer triggers, REST hygiene (201 + Location headers on resource creation).
+
+### Frontend (Playwright + axe)
+
+Requires the stack to be running at `localhost:3100` and `:8100` (i.e. `docker-compose up`).
+
+```bash
+cd frontend
+npm install
+npx playwright install chromium   # one-time
+npm run test:e2e                   # headless
+npm run test:e2e:ui                # Playwright UI mode (great for debugging)
+```
+
+18+ tests covering:
+- **Smoke**: every top-level route renders, including a real file upload via the dropzone
+- **Accessibility**: WCAG 2.1 Level A + AA (via `@axe-core/playwright`) across upload / pipeline / entities / orrery / settings — fails on any violation
+- **Copy**: no raw internal identifiers (`simmer_domain`, `extract_batch`) leak into the UI, placeholders are sentence-cased, timestamps render "just now" not "0s ago"
+
+Each test creates a throwaway noosphere via the `/workspaces` API and soft-deletes on teardown, so tests don't depend on local state.
 
 ## API Endpoints
 
