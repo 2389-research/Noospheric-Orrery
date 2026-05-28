@@ -35,7 +35,9 @@ test.describe("copy: input placeholders", () => {
     test(`${route} search input has sentence-cased placeholder`, async ({ page, noosphereId }) => {
       await page.goto(`/n/${noosphereId}/${route}`);
       await page.waitForLoadState("domcontentloaded");
-      const searchInput = page.locator('input[type="text"][placeholder]').first();
+      // Target the textbox by its accessible name rather than locator order,
+      // so this can't latch onto a different input if the layout shifts.
+      const searchInput = page.getByRole("textbox", { name: /search/i });
       const placeholder = await searchInput.getAttribute("placeholder");
       expect(placeholder).toMatch(expected);
       // Belt-and-suspenders: no trailing dots, no lowercase first letter.
@@ -46,15 +48,13 @@ test.describe("copy: input placeholders", () => {
 });
 
 test.describe("copy: timestamps", () => {
-  test("timeSince renders 'just now' (not '0s ago') for fresh timestamps", async ({ page }) => {
-    // Probe the helper directly by mounting it on the home page through a
-    // script — we don't want this test to require a fresh job to exist.
-    // The helper lives at /lib/labels.ts and is bundled into the client.
-    // Cheapest verification: visit a page that uses it on a known-recent
-    // job, and assert "0s ago" never appears in the body. Settings page
-    // also lists noospheres with createdAt so it exercises the same path.
-    await page.goto(`/`);
+  test("timeSince renders 'just now' (not '0s ago') for fresh timestamps", async ({ page, noosphereId }) => {
+    // /settings/noospheres renders one row per noosphere with a
+    // relative timestamp on `createdAt`. The fixture just created one
+    // < 1 second ago — perfect for catching a "0s ago" regression.
+    await page.goto(`/settings/noospheres`);
     await page.waitForLoadState("domcontentloaded");
+    await expect(page.getByText(new RegExp(`e2e-\\d+`)).first()).toBeVisible({ timeout: 10_000 });
     const bodyText = await page.locator("body").innerText();
     expect(bodyText).not.toMatch(/\b0s ago\b/);
   });
