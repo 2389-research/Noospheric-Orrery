@@ -19,10 +19,12 @@ The system is queryable from the first upload. Domain-specific richness comes la
 git clone https://github.com/2389-research/Noospheric-Orrery.git
 cd Noospheric-Orrery
 cp .env.example .env    # edit with your credentials
-docker compose up
+docker compose up       # or: docker-compose up
 ```
 
 Open http://localhost:3100 — no sign-in required.
+
+> If you have an older standalone `docker-compose` binary (no `docker compose` v2 subcommand), use `docker-compose` in place of `docker compose` everywhere in this README. If you're upgrading from an older cloud-era checkout that ran a Firebase emulator container, add `--remove-orphans` to the first `up` to clean it up.
 
 ### Three Backend Options
 
@@ -72,7 +74,7 @@ Zero cloud dependencies. Text and image extraction, search, simmering all work l
 ┌─────────────────────────────────────────────────────────┐
 │  frontend (Next.js, :3100)                              │
 │  Upload / Pipeline / Entities / Orrery / Simmer detail  │
-│  Multi-workspace, image search, ImagePane               │
+│  Multi-noosphere, image search, ImagePane               │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -108,10 +110,10 @@ All LLM calls go through `orrery-relay` (`packages/orrery-relay/`), which handle
 - `transform()` places new domains without re-fitting (stable positions)
 - `NUMBA_CPU_NAME=generic` fixes ARM Docker SIGILL (numba#10388)
 
-### Multi-Workspace
-- Multiple workspaces via JSON registry + separate SQLite files
-- Workspace switcher in the UI
-- Each workspace is fully isolated
+### Multi-Noosphere
+- Each noosphere is a fully isolated knowledge graph — its own SQLite file under `data/workspaces/{id}/`, tracked by a JSON registry at `data/workspaces/registry.json`
+- Create/switch noospheres from the UI at `/settings/noospheres`, or via the `/workspaces` API (the endpoint keeps the legacy name from an earlier cloud-era design)
+- API calls scope to a noosphere via the `X-Workspace-Id` header; omitting it targets the `default` noosphere
 
 ## Running Without Docker
 
@@ -156,9 +158,13 @@ docker run --rm \
 | `POST` | `/simmer/{domain_path}` | Trigger domain-specific text simmering |
 | `POST` | `/simmer/{domain_path}/image` | Trigger domain-specific image simmering |
 | `GET` | `/stats` | Counts (documents, entities, domains, images, active jobs) |
-| `GET` | `/workspaces` | List workspaces |
-| `POST` | `/workspaces` | Create workspace |
+| `GET` | `/workspaces` | List noospheres |
+| `POST` | `/workspaces` | Create a noosphere |
+| `PATCH` | `/workspaces/{id}` | Rename a noosphere |
+| `DELETE` | `/workspaces/{id}` | Archive a noosphere (soft delete) |
 | `GET` | `/health` | Health check |
+
+All data endpoints (ingest, documents, entities, graph, search, simmer, …) accept an optional `X-Workspace-Id: <id>` header to scope the request to a specific noosphere. Omit the header to target `default`. The `/workspaces` path is the legacy name from a cloud-era multi-tenancy design — the UI calls these "noospheres."
 
 Full interactive docs at http://localhost:8100/docs
 

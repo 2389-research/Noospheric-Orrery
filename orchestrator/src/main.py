@@ -1,13 +1,45 @@
+import os
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .db import init_db
+from .repositories.factory import _sqlite_workspace_db_path
+
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_settings()
-    init_db(settings.db_path)
+    # Run schema + migrations for the default noosphere up front so the first
+    # request doesn't pay the cost (and doesn't collide with the worker).
+    init_db(_sqlite_workspace_db_path("default"))
+    # Also init any noospheres already in the registry so their first request
+    # is a fast read instead of a write-locked migration.
+    registry_path = os.path.join(
+        os.path.dirname(get_settings().db_path), "workspaces", "registry.json"
+    )
+    registry: list[dict] = []
+    try:
+        import json
+        if os.path.exists(registry_path):
+            with open(registry_path) as f:
+                registry = json.load(f)
+    except Exception as e:
+        # File missing or unparseable — skip warmup; lazy init still works.
+        logger.warning("Noosphere registry unreadable (%s): %s", registry_path, e)
+    for ws in registry:
+        if ws.get("status") == "archived":
+            continue
+        ws_id = ws.get("id")
+        if not ws_id:
+            logger.warning("Skipping registry entry without id: %r", ws)
+            continue
+        try:
+            init_db(_sqlite_workspace_db_path(ws_id))
+        except Exception:
+            # One bad noosphere shouldn't stop the others from being warmed.
+            logger.warning("Noosphere warmup failed for %s", ws_id, exc_info=True)
     # Pre-warm SentenceTransformer model so first /graph request isn't slow
     try:
         from .pipeline.domain_layout import _embed_texts
