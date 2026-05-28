@@ -1,10 +1,13 @@
 import os
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .db import init_db
 from .repositories.factory import _sqlite_workspace_db_path
+
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -13,19 +16,20 @@ async def lifespan(app: FastAPI):
     init_db(_sqlite_workspace_db_path("default"))
     # Also init any noospheres already in the registry so their first request
     # is a fast read instead of a write-locked migration.
+    registry_path = os.path.join(
+        os.path.dirname(get_settings().db_path), "workspaces", "registry.json"
+    )
     try:
         import json
-        registry_path = os.path.join(
-            os.path.dirname(get_settings().db_path), "workspaces", "registry.json"
-        )
         if os.path.exists(registry_path):
             with open(registry_path) as f:
                 for ws in json.load(f):
                     if ws.get("status") == "archived":
                         continue
                     init_db(_sqlite_workspace_db_path(ws["id"]))
-    except Exception:
-        pass  # Best-effort warmup; lazy init still works
+    except Exception as e:
+        # Non-fatal: per-request init_db will still run if warmup misses one.
+        logger.warning("Noosphere warmup failed for %s: %s", registry_path, e)
     # Pre-warm SentenceTransformer model so first /graph request isn't slow
     try:
         from .pipeline.domain_layout import _embed_texts
