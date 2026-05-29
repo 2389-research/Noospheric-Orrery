@@ -61,13 +61,13 @@ export function StatStrip({ job, typeNames, totalMerges, isRunning }: StatStripP
       <div className="px-4 py-3 border-r border-border/30">
         <p className="text-xl font-bold text-blue-400">
           {isRunning && docsProcessed === 0 ? (
-            <span className="animate-pulse text-muted-foreground/60">—</span>
+            <span className="animate-pulse text-muted-foreground/70">—</span>
           ) : (
             docsProcessed
           )}
         </p>
         <p className="text-[9px] tracking-[3px] text-muted-foreground/90 mt-1">DOCS</p>
-        <p className="text-[9px] text-muted-foreground/60 mt-0.5">
+        <p className="text-[9px] text-muted-foreground/70 mt-0.5">
           {job?.status === "failed" ? (
             <span className="text-red-400/80">partial results</span>
           ) : (
@@ -80,9 +80,9 @@ export function StatStrip({ job, typeNames, totalMerges, isRunning }: StatStripP
       <div className="px-4 py-3 border-r border-border/30">
         {isRunning && !results ? (
           <>
-            <p className="text-xl font-bold text-muted-foreground/60 animate-pulse">—</p>
+            <p className="text-xl font-bold text-muted-foreground/70 animate-pulse">—</p>
             <p className="text-[9px] tracking-[3px] text-muted-foreground/90 mt-1">ENTITIES</p>
-            <p className="text-[9px] text-muted-foreground/60 mt-0.5">extracting…</p>
+            <p className="text-[9px] text-muted-foreground/70 mt-0.5">extracting…</p>
           </>
         ) : (
           <>
@@ -93,9 +93,9 @@ export function StatStrip({ job, typeNames, totalMerges, isRunning }: StatStripP
               )}
             </p>
             <p className="text-[9px] tracking-[3px] text-muted-foreground/90 mt-1">ENTITIES</p>
-            <p className="text-[9px] text-muted-foreground/60 mt-0.5">
+            <p className="text-[9px] text-muted-foreground/70 mt-0.5">
               {entitiesNew === 0 ? (
-                <span className="text-muted-foreground/50">all matched existing</span>
+                <span className="text-muted-foreground/70">all matched existing</span>
               ) : (
                 `${entitiesMatched} matched`
               )}
@@ -108,22 +108,22 @@ export function StatStrip({ job, typeNames, totalMerges, isRunning }: StatStripP
       <div className="px-4 py-3 border-r border-border/30">
         <p className="text-xl font-bold text-purple-400">{typeCount > 0 ? typeCount : "—"}</p>
         <p className="text-[9px] tracking-[3px] text-muted-foreground/90 mt-1">TYPES</p>
-        <p className="text-[9px] text-muted-foreground/60 mt-0.5">{typeSubLabel || "—"}</p>
+        <p className="text-[9px] text-muted-foreground/70 mt-0.5">{typeSubLabel || "—"}</p>
       </div>
 
       {/* MERGES */}
       <div className="px-4 py-3 border-r border-border/30">
         {isRunning && !results ? (
           <>
-            <p className="text-xl font-bold text-muted-foreground/60 animate-pulse">—</p>
+            <p className="text-xl font-bold text-muted-foreground/70 animate-pulse">—</p>
             <p className="text-[9px] tracking-[3px] text-muted-foreground/90 mt-1">MERGES</p>
-            <p className="text-[9px] text-muted-foreground/60 mt-0.5">after norm.</p>
+            <p className="text-[9px] text-muted-foreground/70 mt-0.5">after norm.</p>
           </>
         ) : (
           <>
             <p className="text-xl font-bold text-amber-400">{totalMerges}</p>
             <p className="text-[9px] tracking-[3px] text-muted-foreground/90 mt-1">MERGES</p>
-            <p className="text-[9px] text-muted-foreground/60 mt-0.5">after normalization</p>
+            <p className="text-[9px] text-muted-foreground/70 mt-0.5">after normalization</p>
           </>
         )}
       </div>
@@ -132,7 +132,7 @@ export function StatStrip({ job, typeNames, totalMerges, isRunning }: StatStripP
       <div className="px-4 py-3">
         <p className="text-xl font-bold text-cyan-400">{duration}</p>
         <p className="text-[9px] tracking-[3px] text-muted-foreground/90 mt-1">DURATION</p>
-        <p className="text-[9px] text-muted-foreground/60 mt-0.5">{avgDuration}</p>
+        <p className="text-[9px] text-muted-foreground/70 mt-0.5">{avgDuration}</p>
       </div>
     </div>
   );

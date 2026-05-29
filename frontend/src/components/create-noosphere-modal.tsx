@@ -35,7 +35,7 @@ export function CreateNoosphereModal({
       <div className="bg-card border border-border/50 rounded-lg p-6 w-96">
         <h2 className="text-foreground text-sm mb-4">Create a Noosphere</h2>
 
-        <label className="block text-muted-foreground/60 text-xs mb-1">Name</label>
+        <label className="block text-muted-foreground/70 text-xs mb-1">Name</label>
         <input
           autoFocus
           value={name}
@@ -45,7 +45,7 @@ export function CreateNoosphereModal({
           className="w-full bg-background border border-border/30 rounded px-3 py-2 text-foreground text-sm mb-3 focus:outline-none focus:border-border/60"
         />
 
-        <label className="block text-muted-foreground/60 text-xs mb-1">
+        <label className="block text-muted-foreground/70 text-xs mb-1">
           Description <span className="text-muted-foreground/30">(optional)</span>
         </label>
         <input
@@ -60,7 +60,7 @@ export function CreateNoosphereModal({
         <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-xs text-muted-foreground/60 hover:text-muted-foreground"
+            className="px-4 py-2 text-xs text-muted-foreground/70 hover:text-muted-foreground"
           >
             Cancel
           </button>

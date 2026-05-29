@@ -13,7 +13,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
       <div className="flex items-center gap-4 px-6 py-3 border-b border-border/50 bg-card/50">
         <Link
           href="/"
-          className="text-muted-foreground/60 hover:text-muted-foreground text-xs transition-colors"
+          className="text-muted-foreground/70 hover:text-muted-foreground text-xs transition-colors"
         >
           ← Back
         </Link>
@@ -25,7 +25,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
               className={`text-xs transition-colors ${
                 pathname === "/settings/noospheres"
                   ? "text-foreground"
-                  : "text-muted-foreground/60 hover:text-muted-foreground"
+                  : "text-muted-foreground/70 hover:text-muted-foreground"
               }`}
             >
               Noospheres
@@ -35,7 +35,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
               className={`text-xs transition-colors ${
                 pathname === "/settings/team"
                   ? "text-foreground"
-                  : "text-muted-foreground/60 hover:text-muted-foreground"
+                  : "text-muted-foreground/70 hover:text-muted-foreground"
               }`}
             >
               Team

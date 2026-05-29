@@ -7,7 +7,7 @@ import os
 import json
 import uuid
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
 from ..auth import AuthUser, require_role
@@ -60,9 +60,10 @@ class RenameWorkspaceRequest(BaseModel):
 
 # --- Endpoints ---
 
-@router.post("/workspaces")
+@router.post("/workspaces", status_code=status.HTTP_201_CREATED)
 async def create_workspace(
     req: CreateWorkspaceRequest,
+    response: Response,
     user: AuthUser = Depends(require_role("admin")),
 ):
     ws_id = str(uuid.uuid4())[:8]
@@ -77,6 +78,7 @@ async def create_workspace(
         "status": "active", "createdAt": datetime.now(timezone.utc).isoformat(),
     })
     _save_registry(registry)
+    response.headers["Location"] = f"/workspaces/{ws_id}"
     return {"workspaceId": ws_id, "name": req.name}
 
 

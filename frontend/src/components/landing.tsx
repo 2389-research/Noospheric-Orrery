@@ -11,7 +11,7 @@ export function Landing() {
         <h1 className="text-2xl font-light tracking-[8px] text-muted-foreground uppercase">
           Noospheric Orrery
         </h1>
-        <p className="text-sm text-muted-foreground/60 leading-relaxed">
+        <p className="text-sm text-muted-foreground/70 leading-relaxed">
           An adaptive knowledge graph. Upload documents, discover domains,
           extract entities, and explore the result as an interactive galaxy map.
         </p>
@@ -32,7 +32,7 @@ export function Landing() {
             Sign in with Google
           </span>
         </button>
-        <span className="text-[10px] text-muted-foreground/40">
+        <span className="text-[10px] text-muted-foreground/70">
           Sign in to access your knowledge graph
         </span>
       </div>
@@ -40,17 +40,17 @@ export function Landing() {
       <div className="mt-8 grid grid-cols-3 gap-6 max-w-md text-center">
         <div className="space-y-1">
           <div className="text-lg text-muted-foreground/30">01</div>
-          <div className="text-[10px] text-muted-foreground/50 uppercase tracking-wider">Upload</div>
+          <div className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">Upload</div>
           <div className="text-[10px] text-muted-foreground/30">Drop docs in</div>
         </div>
         <div className="space-y-1">
           <div className="text-lg text-muted-foreground/30">02</div>
-          <div className="text-[10px] text-muted-foreground/50 uppercase tracking-wider">Extract</div>
+          <div className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">Extract</div>
           <div className="text-[10px] text-muted-foreground/30">Entities emerge</div>
         </div>
         <div className="space-y-1">
           <div className="text-lg text-muted-foreground/30">03</div>
-          <div className="text-[10px] text-muted-foreground/50 uppercase tracking-wider">Explore</div>
+          <div className="text-[10px] text-muted-foreground/70 uppercase tracking-wider">Explore</div>
           <div className="text-[10px] text-muted-foreground/30">Galaxy map</div>
         </div>
       </div>

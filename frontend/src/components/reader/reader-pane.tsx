@@ -158,13 +158,13 @@ export function ReaderPane({ documentId, onClose, onNavigateEntity }: ReaderPane
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-[11px] text-foreground/90 truncate">{data.document.title}</span>
           {data.document.domains[0] && (
-            <span className="text-[9px] text-muted-foreground/60 shrink-0">
+            <span className="text-[9px] text-muted-foreground/70 shrink-0">
               {data.document.domains[0]}
             </span>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className="text-[9px] text-muted-foreground/60">
+          <span className="text-[9px] text-muted-foreground/70">
             {data.total_mentions} mentions
           </span>
           {pinned && (

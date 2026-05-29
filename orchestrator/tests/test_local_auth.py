@@ -13,10 +13,11 @@ def test_provision_returns_workspaces(test_client, test_store):
 
 def test_workspace_crud(test_client, test_store):
     """Create, list, rename, archive workspaces."""
-    # Create
+    # Create — 201 per RFC 7231 §4.3.3 for resource creation.
     resp = test_client.post("/workspaces", json={"name": "Test WS"})
-    assert resp.status_code == 200
+    assert resp.status_code == 201
     ws_id = resp.json()["workspaceId"]
+    assert resp.headers.get("Location") == f"/workspaces/{ws_id}"
 
     # List
     resp = test_client.get("/workspaces")
