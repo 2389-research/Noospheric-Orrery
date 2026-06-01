@@ -1,4 +1,4 @@
-# ABOUTME: Build and push Docker images to GHCR when a GitHub release is published.
+# ABOUTME: Build and push Docker images to GHCR on every push to main and on releases.
 # ABOUTME: Builds orchestrator, worker, and frontend images in parallel via matrix strategy.
 
 name: Release Docker Images
@@ -6,6 +6,8 @@ name: Release Docker Images
 on:
   release:
     types: [published]
+  push:
+    branches: [main]
 
 env:
   REGISTRY: ghcr.io
@@ -52,8 +54,12 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
           tags: |
+            # semver tag from GitHub releases (e.g. v0.4.0 -> :0.4.0)
             type=semver,pattern={{version}}
+            # :latest from every main push + every release
             type=raw,value=latest
+            # short SHA tag so users can pin to a specific commit
+            type=sha,format=short
 
       - name: Build and push image
         uses: docker/build-push-action@v6
