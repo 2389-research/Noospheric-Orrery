@@ -20,6 +20,7 @@ from ..pipeline.extractor import extract_document
 from ..pipeline.normalizer import normalize_entity
 from ..pipeline.cooccurrence import compute_cooccurrence_edges
 from ..pipeline.image_prep import is_image_file
+from ..pipeline.file_extractor import extract_text, NOTEBOOK_EXTENSIONS, PDF_EXTENSIONS, DOCX_EXTENSIONS, ALL_SUPPORTED_EXTENSIONS
 
 router = APIRouter()
 
@@ -327,6 +328,10 @@ async def ingest_file(
     settings = get_settings()
     os.makedirs(settings.documents_dir, exist_ok=True)
 
+    suffix = Path(title).suffix.lower()
+    if suffix not in ALL_SUPPORTED_EXTENSIONS:
+        raise HTTPException(status_code=415, detail=f"Unsupported file type: {suffix or '(no extension)'}")
+
     store = auth.store
     try:
         if is_image_file(title):
@@ -335,10 +340,11 @@ async def ingest_file(
                 f.write(file_bytes)
             result = await _ingest_image(store, title, file_bytes, doc_path)
         else:
-            content = file_bytes.decode("utf-8")
+            content = extract_text(title, file_bytes)
+            print(content)
             doc_path = os.path.join(settings.documents_dir, f"{uuid.uuid4()}_{title}")
-            with open(doc_path, "w") as f:
-                f.write(content)
+            with open(doc_path, "wb") as f:
+                f.write(file_bytes)
             result = await _ingest_document(store, title, content, doc_path)
     finally:
         store.close()
@@ -357,20 +363,22 @@ async def ingest_directory(request: DirectoryIngestRequest, auth: AuthStore = De
     store = auth.store
     results = []
     try:
-        text_exts = {".txt", ".md", ".json", ".csv", ".dip"}
-        image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
         for file_path in sorted(dir_path.rglob("*")):
             if not file_path.is_file():
                 continue
             suffix = file_path.suffix.lower()
-            if suffix in text_exts:
-                content = file_path.read_text(errors="replace")
-                result = await _ingest_document(store, file_path.stem, content, str(file_path))
-                results.append(result)
-            elif suffix in image_exts:
-                file_bytes = file_path.read_bytes()
+            if suffix not in ALL_SUPPORTED_EXTENSIONS:
+                continue
+            file_bytes = file_path.read_bytes()
+            if is_image_file(file_path.name):
                 result = await _ingest_image(store, file_path.name, file_bytes, str(file_path))
-                results.append(result)
+            else:
+                try:
+                    content = extract_text(file_path.name, file_bytes)
+                except Exception:
+                    continue
+                result = await _ingest_document(store, file_path.stem, content, str(file_path))
+            results.append(result)
     finally:
         store.close()
 
