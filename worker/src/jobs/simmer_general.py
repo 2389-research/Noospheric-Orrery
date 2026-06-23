@@ -88,6 +88,107 @@ that someone searching for the image content would find it from the description 
 """
 
 
+GOLDEN_TAXONOMY = """- Person — people, speakers, authors, creators
+- Organization — companies, groups, teams, brands
+- Topic — concepts, ideas, theories, fields, subjects
+- Event — happenings, milestones, dates, releases
+- Location — places, regions, settings, venues
+- Thing — objects, tools, products, materials, artifacts"""
+
+GOLDEN_MAP_PROMPT = """You are an entity extraction system. Extract EVERY real named entity from the text below.
+
+Entity type taxonomy:
+{tax}
+
+TEXT:
+{chunk}
+
+Rules:
+- Extract only entities explicitly present in THIS text — do not invent.
+- Normalize names: lowercase, strip whitespace.
+- Be exhaustive about REAL entities: every named person, org, product, place, event, concept.
+- DO NOT extract metadata as entities: no bare dates/timestamps, no filenames, no UUIDs/IDs, no URLs, no raw numbers."""
+
+GOLDEN_MAP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "entities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "type": {"type": "string"}},
+                "required": ["name", "type"],
+            },
+        }
+    },
+    "required": ["entities"],
+}
+
+
+async def _build_golden_set_mapreduce(sample_chunks, settings, job_id: str, db_path: str) -> str:
+    """Decomposed golden-set generation for local models.
+
+    MAP: one small extraction call per chunk (no tools, no agentic loop).
+    REDUCE: pure-Python merge + dedupe across chunks.
+
+    Replaces the agentic refine() generator, which stalls on local models
+    (gemma4:26b loops on the read tool → empty candidate). Deterministic.
+    """
+    relay = Relay.from_settings(settings)
+    model = settings.classification_model
+    merged: dict[tuple, dict] = {}
+    per_chunk = []
+    for chunk in sample_chunks:
+        text = chunk[1]  # (id, text, title)
+        try:
+            result = await relay.complete_structured(
+                model=model, max_tokens=2048,
+                messages=[{"role": "user", "content": GOLDEN_MAP_PROMPT.format(tax=GOLDEN_TAXONOMY, chunk=text)}],
+                schema=GOLDEN_MAP_SCHEMA,
+                tool_name="extract_entities",
+                tool_description="Extract named entities from the text",
+            )
+            ents = result.get("entities", []) if isinstance(result, dict) else []
+        except Exception as e:
+            print(f"  [golden_set map] chunk error: {e}", flush=True)
+            ents = []
+        per_chunk.append(len(ents))
+        for e in ents:
+            name = str(e.get("name", "")).lower().strip()
+            etype = str(e.get("type", "")).strip().capitalize()
+            if name and (name, etype) not in merged:
+                merged[(name, etype)] = {"name": name, "type": etype}
+
+    golden = sorted(merged.values(), key=lambda e: (e["type"], e["name"]))
+    print(f"  [golden_set] map-reduce: {len(golden)} entities from {len(sample_chunks)} chunks (per-chunk: {per_chunk})", flush=True)
+
+    md = "\n".join([
+        "# Golden Set\n",
+        "## Entity Type Taxonomy",
+        GOLDEN_TAXONOMY,
+        "\n## Reference Entities\n",
+        "```json",
+        json.dumps(golden, indent=2),
+        "```",
+    ])
+
+    # Record one golden_set iteration row so the trajectory/monitor shows the phase
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO simmer_iterations (id, job_id, phase, iteration, scores, composite, key_change, asi, judge_mode, regressed, candidate_preview) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), job_id, "golden_set", 0, json.dumps({}), None,
+             f"map-reduce decomposed generation: {len(golden)} entities (no agentic loop)",
+             None, "map-reduce", False, None),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return md
+
+
 async def _parse_judgment_file(judgment_text: str, seed_scores: dict[str, int], settings) -> list[dict]:
     """Use Haiku to extract per-criterion details from a judgment file."""
     relay = Relay.from_settings(settings)
@@ -252,53 +353,12 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         golden_best = golden_set_path.read_text()
         print(f"Resuming general spec — reusing existing golden set ({len(golden_best)} chars, job {job_id})", flush=True)
     else:
-        print(f"Simmering general spec ({len(sample_chunks)} chunks, job {job_id})", flush=True)
-        golden_result = await refine(
-            artifact=str(seed_path),
-            criteria={
-                "coverage": "The reference entity list contains every named entity found in the sample documents — no entity left behind",
-                "precision": "Every entity in the reference list actually appears in at least one sample document — no hallucinated entities",
-                "taxonomy_quality": "Entity types are meaningful, consistent, and correctly assigned — each entity has the right type",
-            },
-            primary="coverage",
-            iterations=iterations,
-            judge_mode="board",
-            judge_panel=[
-                {
-                    "name": "Coverage & Depth",
-                    "lens": (
-                        "Read every sample document carefully. Cross-reference the reference entity JSON list against the documents. "
-                        "Are there people, organizations, products, places, or events mentioned in the docs that are missing from the list? "
-                        "The list must be exhaustive — every named entity in the corpus should appear."
-                    ),
-                },
-                {
-                    "name": "Precision & Quality",
-                    "lens": (
-                        "For each entity in the reference JSON list, verify it actually appears in at least one sample document. "
-                        "Check that entity types are correct — is a product labeled as an organization? Is a technology labeled as a thing? "
-                        "Flag any hallucinated entities not grounded in the source text."
-                    ),
-                },
-            ],
-            output_dir=specs_dir / "general_golden",
-            generator_model=settings.classification_model,
-            judge_model=settings.classification_model,
-            clerk_model=settings.classification_model,
-            background=(
-                f"Sample chunks are in {sample_dir}. Read ALL of them.\n"
-                f"Each file is a chunk from a larger document (source title in the header).\n\n"
-                f"The golden set must contain TWO things:\n"
-                f"1. An entity type taxonomy (the categories)\n"
-                f"2. A JSON array of EVERY entity found in the sample chunks\n\n"
-                f"The reference entity list is the ground truth — extraction specs will be empirically "
-                f"tested against it. If an entity is missing from this list, we can't measure whether "
-                f"the extraction spec finds it. Be thorough."
-            ),
-            on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(specs_dir / "general_golden")),
-            **provider_kwargs,
-        )
-        golden_best = golden_result.best_candidate
+        # Phase 1 uses DECOMPOSED map-reduce generation instead of the agentic
+        # refine() loop. Local models (gemma4:26b) stall in the agentic generator
+        # — they loop on the read tool and emit an empty candidate. Map-reduce is
+        # deterministic: one small extraction call per chunk, then a Python merge.
+        print(f"Building golden set via map-reduce ({len(sample_chunks)} chunks, job {job_id})", flush=True)
+        golden_best = await _build_golden_set_mapreduce(sample_chunks, settings, job_id, db_path)
         golden_set_path.write_text(golden_best)
 
     # Phase 2: Extraction spec simmering (with empirical evaluator)

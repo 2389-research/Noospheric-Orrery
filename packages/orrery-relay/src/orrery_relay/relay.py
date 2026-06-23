@@ -181,6 +181,12 @@ class Relay:
             "model": model,
             "messages": ollama_messages,
             "stream": False,
+            # Disable reasoning: thinking-capable models (e.g. gemma4:26b) otherwise
+            # spend the entire num_predict budget on hidden "thinking" tokens, which
+            # Ollama returns in a separate `thinking` field — leaving message.content
+            # empty. Since we only read message.content, that yields blank responses
+            # (classification returned {} → no domains). Ignored by non-thinking models.
+            "think": False,
         }
         if not has_images:
             body["options"] = {"num_predict": max_tokens}
