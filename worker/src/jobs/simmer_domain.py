@@ -8,7 +8,7 @@ from pathlib import Path
 from simmer_sdk import refine
 from ..db import get_connection
 from ..config import get_settings
-from .simmer_general import _make_iteration_recorder
+from .simmer_general import _make_iteration_recorder, _build_golden_set_mapreduce
 
 
 async def run_simmer_domain(job: dict, db_path: str) -> None:
@@ -133,52 +133,13 @@ Read every sample document and list ALL entities you find as a JSON array:
         golden_best = golden_set_path.read_text()
         print(f"Resuming domain spec for: {domain_path} — reusing existing golden set ({len(golden_best)} chars, job {job_id})", flush=True)
     else:
-        print(f"Simmering domain spec for: {domain_path} ({len(sample_chunks)} chunks, job {job_id})", flush=True)
-        golden_result = await refine(
-            artifact=str(seed_path),
-            criteria={
-                "coverage": f"The reference entity list contains every named entity found in the {domain_path} sample documents — no entity left behind",
-                "precision": "Every entity in the reference list actually appears in at least one sample document — no hallucinated entities",
-                "domain_specificity": f"Entity types include categories specific to {domain_path} that the general spec misses — not just generic Person/Organization",
-            },
-            primary="coverage",
-            iterations=iterations,
-            judge_mode="board",
-            judge_panel=[
-                {
-                    "name": "Coverage & Depth",
-                    "lens": (
-                        "Read every sample document carefully. Cross-reference the reference entity JSON list against the documents. "
-                        f"Are there {domain_path}-specific entities mentioned in the docs that are missing from the list? "
-                        "The list must be exhaustive."
-                    ),
-                },
-                {
-                    "name": "Precision & Quality",
-                    "lens": (
-                        "For each entity in the reference JSON list, verify it actually appears in at least one sample document. "
-                        "Check that entity types are correct and domain-specific where appropriate. "
-                        "Flag any hallucinated entities not grounded in the source text."
-                    ),
-                },
-            ],
-            output_dir=domain_dir / "golden",
-            generator_model=settings.classification_model,
-            judge_model=settings.classification_model,
-            clerk_model=settings.classification_model,
-            background=(
-                f"Sample chunks from domain '{domain_path}' are in {sample_dir}. Read ALL of them.\n"
-                f"Each file is a chunk from a larger document (source title in the header).\n\n"
-                f"The golden set must contain TWO things:\n"
-                f"1. An entity type taxonomy (including {domain_path}-specific types)\n"
-                f"2. A JSON array of EVERY entity found in the sample chunks\n\n"
-                f"The reference entity list is the ground truth — extraction specs will be empirically "
-                f"tested against it. Be thorough."
-            ),
-            on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(domain_dir / "golden")),
-            **provider_kwargs,
-        )
-        golden_best = golden_result.best_candidate
+        # Phase 1: DECOMPOSED map-reduce golden generation (shared with simmer_general).
+        # The old agentic refine() stalls on local models (gemma4:26b loops on the read tool
+        # → empty candidate). map (e4b per-chunk extraction) → reduce (gemma4 canonicalize).
+        # NOTE: uses the generic 6-type taxonomy rather than discovering domain-specific types;
+        # domain-specificity is added in the Phase 2 spec rules instead.
+        print(f"Building domain golden set via map-reduce: {domain_path} ({len(sample_chunks)} chunks, job {job_id})", flush=True)
+        golden_best = await _build_golden_set_mapreduce(sample_chunks, settings, job_id, db_path)
         golden_set_path.write_text(golden_best)
 
     # Phase 2: Extraction spec simmering (with empirical evaluator)

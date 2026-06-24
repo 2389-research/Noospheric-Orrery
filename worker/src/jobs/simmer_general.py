@@ -125,6 +125,74 @@ GOLDEN_MAP_SCHEMA = {
 }
 
 
+GOLDEN_CANON_PROMPT = """You are canonicalizing a list of "{etype}" entities extracted from documents. Because each document was processed independently, the list has duplicates and noise. Produce a CLEAN canonical list of {etype} names.
+
+Rules:
+- FRAGMENTS: merge a partial name into its fuller form ("harper" + "harper reed" -> "harper reed"; "russ" + "russell cummer" -> "russell cummer").
+- SPELLING VARIANTS / TYPOS: merge to the correct form ("commer corporation" + "cummer corporation" -> "cummer corporation"; "vancouv" + "vancouver" -> "vancouver").
+- ACRONYM / EXPANSION: keep ONE canonical form ("lvmh" and "louis vuitton moet hennessy" are the same — keep one); merge garbled variants into it.
+- NEAR-DUPLICATES: collapse trivial variants ("ecommerce" / "e-commerce" -> one).
+- DROP NON-ENTITIES: remove emails and vague phrase-fragments that aren't real named entities ("ease of purchasing", "pay for play", "market expansion plans").
+- Do NOT invent new names; only merge or drop.
+
+{etype} NAMES ({n} items):
+{listing}"""
+
+GOLDEN_CANON_SCHEMA = {
+    "type": "object",
+    "properties": {"names": {"type": "array", "items": {"type": "string"}}},
+    "required": ["names"],
+}
+
+
+async def _canonicalize_group(group: list[dict], etype: str, relay: Relay, model: str) -> list[dict]:
+    """Canonicalize one type's entities. Merging within a type is correct (you never merge
+    a Person into an Organization), and keeps each call's output within the token budget."""
+    if len(group) < 2:
+        return group
+    listing = "\n".join(f"- {e['name']}" for e in group)
+    try:
+        result = await relay.complete_structured(
+            model=model, max_tokens=4096,
+            messages=[{"role": "user", "content": GOLDEN_CANON_PROMPT.format(etype=etype, n=len(group), listing=listing)}],
+            schema=GOLDEN_CANON_SCHEMA,
+            tool_name="canonical_names",
+            tool_description=f"Return the cleaned canonical {etype} names",
+        )
+        cleaned = result.get("names", []) if isinstance(result, dict) else []
+        out, seen = [], set()
+        for n in cleaned:
+            name = str(n).lower().strip()
+            if name and name not in seen:
+                seen.add(name)
+                out.append({"name": name, "type": etype})
+        # Safety: reject a degenerate result (empty, or larger than input — likely a parse failure)
+        if not out or len(out) > len(group):
+            print(f"  [golden_set] canon {etype}: {len(out)} (raw {len(group)}) — keeping raw", flush=True)
+            return group
+        return out
+    except Exception as e:
+        print(f"  [golden_set] canon {etype} failed, keeping raw: {e}", flush=True)
+        return group
+
+
+async def _canonicalize_golden(golden: list[dict], relay: Relay, model: str) -> list[dict]:
+    """REDUCE: LLM canonicalization that merges fragments/variants/acronyms and drops
+    non-entities — the global view per-chunk extraction lacks. Batched PER TYPE so each
+    call stays within the output-token budget (one call over hundreds of entities overflows
+    and parse-fails). Falls back to the raw group on any failure."""
+    if len(golden) < 2:
+        return golden
+    from collections import defaultdict
+    by_type: dict[str, list[dict]] = defaultdict(list)
+    for e in golden:
+        by_type[e["type"]].append(e)
+    out: list[dict] = []
+    for etype, group in by_type.items():
+        out.extend(await _canonicalize_group(group, etype, relay, model))
+    return sorted(out, key=lambda e: (e["type"], e["name"]))
+
+
 async def _build_golden_set_mapreduce(sample_chunks, settings, job_id: str, db_path: str) -> str:
     """Decomposed golden-set generation for local models.
 
@@ -135,14 +203,15 @@ async def _build_golden_set_mapreduce(sample_chunks, settings, job_id: str, db_p
     (gemma4:26b loops on the read tool → empty candidate). Deterministic.
     """
     relay = Relay.from_settings(settings)
-    model = settings.classification_model
+    extract_model = settings.extraction_model       # e4b — fast, purpose-built per-chunk extraction (MAP)
+    canon_model = settings.classification_model      # 26b — global reasoning for canonicalization (REDUCE)
     merged: dict[tuple, dict] = {}
     per_chunk = []
     for chunk in sample_chunks:
         text = chunk[1]  # (id, text, title)
         try:
             result = await relay.complete_structured(
-                model=model, max_tokens=2048,
+                model=extract_model, max_tokens=2048,
                 messages=[{"role": "user", "content": GOLDEN_MAP_PROMPT.format(tax=GOLDEN_TAXONOMY, chunk=text)}],
                 schema=GOLDEN_MAP_SCHEMA,
                 tool_name="extract_entities",
@@ -160,7 +229,16 @@ async def _build_golden_set_mapreduce(sample_chunks, settings, job_id: str, db_p
                 merged[(name, etype)] = {"name": name, "type": etype}
 
     golden = sorted(merged.values(), key=lambda e: (e["type"], e["name"]))
-    print(f"  [golden_set] map-reduce: {len(golden)} entities from {len(sample_chunks)} chunks (per-chunk: {per_chunk})", flush=True)
+    print(f"  [golden_set] map: {len(golden)} entities from {len(sample_chunks)} chunks (per-chunk: {per_chunk})", flush=True)
+
+    # REDUCE: LLM canonicalization. Per-chunk extraction has no global view, so fragments
+    # ("harper"/"harper reed"), spelling/typo variants ("commer"/"cummer"), acronym pairs
+    # ("lvmh"/"louis vuitton moet hennessy") and non-entities (emails, vague phrases) survive
+    # the exact-match merge above. One bounded gemma4 call canonicalizes them — recovering the
+    # global dedup a single-context (agentic) pass does, without the agentic fragility.
+    raw_count = len(golden)
+    golden = await _canonicalize_golden(golden, relay, canon_model)
+    print(f"  [golden_set] reduce (canonicalize): {raw_count} -> {len(golden)} entities", flush=True)
 
     md = "\n".join([
         "# Golden Set\n",
