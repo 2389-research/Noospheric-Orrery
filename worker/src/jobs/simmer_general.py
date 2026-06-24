@@ -373,6 +373,173 @@ def _make_iteration_recorder(job_id: str, phase: str, db_path: str, output_dir: 
     return on_iteration
 
 
+# --- Phase 2: decomposed rules-spec generation (shared by general + domain simmers) ---
+
+SPEC_SEED_TEMPLATE = """# Entity Extraction Specification
+
+## Task
+Extract ALL entities from the document that match the type definitions below.
+Output JSON objects with "name" (lowercase, trimmed) and "type" fields.
+
+## Entity Type Definitions
+**Person** — named individuals (speakers, authors, founders, attendees)
+**Organization** — companies, funds, teams, departments, brands
+**Location** — places, regions, cities, venues
+**Topic** — named fields, domains, or subject areas discussed as focal points
+**Event** — named happenings, meetings, milestones, talks, dates
+**Thing** — concrete objects, tools, software, products, materials
+
+## Rules
+### INCLUDE Rules
+(refined from evaluation feedback)
+### EXCLUDE Rules
+(refined from evaluation feedback)
+
+## Instructions
+1. Read the whole document.
+2. Extract every entity matching a type above. The type definitions are general — apply them
+   to ANY document, not just this one. Do NOT hardcode specific names.
+3. Normalize names (lowercase, trim).
+
+Return ONLY a JSON array: [{"name": "...", "type": "Person|Organization|Location|Topic|Event|Thing"}]"""
+
+SPEC_EXTRACT_PROMPT = """You are an entity extraction system. Follow this spec exactly.
+
+SPEC:
+{spec}
+
+TEXT:
+{chunk}
+
+Extract all entities present in the text according to the spec."""
+
+SPEC_REVISE_PROMPT = """You are refining a GENERALIZED entity-extraction SPEC (a reusable prompt that must work on documents it has never seen). You are NOT extracting entities and you MUST NOT list specific entity names in the spec.{domain_note}
+
+Current spec:
+---
+{spec}
+---
+
+When run on sample documents and compared to the ground-truth answer key:
+
+MISSED (the spec should have extracted these but didn't — coverage gaps):
+{misses}
+
+WRONGLY EXTRACTED (noise / not real entities — precision errors):
+{fps}
+
+Rewrite the spec's INCLUDE/EXCLUDE rules so a model following it would catch the MISSED items
+and avoid the WRONGLY-EXTRACTED ones — GENERALLY, by describing the PATTERN, not by naming
+entities (e.g. "EXCLUDE vague descriptors like 'quality'", "INCLUDE single-word domain fields",
+"extract multi-word names whole, not fragments"). Keep the type definitions and a few
+ILLUSTRATIVE examples, but the body must be RULES, never a list of the answer-key entities.
+
+Return the full revised spec (markdown). No commentary."""
+
+
+def _parse_golden_keys(golden_md: str) -> set:
+    import re
+    m = re.search(r"\[.*\]", golden_md, re.DOTALL)
+    if not m:
+        return set()
+    try:
+        arr = json.loads(m.group())
+    except Exception:
+        return set()
+    return {(str(e.get("name", "")).lower().strip(), str(e.get("type", "")).strip().capitalize())
+            for e in arr if isinstance(e, dict) and e.get("name")}
+
+
+def _strip_fences(text: str) -> str:
+    import re
+    t = text.strip()
+    t = re.sub(r"^```[a-zA-Z]*\n?", "", t)
+    t = re.sub(r"\n?```$", "", t)
+    return t.strip()
+
+
+async def _refine_spec_rules(golden_md, sample_chunks, settings, job_id, db_path, iterations, domain_path=None):
+    """DECOMPOSED Phase 2: produce a GENERALIZED rules spec (type defs + INCLUDE/EXCLUDE
+    rules + illustrative examples), NOT a relisting of golden entities.
+
+    Deterministic F1 scoring against the golden (no LLM judge); the LLM only revises the
+    rules from concrete misses/false-positives. Single-shot extraction per chunk (no agentic
+    loop). Replaces the agentic refine(), which emitted hardcoded entity lists on local models.
+    """
+    relay = Relay.from_settings(settings)
+    extract_model = settings.extraction_model
+    reviser_model = settings.classification_model
+    golden = _parse_golden_keys(golden_md)
+    domain_note = f" The spec targets the '{domain_path}' domain." if domain_path else ""
+
+    spec = SPEC_SEED_TEMPLATE
+    best = (-1.0, spec)
+    prev_f1 = None
+    for i in range(iterations + 1):  # iteration 0 scores the seed template
+        extracted: set = set()
+        for chunk in sample_chunks:
+            try:
+                res = await relay.complete_structured(
+                    model=extract_model, max_tokens=2048,
+                    messages=[{"role": "user", "content": SPEC_EXTRACT_PROMPT.format(spec=spec, chunk=chunk[1])}],
+                    schema=GOLDEN_MAP_SCHEMA, tool_name="extract_entities",
+                    tool_description="Extract entities from the text per the spec",
+                )
+                for e in (res.get("entities", []) if isinstance(res, dict) else []):
+                    name = str(e.get("name", "")).lower().strip()
+                    etype = str(e.get("type", "")).strip().capitalize()
+                    if name:
+                        extracted.add((name, etype))
+            except Exception as ex:
+                print(f"  [extraction_spec] extract error: {ex}", flush=True)
+
+        hits = extracted & golden
+        prec = len(hits) / len(extracted) if extracted else 0.0
+        rec = len(hits) / len(golden) if golden else 0.0
+        f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
+        misses, fps = golden - extracted, extracted - golden
+        regressed = prev_f1 is not None and f1 < prev_f1
+
+        conn = get_connection(db_path)
+        try:
+            conn.execute(
+                "INSERT INTO simmer_iterations (id, job_id, phase, iteration, scores, composite, key_change, asi, judge_mode, regressed, candidate_preview) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), job_id, "extraction_spec", i,
+                 json.dumps({"precision": round(prec, 2), "recall": round(rec, 2), "f1": round(f1, 2)}),
+                 round(f1 * 10, 1),
+                 ("seed rules template" if i == 0 else f"revised rules (P={prec:.2f} R={rec:.2f})"),
+                 None, "rules-loop", regressed, None),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        print(f"  [extraction_spec] iter {i}: F1={f1:.2f} P={prec:.2f} R={rec:.2f} "
+              f"(ext={len(extracted)} miss={len(misses)} fp={len(fps)})", flush=True)
+
+        if f1 > best[0]:
+            best = (f1, spec)
+        prev_f1 = f1
+
+        if i < iterations:
+            miss_s = ", ".join(f"{n} ({t})" for n, t in sorted(misses))[:1500] or "(none)"
+            fp_s = ", ".join(f"{n} ({t})" for n, t in sorted(fps))[:1500] or "(none)"
+            try:
+                resp = await relay.complete(
+                    model=reviser_model, max_tokens=4096,
+                    messages=[{"role": "user", "content": SPEC_REVISE_PROMPT.format(
+                        domain_note=domain_note, spec=spec, misses=miss_s, fps=fp_s)}],
+                )
+                revised = _strip_fences(resp.text)
+                if revised:
+                    spec = revised
+            except Exception as ex:
+                print(f"  [extraction_spec] revise error: {ex}", flush=True)
+                break
+
+    return best[1], round(best[0] * 10, 1)
+
+
 async def run_simmer_general(job: dict, db_path: str) -> None:
     settings = get_settings()
     config = json.loads(job["config"]) if job.get("config") else {}
@@ -439,66 +606,12 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         golden_best = await _build_golden_set_mapreduce(sample_chunks, settings, job_id, db_path)
         golden_set_path.write_text(golden_best)
 
-    # Phase 2: Extraction spec simmering (with empirical evaluator)
-    evaluator_script = Path(__file__).resolve().parent / "evaluate_spec.py"
-
-    spec_result = await refine(
-        artifact=golden_best,
-        criteria={
-            "coverage": "When run on sample docs, the spec finds all entities from the golden set",
-            "precision": "Zero false positives",
-            "generalizability": "The spec uses general rules and entity type definitions, not hardcoded entity names — it would work on documents it has never seen",
-            "format_compliance": "Output is valid JSON with name and type fields",
-        },
-        primary="coverage",
-        iterations=iterations,
-        judge_mode="board",
-        judge_panel=[
-            {
-                "name": "Coverage & Depth",
-                "lens": (
-                    "BEFORE scoring, you MUST open and read the raw extraction JSON files in the eval-* directories. "
-                    "The quantitative summary is approximate — your score must be based on what you see in the actual outputs. "
-                    "For each sample doc, read the .json file and check: did Haiku find the entities that matter? "
-                    "Are near-misses actually correct extractions with different phrasing? "
-                    "Are apparent misses due to spec wording, or are those entities genuinely absent from that document?"
-                ),
-            },
-            {
-                "name": "Precision & Generalizability",
-                "lens": (
-                    "BEFORE scoring, you MUST open and read the raw extraction JSON files in the eval-* directories. "
-                    "The quantitative summary is approximate — your score must be based on what you see in the actual outputs. "
-                    "For each sample doc, check: are extracted entities grounded in the source text? "
-                    "CRITICAL: Read the spec itself. Does it define entity types with general rules and examples, "
-                    "or does it hardcode specific entity names from the sample docs? A good spec describes WHAT to look for "
-                    "(e.g., 'Person — named individuals mentioned by name'), not WHO to look for (e.g., 'extract harper reed, shana fisher'). "
-                    "Score generalizability low if the spec would fail on a new document about a different topic."
-                ),
-            },
-        ],
-        output_dir=specs_dir / "general_spec",
-        generator_model=settings.classification_model,
-        judge_model=settings.classification_model,
-        clerk_model=settings.classification_model,
-        evaluator=(
-            f"uv run python {shlex.quote(str(evaluator_script))}"
-            f" --candidate {{candidate_path}}"
-            f" --samples-dir {shlex.quote(str(sample_dir))}"
-            f" --golden-set {shlex.quote(str(golden_set_path))}"
-            f" --output-dir {{output_dir}}"
-            f" --iteration {{iteration}}"
-        ),
-        background=(
-            f"This spec will be executed by Haiku to extract entities from documents.\n"
-            f"Golden set: {golden_best[:2000]}\n\n"
-            f"IMPORTANT: Each iteration, the evaluator runs the candidate spec against sample docs using Haiku.\n"
-            f"Raw extraction results are written to eval-N/ directories in the output directory.\n"
-            f"READ the raw extraction JSON files — don't just trust the quantitative summary.\n"
-            f"Look for near-misses, type mismatches, and systematic patterns the metrics miss."
-        ),
-        on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path, str(specs_dir / "general_spec")),
-        **provider_kwargs,
+    # Phase 2: DECOMPOSED rules-spec generation. Produces a GENERALIZED rules spec (type defs
+    # + INCLUDE/EXCLUDE), scored deterministically by F1 against the golden — no agentic
+    # generator (which relisted golden entities on local models) and no LLM judge.
+    print(f"Refining extraction-spec rules ({len(sample_chunks)} chunks, job {job_id})", flush=True)
+    spec_content, spec_score = await _refine_spec_rules(
+        golden_best, sample_chunks, settings, job_id, db_path, iterations,
     )
 
     # Store spec
@@ -506,7 +619,7 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
     spec_id = str(uuid.uuid4())
     conn.execute(
         "INSERT INTO specs (id, domain_path, version, spec_content, golden_set, score) VALUES (?, NULL, 1, ?, ?, ?)",
-        (spec_id, spec_result.best_candidate, golden_best, spec_result.composite),
+        (spec_id, spec_content, golden_best, spec_score),
     )
 
     # Queue batch extraction

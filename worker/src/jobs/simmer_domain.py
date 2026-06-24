@@ -8,7 +8,7 @@ from pathlib import Path
 from simmer_sdk import refine
 from ..db import get_connection
 from ..config import get_settings
-from .simmer_general import _make_iteration_recorder, _build_golden_set_mapreduce
+from .simmer_general import _build_golden_set_mapreduce, _refine_spec_rules
 
 
 async def run_simmer_domain(job: dict, db_path: str) -> None:
@@ -142,66 +142,12 @@ Read every sample document and list ALL entities you find as a JSON array:
         golden_best = await _build_golden_set_mapreduce(sample_chunks, settings, job_id, db_path)
         golden_set_path.write_text(golden_best)
 
-    # Phase 2: Extraction spec simmering (with empirical evaluator)
-    evaluator_script = Path(__file__).resolve().parent / "evaluate_spec.py"
-
-    spec_result = await refine(
-        artifact=golden_best,
-        criteria={
-            "coverage": "Finds all domain-specific entities from the golden set",
-            "precision": "Zero false positives",
-            "generalizability": f"The spec uses general rules for {domain_path} entity types, not hardcoded names — it would work on new documents in this domain",
-            "format_compliance": "Valid JSON with name and type fields",
-        },
-        primary="coverage",
-        iterations=iterations,
-        judge_mode="board",
-        judge_panel=[
-            {
-                "name": "Coverage & Depth",
-                "lens": (
-                    "BEFORE scoring, you MUST open and read the raw extraction JSON files in the eval-* directories. "
-                    "The quantitative summary is approximate — your score must be based on what you see in the actual outputs. "
-                    f"For each sample doc, read the .json file and check: did Haiku find the {domain_path}-specific entities that matter? "
-                    "Are near-misses actually correct extractions with different phrasing? "
-                    "Are apparent misses due to spec wording, or are those entities genuinely absent from that document?"
-                ),
-            },
-            {
-                "name": "Precision & Generalizability",
-                "lens": (
-                    "BEFORE scoring, you MUST open and read the raw extraction JSON files in the eval-* directories. "
-                    "The quantitative summary is approximate — your score must be based on what you see in the actual outputs. "
-                    "For each sample doc, check: are extracted entities grounded in the source text? "
-                    "CRITICAL: Read the spec itself. Does it define entity types with general rules and examples, "
-                    "or does it hardcode specific entity names from the sample docs? A good spec describes WHAT to look for "
-                    f"in {domain_path} documents, not a list of specific entities to find. "
-                    "Score generalizability low if the spec would fail on a new document in this domain."
-                ),
-            },
-        ],
-        output_dir=domain_dir / "spec",
-        generator_model=settings.classification_model,
-        judge_model=settings.classification_model,
-        clerk_model=settings.classification_model,
-        evaluator=(
-            f"uv run python {shlex.quote(str(evaluator_script))}"
-            f" --candidate {{candidate_path}}"
-            f" --samples-dir {shlex.quote(str(sample_dir))}"
-            f" --golden-set {shlex.quote(str(golden_set_path))}"
-            f" --output-dir {{output_dir}}"
-            f" --iteration {{iteration}}"
-        ),
-        background=(
-            f"This spec will be executed by Haiku on documents in domain '{domain_path}'.\n"
-            f"Golden set: {golden_best[:2000]}\n\n"
-            f"IMPORTANT: Each iteration, the evaluator runs the candidate spec against sample docs using Haiku.\n"
-            f"Raw extraction results are written to eval-N/ directories in the output directory.\n"
-            f"READ the raw extraction JSON files — don't just trust the quantitative summary.\n"
-            f"Look for near-misses, type mismatches, and systematic patterns the metrics miss."
-        ),
-        on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path, str(domain_dir / "spec")),
-        **provider_kwargs,
+    # Phase 2: DECOMPOSED rules-spec generation (shared with simmer_general). Produces a
+    # GENERALIZED, domain-aware rules spec scored by F1 against the golden — no agentic
+    # generator (which relisted golden entities on local models) and no LLM judge.
+    print(f"Refining {domain_path} extraction-spec rules ({len(sample_chunks)} chunks, job {job_id})", flush=True)
+    spec_content, spec_score = await _refine_spec_rules(
+        golden_best, sample_chunks, settings, job_id, db_path, iterations, domain_path=domain_path,
     )
 
     # Store spec
@@ -216,7 +162,7 @@ Read every sample document and list ALL entities you find as a JSON array:
     spec_id = str(uuid.uuid4())
     conn.execute(
         "INSERT INTO specs (id, domain_path, version, spec_content, golden_set, score) VALUES (?, ?, ?, ?, ?, ?)",
-        (spec_id, domain_path, version, spec_result.best_candidate, golden_best, spec_result.composite),
+        (spec_id, domain_path, version, spec_content, golden_best, spec_score),
     )
 
     # Update domain spec_version
@@ -234,4 +180,4 @@ Read every sample document and list ALL entities you find as a JSON array:
 
     conn.commit()
     conn.close()
-    print(f"Domain spec for {domain_path}: v{version}, score {spec_result.composite}/10", flush=True)
+    print(f"Domain spec for {domain_path}: v{version}, score {spec_score}/10 (rules-loop)", flush=True)
