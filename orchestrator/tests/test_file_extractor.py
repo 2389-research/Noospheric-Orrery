@@ -5,7 +5,6 @@ import pytest
 from src.pipeline.file_extractor import (
     extract_text,
     extract_text_from_notebook,
-    is_supported_file,
     ALL_SUPPORTED_EXTENSIONS,
     TEXT_EXTENSIONS,
     IMAGE_EXTENSIONS,
@@ -13,36 +12,6 @@ from src.pipeline.file_extractor import (
     DOCX_EXTENSIONS,
     NOTEBOOK_EXTENSIONS,
 )
-
-# --- is_supported_file ---
-
-def test_is_supported_file_text():
-    assert is_supported_file("readme.md")
-    assert is_supported_file("data.csv")
-    assert is_supported_file("script.py")
-
-def test_is_supported_file_image():
-    assert is_supported_file("photo.jpg")
-    assert is_supported_file("diagram.png")
-
-def test_is_supported_file_pdf():
-    assert is_supported_file("report.pdf")
-
-def test_is_supported_file_docx():
-    assert is_supported_file("notes.docx")
-
-def test_is_supported_file_notebook():
-    assert is_supported_file("analysis.ipynb")
-
-def test_is_supported_file_unknown():
-    assert not is_supported_file("archive.zip")
-    assert not is_supported_file("binary.exe")
-    assert not is_supported_file("noextension")
-
-def test_is_supported_file_case_insensitive():
-    assert is_supported_file("README.MD")
-    assert is_supported_file("Photo.JPG")
-    assert is_supported_file("Report.PDF")
 
 
 # --- extension sets are disjoint where expected ---
@@ -57,6 +26,10 @@ def test_all_supported_extensions_is_union():
     assert ALL_SUPPORTED_EXTENSIONS == (
         TEXT_EXTENSIONS | IMAGE_EXTENSIONS | PDF_EXTENSIONS | DOCX_EXTENSIONS | NOTEBOOK_EXTENSIONS
     )
+
+def test_doc_not_in_supported_extensions():
+    assert ".doc" not in ALL_SUPPORTED_EXTENSIONS
+    assert ".doc" not in DOCX_EXTENSIONS
 
 
 # --- extract_text: plain text types ---
@@ -89,6 +62,10 @@ def test_extract_text_unsupported_raises():
 def test_extract_text_no_extension_raises():
     with pytest.raises(ValueError, match="Unsupported file type"):
         extract_text("noextension", b"data")
+
+def test_extract_text_doc_raises():
+    with pytest.raises(ValueError, match="Unsupported file type"):
+        extract_text("legacy.doc", b"data")
 
 
 # --- extract_text_from_notebook ---
@@ -164,14 +141,30 @@ def test_extract_text_routes_notebook():
 # --- PDF and DOCX: smoke tests with real minimal files ---
 
 def test_extract_text_pdf_smoke():
+    pytest.importorskip("pypdf")
+    reportlab = pytest.importorskip("reportlab")
+    from reportlab.pdfgen import canvas as rl_canvas
+    buf = io.BytesIO()
+    c = rl_canvas.Canvas(buf)
+    c.drawString(100, 750, "Hello PDF")
+    c.save()
+    result = extract_text("doc.pdf", buf.getvalue())
+    assert "Hello" in result
+
+def test_extract_text_pdf_blank_raises():
     pypdf = pytest.importorskip("pypdf")
     from pypdf import PdfWriter
     writer = PdfWriter()
     writer.add_blank_page(width=72, height=72)
     buf = io.BytesIO()
     writer.write(buf)
-    result = extract_text("blank.pdf", buf.getvalue())
-    assert isinstance(result, str)
+    with pytest.raises(ValueError, match="no extractable text"):
+        extract_text("blank.pdf", buf.getvalue())
+
+def test_extract_text_pdf_corrupt_raises():
+    pytest.importorskip("pypdf")
+    with pytest.raises(Exception):
+        extract_text("corrupt.pdf", b"%PDF-1.4 \x00garbage\xff\xfe")
 
 def test_extract_text_docx_smoke():
     docx = pytest.importorskip("docx")
@@ -181,7 +174,6 @@ def test_extract_text_docx_smoke():
     buf = io.BytesIO()
     doc.save(buf)
     result = extract_text("test.docx", buf.getvalue())
-    print("test")
     assert "Test paragraph" in result
 
 def test_extract_text_docx_empty_paragraphs_skipped():
@@ -195,3 +187,18 @@ def test_extract_text_docx_empty_paragraphs_skipped():
     doc.save(buf)
     result = extract_text("test.docx", buf.getvalue())
     assert result == "content"
+
+
+def test_extract_text_docx_zipbomb_raises():
+    pytest.importorskip("docx")
+    import zipfile
+    from src.pipeline.file_extractor import _DOCX_UNZIP_LIMIT
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        # Write a member whose declared uncompressed size exceeds the limit
+        info = zipfile.ZipInfo("word/document.xml")
+        info.file_size = _DOCX_UNZIP_LIMIT + 1
+        # Actual compressed data is tiny — just needs the header to trigger the check
+        zf.writestr(info, b"x")
+    with pytest.raises(ValueError, match="exceeds limit"):
+        extract_text("bomb.docx", buf.getvalue())

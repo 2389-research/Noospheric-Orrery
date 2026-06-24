@@ -163,3 +163,61 @@ async def test_ingest_dedup_by_content_hash(tmp_path):
     docs = store.conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
     assert docs == 1
     set_test_store(None)
+
+
+# --- /ingest error paths ---
+
+def test_ingest_unsupported_extension_returns_415(test_client, tmp_path):
+    with patch("src.routes.ingest.get_settings", return_value=make_test_settings(tmp_path)):
+        response = test_client.post(
+            "/ingest",
+            files={"file": ("archive.zip", b"PK\x03\x04fake", "application/zip")},
+        )
+    assert response.status_code == 415
+
+
+def test_ingest_file_too_large_returns_413(test_client, tmp_path):
+    from src.routes.ingest import _MAX_UPLOAD_BYTES
+    big = b"x" * (_MAX_UPLOAD_BYTES + 1)
+    with patch("src.routes.ingest.get_settings", return_value=make_test_settings(tmp_path)):
+        response = test_client.post(
+            "/ingest",
+            files={"file": ("big.txt", big, "text/plain")},
+        )
+    assert response.status_code == 413
+
+
+def test_ingest_mislabeled_pdf_returns_415(test_client, tmp_path):
+    # File has .pdf extension but wrong magic bytes — should be 415 not 422
+    with patch("src.routes.ingest.get_settings", return_value=make_test_settings(tmp_path)):
+        response = test_client.post(
+            "/ingest",
+            files={"file": ("sneaky.pdf", b"PK\x03\x04not-a-pdf", "application/pdf")},
+        )
+    assert response.status_code == 415
+
+
+def test_ingest_corrupt_pdf_returns_422(test_client, tmp_path):
+    # Valid %PDF magic but garbled body — parse failure, not type mismatch
+    with patch("src.routes.ingest.get_settings", return_value=make_test_settings(tmp_path)):
+        response = test_client.post(
+            "/ingest",
+            files={"file": ("bad.pdf", b"%PDF-1.4 garbage data \x00\xff", "application/pdf")},
+        )
+    assert response.status_code == 422
+
+
+def test_ingest_blank_pdf_returns_422(test_client, tmp_path):
+    pypdf = pytest.importorskip("pypdf")
+    from pypdf import PdfWriter
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    buf = io.BytesIO()
+    writer.write(buf)
+    with patch("src.routes.ingest.get_settings", return_value=make_test_settings(tmp_path)):
+        response = test_client.post(
+            "/ingest",
+            files={"file": ("scan.pdf", buf.getvalue(), "application/pdf")},
+        )
+    assert response.status_code == 422
+    assert "no extractable text" in response.json()["detail"]

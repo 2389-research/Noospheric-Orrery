@@ -9,34 +9,53 @@ from pathlib import Path
 TEXT_EXTENSIONS = {".txt", ".md", ".json", ".csv", ".dip", ".py", ".pyx", ".pxd", ".pyi", ".rst", ".toml", ".yaml", ".yml", ".xml", ".html", ".htm", ".js", ".ts", ".tsx", ".jsx", ".css", ".sh", ".bash", ".zsh", ".sql"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 PDF_EXTENSIONS = {".pdf"}
-DOCX_EXTENSIONS = {".docx", ".doc"}
+DOCX_EXTENSIONS = {".docx"}
 NOTEBOOK_EXTENSIONS = {".ipynb"}
 
 ALL_SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | IMAGE_EXTENSIONS | PDF_EXTENSIONS | DOCX_EXTENSIONS | NOTEBOOK_EXTENSIONS
 
 
-def is_supported_file(filename: str) -> bool:
-    return Path(filename).suffix.lower() in ALL_SUPPORTED_EXTENSIONS
+def _check_magic(file_bytes: bytes, expected: bytes, label: str) -> None:
+    if not file_bytes.startswith(expected):
+        raise ValueError(f"File does not appear to be a valid {label} (magic bytes mismatch)")
 
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     from io import BytesIO
     import pypdf
 
+    _check_magic(file_bytes, b"%PDF", "PDF")
     reader = pypdf.PdfReader(BytesIO(file_bytes))
     parts = []
     for page in reader.pages:
         text = page.extract_text()
         if text:
             parts.append(text)
-    return "\n\n".join(parts)
+    result = "\n\n".join(parts)
+    if not result.strip():
+        raise ValueError("PDF contains no extractable text (scanned or image-only PDF)")
+    return result
+
+
+_DOCX_UNZIP_LIMIT = 50 * 1024 * 1024  # 50 MB uncompressed
 
 
 def extract_text_from_docx(file_bytes: bytes) -> str:
     from io import BytesIO
+    import zipfile
     import docx
 
+    _check_magic(file_bytes, b"PK\x03\x04", "DOCX")
+
+    with zipfile.ZipFile(BytesIO(file_bytes)) as zf:
+        total_uncompressed = sum(zi.file_size for zi in zf.infolist())
+        if total_uncompressed > _DOCX_UNZIP_LIMIT:
+            raise ValueError(
+                f"DOCX uncompressed content ({total_uncompressed // (1024 * 1024)} MB) exceeds limit"
+            )
+
     doc = docx.Document(BytesIO(file_bytes))
+    # Tables, headers/footers, and text boxes are not extracted — body paragraphs only.
     return "\n".join(para.text for para in doc.paragraphs if para.text.strip())
 
 

@@ -24,6 +24,8 @@ from ..pipeline.file_extractor import extract_text, NOTEBOOK_EXTENSIONS, PDF_EXT
 
 router = APIRouter()
 
+_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
 # General specs loaded from orchestrator/specs/*.md — edit those files to update
 _SPECS_DIR = Path(__file__).resolve().parent.parent.parent / "specs"
 
@@ -328,6 +330,9 @@ async def ingest_file(
     settings = get_settings()
     os.makedirs(settings.documents_dir, exist_ok=True)
 
+    if len(file_bytes) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large: max {_MAX_UPLOAD_BYTES // (1024*1024)} MB")
+
     suffix = Path(title).suffix.lower()
     if suffix not in ALL_SUPPORTED_EXTENSIONS:
         raise HTTPException(status_code=415, detail=f"Unsupported file type: {suffix or '(no extension)'}")
@@ -340,8 +345,15 @@ async def ingest_file(
                 f.write(file_bytes)
             result = await _ingest_image(store, title, file_bytes, doc_path)
         else:
-            content = extract_text(title, file_bytes)
-            print(content)
+            try:
+                content = extract_text(title, file_bytes)
+            except ValueError as e:
+                msg = str(e)
+                if "magic bytes" in msg:
+                    raise HTTPException(status_code=415, detail=msg)
+                raise HTTPException(status_code=422, detail=msg)
+            except Exception as e:
+                raise HTTPException(status_code=422, detail=f"Could not extract text from file: {e}")
             doc_path = os.path.join(settings.documents_dir, f"{uuid.uuid4()}_{title}")
             with open(doc_path, "wb") as f:
                 f.write(file_bytes)

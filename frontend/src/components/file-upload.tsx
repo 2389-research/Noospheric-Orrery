@@ -10,7 +10,7 @@ interface FileUploadProps {
 
 const TEXT_EXTS = [".txt", ".md", ".json", ".csv", ".dip"];
 const IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
-const FILE_EXTS = [".pdf", ".docx", ".doc", ".ipynb", ".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".yaml", ".yml", ".toml", ".sh"];
+const FILE_EXTS = [".pdf", ".docx", ".ipynb", ".py", ".ts", ".tsx", ".js", ".jsx", ".sql", ".yaml", ".yml", ".toml", ".sh"];
 const ALL_EXTS = [...TEXT_EXTS, ...IMAGE_EXTS, ...FILE_EXTS];
 
 export function FileUpload({ onResult, onError }: FileUploadProps) {
@@ -183,7 +183,7 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
           id="any-file-input"
           type="file"
           multiple
-          accept=".pdf,.docx,.doc,.ipynb,.py,.ts,.tsx,.js,.jsx,.sql,.yaml,.yml,.toml,.sh"
+          accept=".pdf,.docx,.ipynb,.py,.ts,.tsx,.js,.jsx,.sql,.yaml,.yml,.toml,.sh"
           className="hidden"
           onChange={(e) => handleFiles(e.target.files, "any")}
         />
