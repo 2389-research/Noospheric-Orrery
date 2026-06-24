@@ -193,12 +193,13 @@ def test_extract_text_docx_zipbomb_raises():
     pytest.importorskip("docx")
     import zipfile
     from src.pipeline.file_extractor import _DOCX_UNZIP_LIMIT
+    # Build a zip whose actual uncompressed content exceeds the limit.
+    # ZIP_STORED so file_size in the header matches the real payload size.
+    chunk = b"A" * (1024 * 1024)  # 1 MB per member
+    n_members = (_DOCX_UNZIP_LIMIT // len(chunk)) + 1
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        # Write a member whose declared uncompressed size exceeds the limit
-        info = zipfile.ZipInfo("word/document.xml")
-        info.file_size = _DOCX_UNZIP_LIMIT + 1
-        # Actual compressed data is tiny — just needs the header to trigger the check
-        zf.writestr(info, b"x")
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        for i in range(n_members):
+            zf.writestr(f"chunk{i}.bin", chunk)
     with pytest.raises(ValueError, match="exceeds limit"):
         extract_text("bomb.docx", buf.getvalue())
