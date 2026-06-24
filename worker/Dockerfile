@@ -20,8 +20,11 @@ RUN uv sync --frozen --no-cache --no-dev --no-install-project
 COPY worker/src/ src/
 RUN uv sync --frozen --no-cache --no-dev
 
-# Install simmer-sdk AFTER final sync (not in lockfile, so must come after)
-RUN uv pip install --no-cache-dir "simmer-sdk @ git+https://github.com/2389-research/simmer-sdk.git@main"
+# Install simmer-sdk AFTER final sync (not in lockfile, so must come after).
+# The [local] extra pulls in `openai`, required by simmer-sdk's Ollama agent
+# loop (local_agent.py). Without it, every board judge fails with
+# "No module named 'openai'" when ANTHROPIC_BACKEND=ollama.
+RUN uv pip install --no-cache-dir "simmer-sdk[local] @ git+https://github.com/2389-research/simmer-sdk.git@main"
 
 # Non-root user
 RUN useradd -m -s /bin/bash worker

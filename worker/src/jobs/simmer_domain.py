@@ -1,6 +1,7 @@
 # ABOUTME: Domain-specific spec simmering job — refines extraction spec for a single domain.
 # ABOUTME: Starts from the general spec and adds domain-specific entity types via simmer-sdk.
 
+import re
 import shlex
 import uuid
 import json
@@ -8,7 +9,7 @@ from pathlib import Path
 from simmer_sdk import refine
 from ..db import get_connection
 from ..config import get_settings
-from .simmer_general import _make_iteration_recorder
+from .simmer_general import _build_golden_set_mapreduce, _refine_spec_rules, _discover_domain_types, BASE_TAXONOMY
 
 
 async def run_simmer_domain(job: dict, db_path: str) -> None:
@@ -127,120 +128,38 @@ Read every sample document and list ALL entities you find as a JSON array:
     resume = config.get("resume", False)
     golden_set_path = domain_dir / "golden_set.md"
 
-    # Phase 1: Golden set simmering (domain-specific) — type taxonomy + reference entities
-    # Skip if resuming and a golden set already exists from a previous run
+    # Domain refinement is ADDITIVE: discover MORE GRANULAR, domain-specific entity types and
+    # extract ONLY those (base types are covered by the general pass). The positive "extract only
+    # these types" constraint excludes base types on its own. Dedup/canonicalization is the
+    # normalization step's job (issue #26).
     if resume and golden_set_path.exists():
+        # Reuse the cached golden AND the taxonomy embedded in it, so Phase 2 scores against a
+        # consistent taxonomy (discovery is non-deterministic — don't re-roll it on resume).
         golden_best = golden_set_path.read_text()
-        print(f"Resuming domain spec for: {domain_path} — reusing existing golden set ({len(golden_best)} chars, job {job_id})", flush=True)
+        m = re.search(r"## Entity Type Taxonomy\n(.*?)\n\n## Reference Entities", golden_best, re.DOTALL)
+        domain_taxonomy = m.group(1).strip() if m else BASE_TAXONOMY
+        print(f"Resuming domain spec for {domain_path} — reusing cached golden ({len(golden_best)} chars, job {job_id})", flush=True)
     else:
-        print(f"Simmering domain spec for: {domain_path} ({len(sample_chunks)} chunks, job {job_id})", flush=True)
-        golden_result = await refine(
-            artifact=str(seed_path),
-            criteria={
-                "coverage": f"The reference entity list contains every named entity found in the {domain_path} sample documents — no entity left behind",
-                "precision": "Every entity in the reference list actually appears in at least one sample document — no hallucinated entities",
-                "domain_specificity": f"Entity types include categories specific to {domain_path} that the general spec misses — not just generic Person/Organization",
-            },
-            primary="coverage",
-            iterations=iterations,
-            judge_mode="board",
-            judge_panel=[
-                {
-                    "name": "Coverage & Depth",
-                    "lens": (
-                        "Read every sample document carefully. Cross-reference the reference entity JSON list against the documents. "
-                        f"Are there {domain_path}-specific entities mentioned in the docs that are missing from the list? "
-                        "The list must be exhaustive."
-                    ),
-                },
-                {
-                    "name": "Precision & Quality",
-                    "lens": (
-                        "For each entity in the reference JSON list, verify it actually appears in at least one sample document. "
-                        "Check that entity types are correct and domain-specific where appropriate. "
-                        "Flag any hallucinated entities not grounded in the source text."
-                    ),
-                },
-            ],
-            output_dir=domain_dir / "golden",
-            generator_model=settings.classification_model,
-            judge_model=settings.classification_model,
-            clerk_model=settings.classification_model,
-            background=(
-                f"Sample chunks from domain '{domain_path}' are in {sample_dir}. Read ALL of them.\n"
-                f"Each file is a chunk from a larger document (source title in the header).\n\n"
-                f"The golden set must contain TWO things:\n"
-                f"1. An entity type taxonomy (including {domain_path}-specific types)\n"
-                f"2. A JSON array of EVERY entity found in the sample chunks\n\n"
-                f"The reference entity list is the ground truth — extraction specs will be empirically "
-                f"tested against it. Be thorough."
-            ),
-            on_iteration=_make_iteration_recorder(job_id, "golden_set", db_path, str(domain_dir / "golden")),
-            **provider_kwargs,
-        )
-        golden_best = golden_result.best_candidate
+        domain_types = await _discover_domain_types(sample_chunks, domain_path, settings, db_path)
+        n_domain = len(domain_types.splitlines()) if domain_types else 0
+        print(f"Domain types for {domain_path}: +{n_domain}\n{domain_types}", flush=True)
+        if not domain_types:
+            # Nothing domain-specific to add → domain refinement has no value here. Skip rather
+            # than store a generic spec that just re-does the base types the general pass covers.
+            print(f"No domain-specific types discovered for {domain_path}; skipping domain refinement.", flush=True)
+            return
+        domain_taxonomy = domain_types
+        print(f"Building domain golden via map (additive, {n_domain} domain types): {domain_path} ({len(sample_chunks)} chunks, job {job_id})", flush=True)
+        golden_best = await _build_golden_set_mapreduce(
+            sample_chunks, settings, job_id, db_path, taxonomy=domain_taxonomy)
         golden_set_path.write_text(golden_best)
 
-    # Phase 2: Extraction spec simmering (with empirical evaluator)
-    evaluator_script = Path(__file__).resolve().parent / "evaluate_spec.py"
-
-    spec_result = await refine(
-        artifact=golden_best,
-        criteria={
-            "coverage": "Finds all domain-specific entities from the golden set",
-            "precision": "Zero false positives",
-            "generalizability": f"The spec uses general rules for {domain_path} entity types, not hardcoded names — it would work on new documents in this domain",
-            "format_compliance": "Valid JSON with name and type fields",
-        },
-        primary="coverage",
-        iterations=iterations,
-        judge_mode="board",
-        judge_panel=[
-            {
-                "name": "Coverage & Depth",
-                "lens": (
-                    "BEFORE scoring, you MUST open and read the raw extraction JSON files in the eval-* directories. "
-                    "The quantitative summary is approximate — your score must be based on what you see in the actual outputs. "
-                    f"For each sample doc, read the .json file and check: did Haiku find the {domain_path}-specific entities that matter? "
-                    "Are near-misses actually correct extractions with different phrasing? "
-                    "Are apparent misses due to spec wording, or are those entities genuinely absent from that document?"
-                ),
-            },
-            {
-                "name": "Precision & Generalizability",
-                "lens": (
-                    "BEFORE scoring, you MUST open and read the raw extraction JSON files in the eval-* directories. "
-                    "The quantitative summary is approximate — your score must be based on what you see in the actual outputs. "
-                    "For each sample doc, check: are extracted entities grounded in the source text? "
-                    "CRITICAL: Read the spec itself. Does it define entity types with general rules and examples, "
-                    "or does it hardcode specific entity names from the sample docs? A good spec describes WHAT to look for "
-                    f"in {domain_path} documents, not a list of specific entities to find. "
-                    "Score generalizability low if the spec would fail on a new document in this domain."
-                ),
-            },
-        ],
-        output_dir=domain_dir / "spec",
-        generator_model=settings.classification_model,
-        judge_model=settings.classification_model,
-        clerk_model=settings.classification_model,
-        evaluator=(
-            f"uv run python {shlex.quote(str(evaluator_script))}"
-            f" --candidate {{candidate_path}}"
-            f" --samples-dir {shlex.quote(str(sample_dir))}"
-            f" --golden-set {shlex.quote(str(golden_set_path))}"
-            f" --output-dir {{output_dir}}"
-            f" --iteration {{iteration}}"
-        ),
-        background=(
-            f"This spec will be executed by Haiku on documents in domain '{domain_path}'.\n"
-            f"Golden set: {golden_best[:2000]}\n\n"
-            f"IMPORTANT: Each iteration, the evaluator runs the candidate spec against sample docs using Haiku.\n"
-            f"Raw extraction results are written to eval-N/ directories in the output directory.\n"
-            f"READ the raw extraction JSON files — don't just trust the quantitative summary.\n"
-            f"Look for near-misses, type mismatches, and systematic patterns the metrics miss."
-        ),
-        on_iteration=_make_iteration_recorder(job_id, "extraction_spec", db_path, str(domain_dir / "spec")),
-        **provider_kwargs,
+    # Phase 2: decomposed rules-spec, seeded with the domain-specific types only — an ADDITIVE
+    # spec that extracts the granular domain entities (general spec handles the base types).
+    print(f"Refining {domain_path} extraction-spec rules ({len(sample_chunks)} chunks, job {job_id})", flush=True)
+    spec_content, spec_score = await _refine_spec_rules(
+        golden_best, sample_chunks, settings, job_id, db_path, iterations,
+        domain_path=domain_path, taxonomy=domain_taxonomy,
     )
 
     # Store spec
@@ -255,7 +174,7 @@ Read every sample document and list ALL entities you find as a JSON array:
     spec_id = str(uuid.uuid4())
     conn.execute(
         "INSERT INTO specs (id, domain_path, version, spec_content, golden_set, score) VALUES (?, ?, ?, ?, ?, ?)",
-        (spec_id, domain_path, version, spec_result.best_candidate, golden_best, spec_result.composite),
+        (spec_id, domain_path, version, spec_content, golden_best, spec_score),
     )
 
     # Update domain spec_version
@@ -273,4 +192,4 @@ Read every sample document and list ALL entities you find as a JSON array:
 
     conn.commit()
     conn.close()
-    print(f"Domain spec for {domain_path}: v{version}, score {spec_result.composite}/10", flush=True)
+    print(f"Domain spec for {domain_path}: v{version}, score {spec_score}/10 (rules-loop)", flush=True)

@@ -1,0 +1,39 @@
+# Fully-local override: gemma4 via host Ollama, fresh SQLite DB.
+#
+# Usage (build locally so images are native arm64 — do NOT pull :latest):
+#   open -a Docker                                   # ensure Docker Desktop is running
+#   docker compose -f docker-compose.yml -f docker-compose.ollama.yml build
+#   docker compose -f docker-compose.yml -f docker-compose.ollama.yml up
+#
+# `environment:` entries here take precedence over the bedrock values in .env,
+# so .env stays untouched. The leftover AWS creds in .env are simply ignored
+# while ANTHROPIC_BACKEND=ollama.
+#
+# Data is written to /data/local/orrery.db (a separate workspace file in the
+# same ./data volume) so it never mixes with the existing Bedrock-extracted graph.
+
+services:
+  orchestrator:
+    environment:
+      - ANTHROPIC_BACKEND=ollama
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - CLASSIFICATION_MODEL=gemma4:26b   # judge / generator / clerk (refinement)
+      - EXTRACTION_MODEL=gemma4:e4b        # entity extraction
+      - DB_PATH=/data/local/orrery.db
+      - DOCUMENTS_DIR=/data/local/documents
+      - SPECS_DIR=/data/local/specs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  worker:
+    environment:
+      - ANTHROPIC_BACKEND=ollama
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - CLASSIFICATION_MODEL=gemma4:26b
+      - EXTRACTION_MODEL=gemma4:e4b
+      - SIMMER_ITERATIONS=2   # bounded first run — local simmer is slow
+      - DB_PATH=/data/local/orrery.db
+      - DOCUMENTS_DIR=/data/local/documents
+      - SPECS_DIR=/data/local/specs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
