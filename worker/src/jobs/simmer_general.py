@@ -171,6 +171,9 @@ async def _discover_domain_types(sample_chunks, domain_path: str, settings, db_p
     # Ground in entities already extracted for this domain (by the general pass at ingest)
     existing = "(none yet)"
     if db_path:
+        # Exact domain_path match is intentional: each domain node grounds discovery on its OWN
+        # entities; child subdomains get their own discovery (per-node-stable-types model).
+        conn = None
         try:
             conn = get_connection(db_path)
             rows = conn.execute(
@@ -180,11 +183,13 @@ async def _discover_domain_types(sample_chunks, domain_path: str, settings, db_p
                 "WHERE dd.domain_path = ? LIMIT 60",
                 (domain_path,),
             ).fetchall()
-            conn.close()
             if rows:
                 existing = "\n".join(f"- {r[0]} ({r[1]})" for r in rows)
         except Exception:
             pass
+        finally:
+            if conn is not None:
+                conn.close()
 
     base_names = {ln.split("—")[0].strip(" -").lower() for ln in BASE_TAXONOMY.splitlines()}
     try:

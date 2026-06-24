@@ -1,6 +1,7 @@
 # ABOUTME: Domain-specific spec simmering job — refines extraction spec for a single domain.
 # ABOUTME: Starts from the general spec and adds domain-specific entity types via simmer-sdk.
 
+import re
 import shlex
 import uuid
 import json
@@ -8,7 +9,7 @@ from pathlib import Path
 from simmer_sdk import refine
 from ..db import get_connection
 from ..config import get_settings
-from .simmer_general import _build_golden_set_mapreduce, _refine_spec_rules, _discover_domain_types, BASE_TAXONOMY, BASE_TYPE_NAMES
+from .simmer_general import _build_golden_set_mapreduce, _refine_spec_rules, _discover_domain_types, BASE_TAXONOMY
 
 
 async def run_simmer_domain(job: dict, db_path: str) -> None:
@@ -127,30 +128,30 @@ Read every sample document and list ALL entities you find as a JSON array:
     resume = config.get("resume", False)
     golden_set_path = domain_dir / "golden_set.md"
 
-    # The POINT of domain refinement: discover MORE GRANULAR, domain-specific entity types and
-    # extract ONLY those — the generic base types are already covered by the general pass, so the
-    # domain golden/spec are ADDITIVE (not a re-extraction). Grounded in the domain's existing
-    # entities. Dedup/canonicalization is the normalization step's job (issue #26).
-    domain_types = await _discover_domain_types(sample_chunks, domain_path, settings, db_path)
-    n_domain = len(domain_types.splitlines()) if domain_types else 0
-    print(f"Domain types for {domain_path}: +{n_domain}\n{domain_types}", flush=True)
-    if domain_types:
-        # ADDITIVE: extract ONLY the domain-specific types. The positive "extract only these
-        # types" constraint already excludes the base types (handled by the general pass) — a
-        # closed menu is enough; listing 11 types-to-avoid just adds noise for a small model.
-        domain_taxonomy, exclude_types = domain_types, ""
-    else:
-        # Degenerate: nothing domain-specific found → fall back to the base taxonomy.
-        domain_taxonomy, exclude_types = BASE_TAXONOMY, ""
-
-    # Phase 1: decomposed, additive map golden — extract ONLY the domain-specific types.
+    # Domain refinement is ADDITIVE: discover MORE GRANULAR, domain-specific entity types and
+    # extract ONLY those (base types are covered by the general pass). The positive "extract only
+    # these types" constraint excludes base types on its own. Dedup/canonicalization is the
+    # normalization step's job (issue #26).
     if resume and golden_set_path.exists():
+        # Reuse the cached golden AND the taxonomy embedded in it, so Phase 2 scores against a
+        # consistent taxonomy (discovery is non-deterministic — don't re-roll it on resume).
         golden_best = golden_set_path.read_text()
-        print(f"Resuming domain spec for: {domain_path} — reusing existing golden set ({len(golden_best)} chars, job {job_id})", flush=True)
+        m = re.search(r"## Entity Type Taxonomy\n(.*?)\n\n## Reference Entities", golden_best, re.DOTALL)
+        domain_taxonomy = m.group(1).strip() if m else BASE_TAXONOMY
+        print(f"Resuming domain spec for {domain_path} — reusing cached golden ({len(golden_best)} chars, job {job_id})", flush=True)
     else:
+        domain_types = await _discover_domain_types(sample_chunks, domain_path, settings, db_path)
+        n_domain = len(domain_types.splitlines()) if domain_types else 0
+        print(f"Domain types for {domain_path}: +{n_domain}\n{domain_types}", flush=True)
+        if not domain_types:
+            # Nothing domain-specific to add → domain refinement has no value here. Skip rather
+            # than store a generic spec that just re-does the base types the general pass covers.
+            print(f"No domain-specific types discovered for {domain_path}; skipping domain refinement.", flush=True)
+            return
+        domain_taxonomy = domain_types
         print(f"Building domain golden via map (additive, {n_domain} domain types): {domain_path} ({len(sample_chunks)} chunks, job {job_id})", flush=True)
         golden_best = await _build_golden_set_mapreduce(
-            sample_chunks, settings, job_id, db_path, taxonomy=domain_taxonomy, exclude_types=exclude_types)
+            sample_chunks, settings, job_id, db_path, taxonomy=domain_taxonomy)
         golden_set_path.write_text(golden_best)
 
     # Phase 2: decomposed rules-spec, seeded with the domain-specific types only — an ADDITIVE

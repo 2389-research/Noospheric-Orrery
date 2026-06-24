@@ -59,15 +59,15 @@ agentic work the design assumes Claude can do. Two concrete failures:
   replaces the agentic golden generation with **map (per-chunk extraction, one small
   call, no tools) → reduce (Python merge)**. Deterministic, 0 stalls, ~50s, 95 entities
   vs the agentic run's 44. Mirrors how the judge **board** decomposes work.
-- **Canonicalization REDUCE (DONE)**: per-chunk extraction has no global view, so fragments
-  (`harper`/`harper reed`), typos (`commer`/`cummer`), acronym pairs (`lvmh`/`louis vuitton
-  moet hennessy`) and non-entities (emails, vague phrases) survive the exact-`(name,type)`
-  merge. Tested in isolation: the existing **embedding** normalizer barely helped (MiniLM
-  cosine is weak on short names/typos/acronyms — 95→93). An **LLM canonicalization** pass
-  (gemma4:26b, the existing pipeline's Tier-3 idea as one global pass) cleanly merged them
-  (95→71). Shipped as `_canonicalize_golden` — batched **per type** so each call stays in
-  the output-token budget (one call over hundreds of entities overflows → parse-fail →
-  fallback to raw). Map now uses **e4b** (was 26b: ~20x faster, less over-extraction).
+- **Canonicalization REDUCE (built, then REMOVED — historical)**: per-chunk extraction has no
+  global view, so fragments (`harper`/`harper reed`), typos (`commer`/`cummer`), acronyms
+  (`lvmh`/`louis vuitton moet hennessy`) and non-entities survive the exact-`(name,type)` merge.
+  Tested in isolation: the **embedding** normalizer barely helped (MiniLM weak on short
+  names/typos/acronyms — 95→93); an **LLM canonicalization** pass cleanly merged them (95→71),
+  briefly shipped as `_canonicalize_golden`. **It was then removed** — dedup/variant-merging/
+  type-reconciliation belong to the normalization step on the live graph (issue #26), and for
+  scoring the golden and spec extract over the same chunks so raw-vs-raw is consistent. The map
+  now does exact-dedup only (no canonicalize), and uses **e4b** (was 26b: ~20x faster).
 
 ### Phase 2 — extraction spec (DONE — shared rules-loop)
 - Phase 2 is supposed to produce a **generalized extraction prompt**: type definitions +
