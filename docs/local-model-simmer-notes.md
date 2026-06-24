@@ -109,9 +109,11 @@ Note: scores are NOT comparable across simmer runs — judge against artifact *c
 ## Files touched on this branch
 - `packages/orrery-relay/src/orrery_relay/relay.py` — `think:false`
 - `worker/Dockerfile` — `simmer-sdk[local]`
-- `worker/src/jobs/simmer_general.py` — shared helpers: `_build_golden_set_mapreduce`,
-  `_canonicalize_golden`/`_canonicalize_group` (Phase 1), `_refine_spec_rules` (Phase 2)
-- `worker/src/jobs/simmer_domain.py` — imports + uses the shared Phase 1 & Phase 2 helpers
+- `worker/src/jobs/simmer_general.py` — shared helpers: `_build_golden_set_mapreduce` (map only),
+  `_discover_domain_types`, `_refine_spec_rules`. (The canonicalize REDUCE was removed — dedup /
+  type reconciliation is the normalization step's job, issue #26.)
+- `worker/src/jobs/simmer_domain.py` — additive: discovers domain-specific types and extracts
+  ONLY those (base types handled by the general pass); uses the shared Phase 1 & 2 helpers.
 - `docker-compose.ollama.yml` — local Ollama/gemma4 override (new)
 - prototypes (scratchpad, not committed): `mapreduce_golden.py`, `golden_reduce_llm.py`,
   `phase2_rules.py` — standalone A/B harnesses
@@ -120,4 +122,8 @@ Note: scores are NOT comparable across simmer runs — judge against artifact *c
 - `simmer_domain_image.py` not yet ported to the decomposed flow.
 - A clean extraction of the shared helpers into a dedicated `golden.py`/`spec.py` module
   (currently `simmer_domain` imports private helpers from `simmer_general`).
-- Per-type canonicalize sub-batching if any single type ever exceeds ~250 entities.
+- Domain-type discovery is non-deterministic (a domain proposes a different type set each run).
+  NOT important: auto-simmer fires once per domain (`spec_version is None`); every re-simmer is
+  a deliberate regenerate, so a fresh type set is expected. Granularity grows via subdomain
+  subdivision (`subdomain_discovery.py`) + the spec cascade — each node gets its own stable
+  types — NOT by expanding a single node's type list. Persist-types-once is a possible polish.
