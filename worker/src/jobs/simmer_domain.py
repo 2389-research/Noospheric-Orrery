@@ -9,7 +9,7 @@ from pathlib import Path
 from simmer_sdk import refine
 from ..db import get_connection
 from ..config import get_settings
-from .simmer_general import _build_golden_set_mapreduce, _refine_spec_rules, _discover_domain_types, BASE_TAXONOMY
+from .simmer_general import _build_golden_set_judged, _refine_spec_rules, _discover_domain_types, BASE_TAXONOMY
 
 
 async def run_simmer_domain(job: dict, db_path: str) -> None:
@@ -149,9 +149,10 @@ Read every sample document and list ALL entities you find as a JSON array:
             print(f"No domain-specific types discovered for {domain_path}; skipping domain refinement.", flush=True)
             return
         domain_taxonomy = domain_types
-        print(f"Building domain golden via map (additive, {n_domain} domain types): {domain_path} ({len(sample_chunks)} chunks, job {job_id})", flush=True)
-        golden_best = await _build_golden_set_mapreduce(
-            sample_chunks, settings, job_id, db_path, taxonomy=domain_taxonomy)
+        print(f"Building domain golden via judged loop (additive, {n_domain} domain types): {domain_path} ({len(sample_chunks)} chunks, {iterations} iters, job {job_id})", flush=True)
+        golden_best = await _build_golden_set_judged(
+            sample_chunks, settings, job_id, db_path, iterations,
+            taxonomy_hint=domain_taxonomy, domain_path=domain_path)
         golden_set_path.write_text(golden_best)
 
     # Phase 2: decomposed rules-spec, seeded with the domain-specific types only — an ADDITIVE

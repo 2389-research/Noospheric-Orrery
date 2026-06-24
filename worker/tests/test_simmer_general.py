@@ -21,9 +21,9 @@ async def test_simmer_general_creates_spec(tmp_path):
     init_db(db_path)
     _seed_docs_and_chunks(db_path)
 
-    # Phase 1 (map-reduce golden) and Phase 2 (rules-loop) make LLM calls — mock them.
+    # Phase 1 (judged golden loop) and Phase 2 (rules-loop) make LLM calls — mock them.
     golden_md = '# Golden Set\n```json\n[{"name": "alice", "type": "person"}]\n```'
-    with patch("src.jobs.simmer_general._build_golden_set_mapreduce", new_callable=AsyncMock,
+    with patch("src.jobs.simmer_general._build_golden_set_judged", new_callable=AsyncMock,
                return_value=golden_md), \
          patch("src.jobs.simmer_general._refine_spec_rules", new_callable=AsyncMock,
                return_value=("# Entity Extraction Specification\n## Rules\n### INCLUDE Rules\n...", 7.5)), \
