@@ -88,25 +88,37 @@ that someone searching for the image content would find it from the description 
 """
 
 
-GOLDEN_TAXONOMY = """- Person — people, speakers, authors, creators
-- Organization — companies, groups, teams, brands
-- Topic — concepts, ideas, theories, fields, subjects
-- Event — happenings, milestones, dates, releases
-- Location — places, regions, settings, venues
-- Thing — objects, tools, products, materials, artifacts"""
+# Base taxonomy mirrors the built-in general spec (orchestrator/specs/general_text.md) —
+# 11 lowercase types — so simmered specs share one vocabulary with the out-of-box extractor.
+# Domain simmering LAYERS domain-specific types on top of this (see _discover_domain_types).
+BASE_TAXONOMY = """- person — named individuals (speakers, authors, founders, attendees)
+- organization — companies, funds, institutions, teams, departments, brands
+- topic — a field or subject area you could take a class in
+- concept — a specific idea, theory, principle, or technique within a field
+- technology — infrastructure, languages, protocols, frameworks, standards
+- product — named commercial offerings (something you buy, subscribe to, or download)
+- event — named events, meetings, milestones, releases
+- location — places, regions, cities, venues
+- document — referenced works, papers, books, articles
+- date_ref — specific dates or time periods
+- metric — named measurements, KPIs, or benchmarks with values"""
 
-GOLDEN_MAP_PROMPT = """You are an entity extraction system. Extract EVERY real named entity from the text below.
+# Comma-joined base type names — passed as an EXCLUSION list to domain extraction (those
+# types are already extracted by the general pass; domain refinement is additive).
+BASE_TYPE_NAMES = ", ".join(ln.split("—")[0].strip(" -") for ln in BASE_TAXONOMY.splitlines())
 
-Entity type taxonomy:
+GOLDEN_MAP_PROMPT = """You are an entity extraction system. Extract every entity from the text below that matches the type taxonomy.
+
+Entity type taxonomy (extract ONLY these types):
 {tax}
-
+{exclude}
 TEXT:
 {chunk}
 
 Rules:
 - Extract only entities explicitly present in THIS text — do not invent.
+- Extract ONLY entities whose type is in the taxonomy above; ignore everything else.
 - Normalize names: lowercase, strip whitespace.
-- Be exhaustive about REAL entities: every named person, org, product, place, event, concept.
 - DO NOT extract metadata as entities: no bare dates/timestamps, no filenames, no UUIDs/IDs, no URLs, no raw numbers."""
 
 GOLDEN_MAP_SCHEMA = {
@@ -125,86 +137,93 @@ GOLDEN_MAP_SCHEMA = {
 }
 
 
-GOLDEN_CANON_PROMPT = """You are canonicalizing a list of "{etype}" entities extracted from documents. Because each document was processed independently, the list has duplicates and noise. Produce a CLEAN canonical list of {etype} names.
+DOMAIN_TYPES_PROMPT = """The text below is from the '{domain}' domain of a knowledge graph.
 
-Rules:
-- FRAGMENTS: merge a partial name into its fuller form ("harper" + "harper reed" -> "harper reed"; "russ" + "russell cummer" -> "russell cummer").
-- SPELLING VARIANTS / TYPOS: merge to the correct form ("commer corporation" + "cummer corporation" -> "cummer corporation"; "vancouv" + "vancouver" -> "vancouver").
-- ACRONYM / EXPANSION: keep ONE canonical form ("lvmh" and "louis vuitton moet hennessy" are the same — keep one); merge garbled variants into it.
-- NEAR-DUPLICATES: collapse trivial variants ("ecommerce" / "e-commerce" -> one).
-- DROP NON-ENTITIES: remove emails and vague phrase-fragments that aren't real named entities ("ease of purchasing", "pay for play", "market expansion plans").
-- Do NOT invent new names; only merge or drop.
+The generic types below are ALREADY extracted by a separate general pass — do NOT propose these:
+{base}
 
-{etype} NAMES ({n} items):
-{listing}"""
+Entities already extracted in this domain (typed with the generic types — the granular detail
+the domain types should newly capture is hiding inside these and in the text):
+{existing}
 
-GOLDEN_CANON_SCHEMA = {
-    "type": "object",
-    "properties": {"names": {"type": "array", "items": {"type": "string"}}},
-    "required": ["names"],
-}
+The point of domain refinement is to capture MORE GRANULAR, domain-specific entities the generic
+types miss or lump together. Propose 2-6 ADDITIONAL entity types specific to this domain. Prefer
+types whose instances are CONCRETE and NAMED (a small extractor applies those reliably). For EACH,
+give a concrete example taken from the entities/text above so the extractor knows what to look for.
+
+SAMPLE TEXT:
+{samples}
+
+Return ONLY new domain-specific types, lowercase snake_case, one per line, EXACTLY as:
+- type_name — one-line definition (e.g., "a concrete example from this domain")
+If none are clearly warranted, return nothing."""
 
 
-async def _canonicalize_group(group: list[dict], etype: str, relay: Relay, model: str) -> list[dict]:
-    """Canonicalize one type's entities. Merging within a type is correct (you never merge
-    a Person into an Organization), and keeps each call's output within the token budget."""
-    if len(group) < 2:
-        return group
-    listing = "\n".join(f"- {e['name']}" for e in group)
+async def _discover_domain_types(sample_chunks, domain_path: str, settings, db_path: str = None) -> str:
+    """Propose domain-specific entity types (beyond BASE_TAXONOMY) — the point of domain
+    refinement. Grounded in the entities ALREADY extracted for this domain (so proposals fit
+    the real data) and asks for a concrete example per type (so the extractor applies it).
+    Returns extra taxonomy lines to append, or '' if none."""
+    relay = Relay.from_settings(settings)
+    model = settings.classification_model
+    samples = "\n\n".join(str(c[1])[:1200] for c in sample_chunks[:6])
+
+    # Ground in entities already extracted for this domain (by the general pass at ingest)
+    existing = "(none yet)"
+    if db_path:
+        try:
+            conn = get_connection(db_path)
+            rows = conn.execute(
+                "SELECT DISTINCT e.canonical_name, e.type FROM entities e "
+                "JOIN entity_sources es ON e.id = es.entity_id "
+                "JOIN document_domains dd ON es.document_id = dd.document_id "
+                "WHERE dd.domain_path = ? LIMIT 60",
+                (domain_path,),
+            ).fetchall()
+            conn.close()
+            if rows:
+                existing = "\n".join(f"- {r[0]} ({r[1]})" for r in rows)
+        except Exception:
+            pass
+
+    base_names = {ln.split("—")[0].strip(" -").lower() for ln in BASE_TAXONOMY.splitlines()}
     try:
-        result = await relay.complete_structured(
-            model=model, max_tokens=4096,
-            messages=[{"role": "user", "content": GOLDEN_CANON_PROMPT.format(etype=etype, n=len(group), listing=listing)}],
-            schema=GOLDEN_CANON_SCHEMA,
-            tool_name="canonical_names",
-            tool_description=f"Return the cleaned canonical {etype} names",
+        resp = await relay.complete(
+            model=model, max_tokens=1024,
+            messages=[{"role": "user", "content": DOMAIN_TYPES_PROMPT.format(
+                domain=domain_path, base=BASE_TAXONOMY, existing=existing, samples=samples)}],
         )
-        cleaned = result.get("names", []) if isinstance(result, dict) else []
-        out, seen = [], set()
-        for n in cleaned:
-            name = str(n).lower().strip()
-            if name and name not in seen:
-                seen.add(name)
-                out.append({"name": name, "type": etype})
-        # Safety: reject a degenerate result (empty, or larger than input — likely a parse failure)
-        if not out or len(out) > len(group):
-            print(f"  [golden_set] canon {etype}: {len(out)} (raw {len(group)}) — keeping raw", flush=True)
-            return group
-        return out
+        kept = []
+        for ln in resp.text.splitlines():
+            ln = ln.strip()
+            if ln.startswith("-") and "—" in ln:
+                name = ln.split("—")[0].strip(" -").lower()
+                if name and name not in base_names:
+                    kept.append(f"- {name} — {ln.split('—', 1)[1].strip()}")
+        return "\n".join(kept)
     except Exception as e:
-        print(f"  [golden_set] canon {etype} failed, keeping raw: {e}", flush=True)
-        return group
+        print(f"  [domain_types] discovery failed: {e}", flush=True)
+        return ""
 
 
-async def _canonicalize_golden(golden: list[dict], relay: Relay, model: str) -> list[dict]:
-    """REDUCE: LLM canonicalization that merges fragments/variants/acronyms and drops
-    non-entities — the global view per-chunk extraction lacks. Batched PER TYPE so each
-    call stays within the output-token budget (one call over hundreds of entities overflows
-    and parse-fails). Falls back to the raw group on any failure."""
-    if len(golden) < 2:
-        return golden
-    from collections import defaultdict
-    by_type: dict[str, list[dict]] = defaultdict(list)
-    for e in golden:
-        by_type[e["type"]].append(e)
-    out: list[dict] = []
-    for etype, group in by_type.items():
-        out.extend(await _canonicalize_group(group, etype, relay, model))
-    return sorted(out, key=lambda e: (e["type"], e["name"]))
-
-
-async def _build_golden_set_mapreduce(sample_chunks, settings, job_id: str, db_path: str) -> str:
+async def _build_golden_set_mapreduce(sample_chunks, settings, job_id: str, db_path: str, taxonomy: str = None, exclude_types: str = "") -> str:
     """Decomposed golden-set generation for local models.
 
-    MAP: one small extraction call per chunk (no tools, no agentic loop).
-    REDUCE: pure-Python merge + dedupe across chunks.
+    MAP: one small extraction call per chunk (no tools, no agentic loop), extracting ONLY the
+    types in `taxonomy`. For domain refinement, taxonomy = the domain-specific types only and
+    `exclude_types` = the base type names (already extracted by the general pass) — so the
+    domain golden is ADDITIVE (just the granular domain entities), not a re-extraction.
+    Exact-(name,type) dedup across chunks only. NO canonicalization here — variant merging and
+    type reconciliation are the normalization step's job on the live graph (issue #26).
 
-    Replaces the agentic refine() generator, which stalls on local models
-    (gemma4:26b loops on the read tool → empty candidate). Deterministic.
+    Replaces the agentic refine() generator, which stalls on local models (gemma4:26b loops
+    on the read tool → empty candidate). Deterministic.
     """
+    taxonomy = taxonomy or BASE_TAXONOMY
+    exclude = (f"\nALREADY EXTRACTED by a separate pass — do NOT extract entities of these types: "
+               f"{exclude_types}\n") if exclude_types else ""
     relay = Relay.from_settings(settings)
-    extract_model = settings.extraction_model       # e4b — fast, purpose-built per-chunk extraction (MAP)
-    canon_model = settings.classification_model      # 26b — global reasoning for canonicalization (REDUCE)
+    extract_model = settings.extraction_model       # e4b — fast, purpose-built per-chunk extraction
     merged: dict[tuple, dict] = {}
     per_chunk = []
     for chunk in sample_chunks:
@@ -212,7 +231,7 @@ async def _build_golden_set_mapreduce(sample_chunks, settings, job_id: str, db_p
         try:
             result = await relay.complete_structured(
                 model=extract_model, max_tokens=2048,
-                messages=[{"role": "user", "content": GOLDEN_MAP_PROMPT.format(tax=GOLDEN_TAXONOMY, chunk=text)}],
+                messages=[{"role": "user", "content": GOLDEN_MAP_PROMPT.format(tax=taxonomy, exclude=exclude, chunk=text)}],
                 schema=GOLDEN_MAP_SCHEMA,
                 tool_name="extract_entities",
                 tool_description="Extract named entities from the text",
@@ -224,26 +243,19 @@ async def _build_golden_set_mapreduce(sample_chunks, settings, job_id: str, db_p
         per_chunk.append(len(ents))
         for e in ents:
             name = str(e.get("name", "")).lower().strip()
-            etype = str(e.get("type", "")).strip().capitalize()
+            etype = str(e.get("type", "")).strip().lower()   # lowercase to match the taxonomy
             if name and (name, etype) not in merged:
                 merged[(name, etype)] = {"name": name, "type": etype}
 
     golden = sorted(merged.values(), key=lambda e: (e["type"], e["name"]))
-    print(f"  [golden_set] map: {len(golden)} entities from {len(sample_chunks)} chunks (per-chunk: {per_chunk})", flush=True)
-
-    # REDUCE: LLM canonicalization. Per-chunk extraction has no global view, so fragments
-    # ("harper"/"harper reed"), spelling/typo variants ("commer"/"cummer"), acronym pairs
-    # ("lvmh"/"louis vuitton moet hennessy") and non-entities (emails, vague phrases) survive
-    # the exact-match merge above. One bounded gemma4 call canonicalizes them — recovering the
-    # global dedup a single-context (agentic) pass does, without the agentic fragility.
-    raw_count = len(golden)
-    golden = await _canonicalize_golden(golden, relay, canon_model)
-    print(f"  [golden_set] reduce (canonicalize): {raw_count} -> {len(golden)} entities", flush=True)
+    types_seen = sorted({e["type"] for e in golden})
+    print(f"  [golden_set] map: {len(golden)} entities from {len(sample_chunks)} chunks "
+          f"(per-chunk: {per_chunk}); types: {types_seen}", flush=True)
 
     md = "\n".join([
         "# Golden Set\n",
         "## Entity Type Taxonomy",
-        GOLDEN_TAXONOMY,
+        taxonomy,
         "\n## Reference Entities\n",
         "```json",
         json.dumps(golden, indent=2),
@@ -257,8 +269,8 @@ async def _build_golden_set_mapreduce(sample_chunks, settings, job_id: str, db_p
             "INSERT INTO simmer_iterations (id, job_id, phase, iteration, scores, composite, key_change, asi, judge_mode, regressed, candidate_preview) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (str(uuid.uuid4()), job_id, "golden_set", 0, json.dumps({}), None,
-             f"map-reduce decomposed generation: {len(golden)} entities (no agentic loop)",
-             None, "map-reduce", False, None),
+             f"map extraction: {len(golden)} entities, {len(types_seen)} types (dedup/canonicalization deferred to normalization)",
+             None, "map", False, None),
         )
         conn.commit()
     finally:
@@ -382,12 +394,7 @@ Extract ALL entities from the document that match the type definitions below.
 Output JSON objects with "name" (lowercase, trimmed) and "type" fields.
 
 ## Entity Type Definitions
-**Person** — named individuals (speakers, authors, founders, attendees)
-**Organization** — companies, funds, teams, departments, brands
-**Location** — places, regions, cities, venues
-**Topic** — named fields, domains, or subject areas discussed as focal points
-**Event** — named happenings, meetings, milestones, talks, dates
-**Thing** — concrete objects, tools, software, products, materials
+{type_defs}
 
 ## Rules
 ### INCLUDE Rules
@@ -399,9 +406,9 @@ Output JSON objects with "name" (lowercase, trimmed) and "type" fields.
 1. Read the whole document.
 2. Extract every entity matching a type above. The type definitions are general — apply them
    to ANY document, not just this one. Do NOT hardcode specific names.
-3. Normalize names (lowercase, trim).
+3. Normalize names (lowercase, trim); use the lowercase type names exactly as defined above.
 
-Return ONLY a JSON array: [{"name": "...", "type": "Person|Organization|Location|Topic|Event|Thing"}]"""
+Return ONLY a JSON array: [{{"name": "...", "type": "<one of the types above>"}}]"""
 
 SPEC_EXTRACT_PROMPT = """You are an entity extraction system. Follow this spec exactly.
 
@@ -446,7 +453,7 @@ def _parse_golden_keys(golden_md: str) -> set:
         arr = json.loads(m.group())
     except Exception:
         return set()
-    return {(str(e.get("name", "")).lower().strip(), str(e.get("type", "")).strip().capitalize())
+    return {(str(e.get("name", "")).lower().strip(), str(e.get("type", "")).strip().lower())
             for e in arr if isinstance(e, dict) and e.get("name")}
 
 
@@ -458,21 +465,24 @@ def _strip_fences(text: str) -> str:
     return t.strip()
 
 
-async def _refine_spec_rules(golden_md, sample_chunks, settings, job_id, db_path, iterations, domain_path=None):
+async def _refine_spec_rules(golden_md, sample_chunks, settings, job_id, db_path, iterations, domain_path=None, taxonomy=None):
     """DECOMPOSED Phase 2: produce a GENERALIZED rules spec (type defs + INCLUDE/EXCLUDE
     rules + illustrative examples), NOT a relisting of golden entities.
 
-    Deterministic F1 scoring against the golden (no LLM judge); the LLM only revises the
-    rules from concrete misses/false-positives. Single-shot extraction per chunk (no agentic
-    loop). Replaces the agentic refine(), which emitted hardcoded entity lists on local models.
+    Seeded from `taxonomy` (BASE_TAXONOMY, or base + domain-specific types) so the spec
+    defines and extracts the domain's types. Deterministic F1 scoring against the golden
+    (no LLM judge); the LLM only revises the rules from concrete misses/false-positives.
+    Single-shot extraction per chunk (no agentic loop). Replaces the agentic refine(), which
+    emitted hardcoded entity lists on local models.
     """
+    taxonomy = taxonomy or BASE_TAXONOMY
     relay = Relay.from_settings(settings)
     extract_model = settings.extraction_model
     reviser_model = settings.classification_model
     golden = _parse_golden_keys(golden_md)
-    domain_note = f" The spec targets the '{domain_path}' domain." if domain_path else ""
+    domain_note = f" The spec targets the '{domain_path}' domain — keep its domain-specific types." if domain_path else ""
 
-    spec = SPEC_SEED_TEMPLATE
+    spec = SPEC_SEED_TEMPLATE.format(type_defs=taxonomy)
     best = (-1.0, spec)
     prev_f1 = None
     for i in range(iterations + 1):  # iteration 0 scores the seed template
@@ -487,7 +497,7 @@ async def _refine_spec_rules(golden_md, sample_chunks, settings, job_id, db_path
                 )
                 for e in (res.get("entities", []) if isinstance(res, dict) else []):
                     name = str(e.get("name", "")).lower().strip()
-                    etype = str(e.get("type", "")).strip().capitalize()
+                    etype = str(e.get("type", "")).strip().lower()
                     if name:
                         extracted.add((name, etype))
             except Exception as ex:

@@ -8,7 +8,7 @@ from pathlib import Path
 from simmer_sdk import refine
 from ..db import get_connection
 from ..config import get_settings
-from .simmer_general import _build_golden_set_mapreduce, _refine_spec_rules
+from .simmer_general import _build_golden_set_mapreduce, _refine_spec_rules, _discover_domain_types, BASE_TAXONOMY, BASE_TYPE_NAMES
 
 
 async def run_simmer_domain(job: dict, db_path: str) -> None:
@@ -127,27 +127,38 @@ Read every sample document and list ALL entities you find as a JSON array:
     resume = config.get("resume", False)
     golden_set_path = domain_dir / "golden_set.md"
 
-    # Phase 1: Golden set simmering (domain-specific) — type taxonomy + reference entities
-    # Skip if resuming and a golden set already exists from a previous run
+    # The POINT of domain refinement: discover MORE GRANULAR, domain-specific entity types and
+    # extract ONLY those — the generic base types are already covered by the general pass, so the
+    # domain golden/spec are ADDITIVE (not a re-extraction). Grounded in the domain's existing
+    # entities. Dedup/canonicalization is the normalization step's job (issue #26).
+    domain_types = await _discover_domain_types(sample_chunks, domain_path, settings, db_path)
+    n_domain = len(domain_types.splitlines()) if domain_types else 0
+    print(f"Domain types for {domain_path}: +{n_domain}\n{domain_types}", flush=True)
+    if domain_types:
+        # ADDITIVE: extract ONLY the domain-specific types. The positive "extract only these
+        # types" constraint already excludes the base types (handled by the general pass) — a
+        # closed menu is enough; listing 11 types-to-avoid just adds noise for a small model.
+        domain_taxonomy, exclude_types = domain_types, ""
+    else:
+        # Degenerate: nothing domain-specific found → fall back to the base taxonomy.
+        domain_taxonomy, exclude_types = BASE_TAXONOMY, ""
+
+    # Phase 1: decomposed, additive map golden — extract ONLY the domain-specific types.
     if resume and golden_set_path.exists():
         golden_best = golden_set_path.read_text()
         print(f"Resuming domain spec for: {domain_path} — reusing existing golden set ({len(golden_best)} chars, job {job_id})", flush=True)
     else:
-        # Phase 1: DECOMPOSED map-reduce golden generation (shared with simmer_general).
-        # The old agentic refine() stalls on local models (gemma4:26b loops on the read tool
-        # → empty candidate). map (e4b per-chunk extraction) → reduce (gemma4 canonicalize).
-        # NOTE: uses the generic 6-type taxonomy rather than discovering domain-specific types;
-        # domain-specificity is added in the Phase 2 spec rules instead.
-        print(f"Building domain golden set via map-reduce: {domain_path} ({len(sample_chunks)} chunks, job {job_id})", flush=True)
-        golden_best = await _build_golden_set_mapreduce(sample_chunks, settings, job_id, db_path)
+        print(f"Building domain golden via map (additive, {n_domain} domain types): {domain_path} ({len(sample_chunks)} chunks, job {job_id})", flush=True)
+        golden_best = await _build_golden_set_mapreduce(
+            sample_chunks, settings, job_id, db_path, taxonomy=domain_taxonomy, exclude_types=exclude_types)
         golden_set_path.write_text(golden_best)
 
-    # Phase 2: DECOMPOSED rules-spec generation (shared with simmer_general). Produces a
-    # GENERALIZED, domain-aware rules spec scored by F1 against the golden — no agentic
-    # generator (which relisted golden entities on local models) and no LLM judge.
+    # Phase 2: decomposed rules-spec, seeded with the domain-specific types only — an ADDITIVE
+    # spec that extracts the granular domain entities (general spec handles the base types).
     print(f"Refining {domain_path} extraction-spec rules ({len(sample_chunks)} chunks, job {job_id})", flush=True)
     spec_content, spec_score = await _refine_spec_rules(
-        golden_best, sample_chunks, settings, job_id, db_path, iterations, domain_path=domain_path,
+        golden_best, sample_chunks, settings, job_id, db_path, iterations,
+        domain_path=domain_path, taxonomy=domain_taxonomy,
     )
 
     # Store spec
