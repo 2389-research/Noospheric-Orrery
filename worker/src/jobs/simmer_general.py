@@ -625,7 +625,8 @@ async def _refine_spec_rules(golden_md, sample_chunks, settings, job_id, db_path
     return await simmer_loop(
         phase="extraction_spec", job_id=job_id, db_path=db_path, settings=settings,
         criteria=criteria, iterations=iterations, seed_candidate=seed,
-        generate_fn=generate_fn, evidence=golden_md[:12000], evaluator_fn=evaluator_fn)
+        generate_fn=generate_fn, evidence=golden_md[:12000], evaluator_fn=evaluator_fn,
+        problem_class="pipeline/engineering")
 
 
 async def run_simmer_general(job: dict, db_path: str) -> None:

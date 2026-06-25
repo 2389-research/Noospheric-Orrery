@@ -18,49 +18,49 @@ import uuid
 
 from orrery_relay import Relay
 from simmer_sdk.judge import parse_judge_output
+from simmer_sdk.prompts import build_judge_prompt
 
 from ..db import get_connection
 
 
-JUDGE_PROMPT = """You are evaluating a candidate artifact against the corpus it was built from and a set of criteria. Be precise and critical. Respond directly — do NOT use extended thinking, do NOT use tools.
-
-CRITERIA:
-{criteria_block}
-
-CANDIDATE (iteration {iteration}):
-{candidate}
-
-CORPUS EVIDENCE — what is actually present in the source material. Judge ONLY against this; do not assume anything not shown here:
-{evidence}
-{evaluator_block}
-Score each criterion from 0 to 10 based strictly on the evidence above, then give the single
-highest-leverage improvement. Output EXACTLY this format and nothing else:
-
-ITERATION {iteration} SCORES:
-{score_lines_hint}
-COMPOSITE: [average of the scores]/10
-
-ASI (highest-leverage direction):
-[the single most impactful, specific, actionable change that would most improve the candidate's weakest criterion]"""
+# Injected ahead of the judge skill for our non-agentic relay judge: the skill assumes the judge
+# can investigate via tools, but here everything (candidate + source material + evaluator output)
+# is pre-loaded into the prompt. This adapts the same skill for a single bounded call.
+NON_AGENTIC_JUDGE_PREAMBLE = (
+    "You are running WITHOUT tools. Everything you need — the candidate, the full source material, "
+    "and any evaluator output — is included inline below. Do NOT attempt to read or investigate "
+    "files; there are none. Read the provided content, then score and produce your ASI in the "
+    "required format. Respond directly; do not use extended thinking."
+)
 
 
-async def relay_judge(candidate: str, evidence: str, criteria: dict, settings,
-                      iteration: int = 0, evaluator_output: str | None = None):
-    """Non-agentic judge: one relay.complete call, evidence pre-loaded, no tools.
+async def relay_judge(candidate: str, evidence: str, criteria: dict, settings, *,
+                      iteration: int = 0, evaluator_output: str | None = None,
+                      seed_candidate: str | None = None, seed_scores: dict | None = None,
+                      problem_class: str = "text/creative"):
+    """Non-agentic judge: ONE relay.complete call, everything pre-loaded, no tools.
 
-    Returns a simmer-sdk JudgeOutput (scores + asi + per-criterion reasoning), parsed with
-    simmer-sdk's own parser so it's format-identical to the agentic judge.
+    Builds the prompt with simmer-sdk's own build_judge_prompt — so it carries the full judge
+    SKILL (the canonical definition of what an ASI is and how to construct it), seed calibration
+    (seed candidate + seed scores anchor cross-iteration scoring), and evaluator-output
+    interpretation ("the evaluator informs your judgment, it doesn't replace it"). Parsed with
+    simmer-sdk's parse_judge_output. Runs through orrery-relay so think:false applies.
     """
     relay = Relay.from_settings(settings)
-    criteria_block = "\n".join(f"- {k}: {v}" for k, v in criteria.items())
-    score_lines_hint = "\n".join(f"  {k}: [N]/10 — [reasoning] — [what would improve it]" for k in criteria)
-    evaluator_block = (f"\nEVALUATOR RESULTS (deterministic measurements on this candidate):\n{evaluator_output}\n"
-                       if evaluator_output else "")
-    prompt = JUDGE_PROMPT.format(
-        criteria_block=criteria_block, iteration=iteration, candidate=candidate,
-        evidence=evidence, evaluator_block=evaluator_block, score_lines_hint=score_lines_hint)
+    prompt = build_judge_prompt(
+        iteration=iteration, artifact_type="text", problem_class=problem_class,
+        criteria=criteria, candidate=candidate,
+        seed_candidate=seed_candidate, seed_scores=seed_scores,
+        evaluator_output=evaluator_output,
+        judge_preamble=NON_AGENTIC_JUDGE_PREAMBLE,
+        # deliberately NO candidate_path/evaluator_path → no "read the files" instruction
+    )
+    # The skill expects to investigate source files; non-agentic, so inject the corpus / answer-key
+    # inline. This is what the judge scores coverage/precision against.
+    prompt += ("\n\nSOURCE MATERIAL — judge the candidate strictly against THIS "
+               "(provided inline; do not use tools):\n" + evidence)
     resp = await relay.complete(
-        model=settings.classification_model, max_tokens=2048,
+        model=settings.classification_model, max_tokens=3072,
         messages=[{"role": "user", "content": prompt}])
     out = parse_judge_output(resp.text, criteria)
     # The parser's fallback can capture the "ASI (highest-leverage direction):" header into the
@@ -100,24 +100,34 @@ def _record_judged_iteration(db_path, job_id, phase, iteration, judgment, seed_s
 
 
 async def simmer_loop(*, phase, job_id, db_path, settings, criteria, iterations,
-                      seed_candidate, generate_fn, evidence, evaluator_fn=None):
+                      seed_candidate, generate_fn, evidence, evaluator_fn=None,
+                      problem_class="text/creative"):
     """Canonical generate→evaluate→judge→reflect loop with decomposed, non-agentic primitives.
 
     - seed_candidate: the iteration-0 candidate (from the decomposed generator).
     - generate_fn(candidate, asi) -> str: the decomposed generator. Receives candidate + ASI only.
     - evidence: pre-built corpus evidence string handed to the judge (no tools).
     - evaluator_fn(candidate) -> str|None: optional deterministic measurement for the judge.
+    - problem_class: "text/creative" (no evaluator — golden) or "pipeline/engineering" (the judge
+      interprets the evaluator output, e.g. F1, alongside the criteria — spec phase).
+
+    The iteration-0 candidate + its scores become the SEED CALIBRATION reference handed to the
+    judge on every later iteration, so cross-iteration scores are anchored (not cold guesses).
 
     Returns (best_candidate, best_composite). Records every iteration to simmer_iterations.
     """
     candidate = seed_candidate
+    seed_artifact = seed_candidate   # fixed iteration-0 reference for judge calibration
     seed_scores = None
     best = (-1.0, candidate)
     prev_comp = None
     for i in range(iterations + 1):
         evaluator_output = await evaluator_fn(candidate) if evaluator_fn else None
-        judgment = await relay_judge(candidate, evidence, criteria, settings,
-                                     iteration=i, evaluator_output=evaluator_output)
+        judgment = await relay_judge(
+            candidate, evidence, criteria, settings,
+            iteration=i, evaluator_output=evaluator_output,
+            seed_candidate=seed_artifact, seed_scores=seed_scores,  # build_judge_prompt gates on iteration>0
+            problem_class=problem_class)
         if i == 0:
             seed_scores = judgment.scores
         comp = judgment.composite
