@@ -1,6 +1,17 @@
 # ABOUTME: Reusable simmer framework — the generate→evaluate→judge→reflect loop, decomposed.
 # ABOUTME: Non-agentic relay judge (reuses simmer-sdk's parser) + loop + iteration recording.
 #
+# ┌─────────────────────────────────────────────────────────────────────────────────────────┐
+# │ CHESTERTON'S FENCE — read CLAUDE.md "Simmer pipeline — READ THE THEORY BEFORE TOUCHING IT" │
+# │ and simmer-sdk/docs/spec.md before changing this file.                                     │
+# │ The generate / evaluate / judge / reflect / ASI stages each prevent a SPECIFIC documented  │
+# │ failure. They are not boilerplate. Do NOT collapse the judge into the generator, strip the │
+# │ judge's calibration, or hand the generator the scores/evaluator output "to simplify" — that │
+# │ reintroduces the failures the design prevents (see the #27 case study in CLAUDE.md).        │
+# │ Structural invariants are enforced by tests/test_simmer_core.py; if you change the shape,   │
+# │ those go red on purpose.                                                                    │
+# └─────────────────────────────────────────────────────────────────────────────────────────┘
+#
 # This is the canonical simmer process (simmer-sdk/docs/spec.md) with the agentic execution
 # swapped for bounded relay calls so local models (gemma4) don't stall:
 #   - Generator: a decomposed bounded call (the caller supplies generate_fn) — gets candidate + ASI.
@@ -45,6 +56,12 @@ async def relay_judge(candidate: str, evidence: str, criteria: dict, settings, *
     (seed candidate + seed scores anchor cross-iteration scoring), and evaluator-output
     interpretation ("the evaluator informs your judgment, it doesn't replace it"). Parsed with
     simmer-sdk's parse_judge_output. Runs through orrery-relay so think:false applies.
+
+    FENCE: do NOT replace build_judge_prompt with a hand-rolled prompt. We tried that — a bare
+    prompt drops the judge skill, so gemma had no reference for what an ASI is and returned empty
+    "**" ASIs with wildly swinging scores. The skill IS the contract. Do NOT give this judge tools
+    / make it agentic either: that path stalls local models (~185s/judge) — evidence is why this
+    is one bounded call with the evidence pre-loaded.
     """
     relay = Relay.from_settings(settings)
     prompt = build_judge_prompt(

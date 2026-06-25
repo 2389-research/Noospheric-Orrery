@@ -342,7 +342,13 @@ async def _build_golden_set_judged(sample_chunks, settings, job_id: str, db_path
       judge     = non-agentic relay judge (scores + ASI), NO evaluator — the golden IS the ground
                   truth, so this is 'text' mode: the judge scores against criteria + source evidence.
     Restores the judge round #27 deleted, without the agentic stall (generator) or the reasoning
-    bug (judge runs through orrery-relay with think:false)."""
+    bug (judge runs through orrery-relay with think:false).
+
+    FENCE: do NOT "simplify" this back to a bare map (_build_golden_set_mapreduce alone). That was
+    #27 — the golden set then has NO evaluation at all, and every downstream F1 score is measured
+    against an unjudged, noisy answer key. The golden is the ground truth; it must be judged. See
+    CLAUDE.md "Simmer pipeline" + simmer-sdk/docs/spec.md. test_golden_phase_is_judged_not_bare_map
+    guards this."""
     from .simmer_core import simmer_loop
 
     # Evidence handed to the judge: the actual source text, pre-loaded (no tools). Truncated so a

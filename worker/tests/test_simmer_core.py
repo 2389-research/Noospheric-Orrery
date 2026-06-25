@@ -1,5 +1,9 @@
 # ABOUTME: Structural tests for the simmer framework — lock in the generator/judge/ASI/reflect
 # ABOUTME: building blocks so a future change can't silently drop a role (as #27 did to the judge).
+#
+# These enforce the invariants listed in CLAUDE.md "Simmer pipeline — READ THE THEORY BEFORE
+# TOUCHING IT". If you're changing the pipeline shape and one of these goes red, that is the
+# point — read the rationale (CLAUDE.md + simmer-sdk/docs/spec.md) before "fixing" the test.
 
 import json
 import types
