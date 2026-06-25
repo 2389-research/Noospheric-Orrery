@@ -161,24 +161,47 @@ Auth is always noop (no sign-in required). Data is stored in SQLite.
 
 Simmer jobs read `CLASSIFICATION_MODEL` for judge/generator and `EXTRACTION_MODEL` for clerk/extraction. All model references come from config — no hardcoded model names in the pipeline code.
 
-### simmer-sdk for Iterative Refinement
+### ⚠️ Simmer pipeline — READ THE THEORY BEFORE TOUCHING IT
 
-The worker uses simmer-sdk to refine both the golden set (entity reference set) and the extraction spec (Haiku prompt):
+The golden-set and extraction-spec refinement is a **simmer loop** — an RL-style iterative
+refinement process. Its stages (**generate → evaluate → judge → reflect**, driven by an **ASI** =
+the single highest-leverage fix) are **NOT incidental structure**. Each stage prevents a specific,
+documented failure. Agents repeatedly try to "simplify" this by collapsing stages without
+understanding why they exist — and reintroduce the exact failures the design prevents. **Do not.**
 
-```python
-from simmer_sdk import refine
+**Read before modifying / removing / merging / "simplifying" any stage:**
+- Blog (the *why*, with a worked example of score inflation): https://2389.ai/posts/simmer-skill/
+- simmer-sdk repo: https://github.com/2389-research/simmer-sdk
+- simmer-sdk README: `simmer-sdk/README.md`
+- Canonical process spec: `simmer-sdk/docs/spec.md`
+- Local-model decomposition guide: `simmer-sdk/docs/local-models-guide.md`
+- Judge definition (what an ASI is, scoring, calibration): `simmer-sdk/src/simmer_sdk/skill_reference/judge.md`
+  — our judge **loads this skill at runtime** via `build_judge_prompt`, so it is the live contract, not just docs.
 
-result = await refine(
-    artifact=path_to_artifact,
-    evaluator="python evaluator.py --arg {candidate_path}",
-    criteria={"coverage": "...", "precision": "..."},
-    primary="coverage",
-    iterations=5,
-    judge_mode="board",
-)
-```
+**Invariants this implementation MUST preserve** (enforced by `worker/tests/test_simmer_core.py`):
+1. The **judge** is a stage distinct from the generator — never merge them. (Merging them was the #27 regression.)
+2. **Context discipline:** the generator is steered by the **ASI only** — never the raw scores or evaluator output.
+3. The judge is **calibrated** against the iteration-0 seed + its scores (without it, scores inflate while quality stagnates).
+4. The **evaluator (F1) FEEDS the judge**, it does not replace it.
+5. The judge prompt is built from the simmer-sdk **judge skill** (`build_judge_prompt`), NOT a hand-rolled bare prompt (a bare prompt drops the ASI definition → empty/garbage ASIs).
+6. **Reflect** is kept: best-so-far + regression tracking; every iteration recorded to `simmer_iterations`.
 
-simmer-sdk is an internal dependency:
+**Orrery's adaptation (why this differs from stock simmer-sdk — do not "fix" it back):** simmer-sdk's
+`refine()` runs these stages as **agentic `ClaudeSDKClient` loops**. Local models (gemma4) stall in
+agentic loops, so orrery runs every stage as a **bounded, non-agentic relay call**
+(`worker/src/jobs/simmer_core.py`: `simmer_loop` + `relay_judge`), with `think:false` (reasoning
+models otherwise emit only thinking and empty the answer). Re-agentifying these stages "to match the
+SDK" reintroduces the stalls.
+
+**Case study — #27:** a "decomposition" PR deleted the judge entirely (golden phase became a bare map
+with no evaluation). Recovery required re-deriving the whole process from the spec + judge skill
+(commits `9829613..a9037e0`). If you're removing a stage to "simplify," you are likely repeating #27.
+
+### simmer-sdk dependency
+
+The worker does **not** call `refine()` (the agentic loop). It runs the decomposed loop in
+`worker/src/jobs/simmer_core.py` and reuses simmer-sdk only for the **judge contract** —
+`build_judge_prompt` (loads the judge skill) and `parse_judge_output`. simmer-sdk is an internal dependency:
 - **Repo**: `https://github.com/2389-research/simmer-sdk`
 - **Docker**: clone alongside, then `cp -r simmer-sdk/ worker/simmer-sdk/` before `docker compose build`
 - **Local dev**: `git clone https://github.com/2389-research/simmer-sdk.git && pip install -e simmer-sdk/`

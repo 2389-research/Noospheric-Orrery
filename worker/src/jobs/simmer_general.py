@@ -211,7 +211,7 @@ async def _discover_domain_types(sample_chunks, domain_path: str, settings, db_p
         return ""
 
 
-async def _build_golden_set_mapreduce(sample_chunks, settings, job_id: str, db_path: str, taxonomy: str = None, exclude_types: str = "") -> str:
+async def _build_golden_set_mapreduce(sample_chunks, settings, job_id: str, db_path: str, taxonomy: str = None, exclude_types: str = "", record: bool = True) -> str:
     """Decomposed golden-set generation for local models.
 
     MAP: one small extraction call per chunk (no tools, no agentic loop), extracting ONLY the
@@ -267,21 +267,115 @@ async def _build_golden_set_mapreduce(sample_chunks, settings, job_id: str, db_p
         "```",
     ])
 
-    # Record one golden_set iteration row so the trajectory/monitor shows the phase
-    conn = get_connection(db_path)
-    try:
-        conn.execute(
-            "INSERT INTO simmer_iterations (id, job_id, phase, iteration, scores, composite, key_change, asi, judge_mode, regressed, candidate_preview) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), job_id, "golden_set", 0, json.dumps({}), None,
-             f"map extraction: {len(golden)} entities, {len(types_seen)} types (dedup/canonicalization deferred to normalization)",
-             None, "map", False, None),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    # Record one golden_set iteration row so the trajectory/monitor shows the phase.
+    # Skipped when this map is used only as the iteration-0 SEED for the judged loop
+    # (_build_golden_set_judged), which owns the golden_set iteration rows itself.
+    if record:
+        conn = get_connection(db_path)
+        try:
+            conn.execute(
+                "INSERT INTO simmer_iterations (id, job_id, phase, iteration, scores, composite, key_change, asi, judge_mode, regressed, candidate_preview) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), job_id, "golden_set", 0, json.dumps({}), None,
+                 f"map extraction: {len(golden)} entities, {len(types_seen)} types (dedup/canonicalization deferred to normalization)",
+                 None, "map", False, None),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     return md
+
+
+GOLDEN_GEN_PROMPT = """You are a golden-set designer improving an entity reference set. Output ONLY the improved golden set in the exact format shown — no commentary, no extended thinking.
+
+Current golden set:
+{candidate}
+
+Highest-leverage improvement to make (ASI):
+{asi}
+
+Source material the golden set is built from — every entity MUST actually appear here:
+{evidence}
+{domain_note}
+Apply the improvement. You may add/remove/rename entity types, add/remove/correct entities, or fix type
+assignments — but make the change the ASI describes. Output EXACTLY this structure:
+
+# Golden Set
+
+## Entity Type Taxonomy
+- type_name — definition
+(one line per type)
+
+## Reference Entities
+```json
+[{{"name": "lowercase name", "type": "type_name"}}]
+```
+
+Lowercase all names and types. Every entity must actually appear in the source material above."""
+
+
+async def _generate_golden(candidate: str, asi: str, evidence: str, settings, domain_path: str = None) -> str:
+    """Decomposed golden GENERATOR: current golden + ASI + source material → improved golden.
+    Bounded single call (no tools, no agentic loop). Per context discipline it receives the ASI
+    and the source background — never the scores or the judge's raw reasoning."""
+    relay = Relay.from_settings(settings)
+    domain_note = (f"\nThis golden targets the '{domain_path}' domain — keep ONLY granular, domain-specific "
+                   f"types beyond the generic base set ({BASE_TYPE_NAMES}); generic types are handled by a "
+                   f"separate pass.\n" if domain_path else "")
+    try:
+        resp = await relay.complete(
+            model=settings.classification_model, max_tokens=4096,
+            messages=[{"role": "user", "content": GOLDEN_GEN_PROMPT.format(
+                candidate=candidate, asi=asi, evidence=evidence, domain_note=domain_note)}])
+        revised = _strip_fences(resp.text)
+        return revised if (revised and "[" in revised) else candidate
+    except Exception as e:
+        print(f"  [golden_gen] error: {e}", flush=True)
+        return candidate
+
+
+async def _build_golden_set_judged(sample_chunks, settings, job_id: str, db_path: str, iterations: int,
+                                   taxonomy_hint: str = None, domain_path: str = None, exclude_types: str = "") -> str:
+    """Golden phase as the canonical simmer loop (simmer_core.simmer_loop):
+      generator = decomposed map (iter-0 seed) + _generate_golden (regenerate from ASI)
+      judge     = non-agentic relay judge (scores + ASI), NO evaluator — the golden IS the ground
+                  truth, so this is 'text' mode: the judge scores against criteria + source evidence.
+    Restores the judge round #27 deleted, without the agentic stall (generator) or the reasoning
+    bug (judge runs through orrery-relay with think:false).
+
+    FENCE: do NOT "simplify" this back to a bare map (_build_golden_set_mapreduce alone). That was
+    #27 — the golden set then has NO evaluation at all, and every downstream F1 score is measured
+    against an unjudged, noisy answer key. The golden is the ground truth; it must be judged. See
+    CLAUDE.md "Simmer pipeline" + simmer-sdk/docs/spec.md. test_golden_phase_is_judged_not_bare_map
+    guards this."""
+    from .simmer_core import simmer_loop
+
+    # Evidence handed to the judge: the actual source text, pre-loaded (no tools). Truncated so a
+    # small local model stays in budget. This is the corpus the golden must faithfully cover.
+    evidence = "\n\n".join(f"=== {c[2]} ===\n{str(c[1])[:1500]}" for c in sample_chunks)[:18000]
+
+    # Iteration-0 seed: the deterministic map (record=False — the loop owns the golden_set rows).
+    seed = await _build_golden_set_mapreduce(
+        sample_chunks, settings, job_id, db_path, taxonomy=(taxonomy_hint or BASE_TAXONOMY),
+        exclude_types=exclude_types, record=False)
+
+    criteria = {
+        "coverage": "every named entity present in the source material appears in the reference list",
+        "precision": "every reference entity actually appears in the source material; no invented entities; no metadata (bare dates, ids, urls)",
+        "taxonomy_quality": ("entity types are meaningful, consistent, and correctly assigned"
+                             + (f"; types are GRANULAR and specific to the '{domain_path}' domain, not generic"
+                                if domain_path else "")),
+    }
+
+    async def generate_fn(candidate, asi):
+        return await _generate_golden(candidate, asi, evidence, settings, domain_path=domain_path)
+
+    best_golden, _ = await simmer_loop(
+        phase="golden_set", job_id=job_id, db_path=db_path, settings=settings,
+        criteria=criteria, iterations=iterations, seed_candidate=seed,
+        generate_fn=generate_fn, evidence=evidence, evaluator_fn=None)
+    return best_golden
 
 
 async def _parse_judgment_file(judgment_text: str, seed_scores: dict[str, int], settings) -> list[dict]:
@@ -425,28 +519,26 @@ TEXT:
 
 Extract all entities present in the text according to the spec."""
 
-SPEC_REVISE_PROMPT = """You are refining a GENERALIZED entity-extraction SPEC (a reusable prompt that must work on documents it has never seen). You are NOT extracting entities and you MUST NOT list specific entity names in the spec.{domain_note}
+SPEC_REVISE_ASI_PROMPT = """You are making ONE surgical edit to a GENERALIZED entity-extraction SPEC (a reusable prompt that must work on documents it has never seen). You are NOT extracting entities and you MUST NOT list specific entity names in the spec.{domain_note}
 
 Current spec:
 ---
 {spec}
 ---
 
-When run on sample documents and compared to the ground-truth answer key:
+The single highest-leverage fix to make (ASI) — from a judge that reviewed how this spec actually performed when run:
+{asi}
 
-MISSED (the spec should have extracted these but didn't — coverage gaps):
-{misses}
+Apply ONLY this fix. Make the MINIMAL change needed:
+- Add, remove, or amend ONLY the specific rule(s) or type definition(s) the ASI calls out.
+- PRESERVE every other rule, type definition, and example EXACTLY as written — do NOT rewrite, reword,
+  reorder, or "improve" anything the ASI did not mention. The rest of the spec is working; keep it.
+- Express the fix as a general PATTERN, not by naming specific entities (e.g. "EXCLUDE vague descriptors
+  like 'quality'", "extract multi-word names whole, not fragments"). Keep examples ILLUSTRATIVE only —
+  never a list of answer-key entities.
 
-WRONGLY EXTRACTED (noise / not real entities — precision errors):
-{fps}
-
-Rewrite the spec's INCLUDE/EXCLUDE rules so a model following it would catch the MISSED items
-and avoid the WRONGLY-EXTRACTED ones — GENERALLY, by describing the PATTERN, not by naming
-entities (e.g. "EXCLUDE vague descriptors like 'quality'", "INCLUDE single-word domain fields",
-"extract multi-word names whole, not fragments"). Keep the type definitions and a few
-ILLUSTRATIVE examples, but the body must be RULES, never a list of the answer-key entities.
-
-Return the full revised spec (markdown). No commentary."""
+A broad rewrite regresses the spec; weak models over-correct and trade away criteria that were working.
+Change as little as possible. Return the FULL spec with only that surgical change applied. No commentary."""
 
 
 def _parse_golden_keys(golden_md: str) -> set:
@@ -471,26 +563,25 @@ def _strip_fences(text: str) -> str:
 
 
 async def _refine_spec_rules(golden_md, sample_chunks, settings, job_id, db_path, iterations, domain_path=None, taxonomy=None):
-    """DECOMPOSED Phase 2: produce a GENERALIZED rules spec (type defs + INCLUDE/EXCLUDE
-    rules + illustrative examples), NOT a relisting of golden entities.
-
-    Seeded from `taxonomy` (BASE_TAXONOMY, or base + domain-specific types) so the spec
-    defines and extracts the domain's types. Deterministic F1 scoring against the golden
-    (no LLM judge); the LLM only revises the rules from concrete misses/false-positives.
-    Single-shot extraction per chunk (no agentic loop). Replaces the agentic refine(), which
-    emitted hardcoded entity lists on local models.
+    """DECOMPOSED Phase 2 on the canonical simmer loop (simmer_core.simmer_loop):
+      generator = rules-spec (seed template → revise from ASI)
+      evaluator = run the spec per chunk (e4b), diff vs golden → F1 + misses/false-positives
+      judge     = non-agentic relay judge reading the evaluator output → scores + ASI
+    The deterministic F1 still drives the evaluator, but the JUDGE now interprets it (and adds the
+    generalizability signal F1 can't measure) and emits the ASI. Per context discipline the reviser
+    is steered by the ASI only — it never sees the raw misses/false-positives or the scores.
     """
+    from .simmer_core import simmer_loop
     taxonomy = taxonomy or BASE_TAXONOMY
     relay = Relay.from_settings(settings)
     extract_model = settings.extraction_model
-    reviser_model = settings.classification_model
     golden = _parse_golden_keys(golden_md)
     domain_note = f" The spec targets the '{domain_path}' domain — keep its domain-specific types." if domain_path else ""
 
-    spec = SPEC_SEED_TEMPLATE.format(type_defs=taxonomy)
-    best = (-1.0, spec)
-    prev_f1 = None
-    for i in range(iterations + 1):  # iteration 0 scores the seed template
+    seed = SPEC_SEED_TEMPLATE.format(type_defs=taxonomy)
+
+    async def evaluator_fn(spec):
+        """Deterministic measurement: run the candidate spec over the chunks, diff vs the golden."""
         extracted: set = set()
         for chunk in sample_chunks:
             try:
@@ -507,52 +598,45 @@ async def _refine_spec_rules(golden_md, sample_chunks, settings, job_id, db_path
                         extracted.add((name, etype))
             except Exception as ex:
                 print(f"  [extraction_spec] extract error: {ex}", flush=True)
-
         hits = extracted & golden
         prec = len(hits) / len(extracted) if extracted else 0.0
         rec = len(hits) / len(golden) if golden else 0.0
         f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
         misses, fps = golden - extracted, extracted - golden
-        regressed = prev_f1 is not None and f1 < prev_f1
-
-        conn = get_connection(db_path)
-        try:
-            conn.execute(
-                "INSERT INTO simmer_iterations (id, job_id, phase, iteration, scores, composite, key_change, asi, judge_mode, regressed, candidate_preview) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (str(uuid.uuid4()), job_id, "extraction_spec", i,
-                 json.dumps({"precision": round(prec, 2), "recall": round(rec, 2), "f1": round(f1, 2)}),
-                 round(f1 * 10, 1),
-                 ("seed rules template" if i == 0 else f"revised rules (P={prec:.2f} R={rec:.2f})"),
-                 None, "rules-loop", regressed, None),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-        print(f"  [extraction_spec] iter {i}: F1={f1:.2f} P={prec:.2f} R={rec:.2f} "
+        miss_s = ", ".join(f"{n} ({t})" for n, t in sorted(misses))[:1200] or "(none)"
+        fp_s = ", ".join(f"{n} ({t})" for n, t in sorted(fps))[:1200] or "(none)"
+        print(f"  [extraction_spec] eval: F1={f1:.2f} P={prec:.2f} R={rec:.2f} "
               f"(ext={len(extracted)} miss={len(misses)} fp={len(fps)})", flush=True)
+        return (f"F1={f1:.2f} precision={prec:.2f} recall={rec:.2f} "
+                f"(extracted {len(extracted)} entities, golden has {len(golden)})\n"
+                f"MISSED — in the golden set but the spec failed to extract them (coverage gaps): {miss_s}\n"
+                f"WRONGLY EXTRACTED — not in the golden set (precision errors / noise): {fp_s}")
 
-        if f1 > best[0]:
-            best = (f1, spec)
-        prev_f1 = f1
+    async def generate_fn(spec, asi):
+        try:
+            resp = await relay.complete(
+                model=settings.classification_model, max_tokens=4096,
+                messages=[{"role": "user", "content": SPEC_REVISE_ASI_PROMPT.format(
+                    domain_note=domain_note, spec=spec, asi=asi)}],
+            )
+            revised = _strip_fences(resp.text)
+            return revised if revised else spec
+        except Exception as ex:
+            print(f"  [extraction_spec] revise error: {ex}", flush=True)
+            return spec
 
-        if i < iterations:
-            miss_s = ", ".join(f"{n} ({t})" for n, t in sorted(misses))[:1500] or "(none)"
-            fp_s = ", ".join(f"{n} ({t})" for n, t in sorted(fps))[:1500] or "(none)"
-            try:
-                resp = await relay.complete(
-                    model=reviser_model, max_tokens=4096,
-                    messages=[{"role": "user", "content": SPEC_REVISE_PROMPT.format(
-                        domain_note=domain_note, spec=spec, misses=miss_s, fps=fp_s)}],
-                )
-                revised = _strip_fences(resp.text)
-                if revised:
-                    spec = revised
-            except Exception as ex:
-                print(f"  [extraction_spec] revise error: {ex}", flush=True)
-                break
-
-    return best[1], round(best[0] * 10, 1)
+    criteria = {
+        "coverage": "running the spec extracts the entities in the golden set — high recall, few MISSED items",
+        "precision": "running the spec extracts only real entities — few WRONGLY EXTRACTED items",
+        "generalizability": "the spec uses general INCLUDE/EXCLUDE rules and type definitions, NOT hardcoded entity names — it would work on documents it has never seen",
+    }
+    # Evidence for the judge = the golden answer key (what the spec SHOULD produce); the evaluator
+    # output (F1 + misses/fps) is passed to the judge separately by the loop.
+    return await simmer_loop(
+        phase="extraction_spec", job_id=job_id, db_path=db_path, settings=settings,
+        criteria=criteria, iterations=iterations, seed_candidate=seed,
+        generate_fn=generate_fn, evidence=golden_md[:12000], evaluator_fn=evaluator_fn,
+        problem_class="pipeline/engineering")
 
 
 async def run_simmer_general(job: dict, db_path: str) -> None:
@@ -613,12 +697,11 @@ async def run_simmer_general(job: dict, db_path: str) -> None:
         golden_best = golden_set_path.read_text()
         print(f"Resuming general spec — reusing existing golden set ({len(golden_best)} chars, job {job_id})", flush=True)
     else:
-        # Phase 1 uses DECOMPOSED map-reduce generation instead of the agentic
-        # refine() loop. Local models (gemma4:26b) stall in the agentic generator
-        # — they loop on the read tool and emit an empty candidate. Map-reduce is
-        # deterministic: one small extraction call per chunk, then a Python merge.
-        print(f"Building golden set via map-reduce ({len(sample_chunks)} chunks, job {job_id})", flush=True)
-        golden_best = await _build_golden_set_mapreduce(sample_chunks, settings, job_id, db_path)
+        # Phase 1: canonical simmer loop with DECOMPOSED, non-agentic primitives — map seed →
+        # relay judge (scores + ASI) → regenerate from ASI. Restores the judge #27 deleted without
+        # the agentic stall (the generator is bounded calls) or the reasoning bug (judge via relay).
+        print(f"Building golden set via judged loop ({len(sample_chunks)} chunks, {iterations} iters, job {job_id})", flush=True)
+        golden_best = await _build_golden_set_judged(sample_chunks, settings, job_id, db_path, iterations)
         golden_set_path.write_text(golden_best)
 
     # Phase 2: DECOMPOSED rules-spec generation. Produces a GENERALIZED rules spec (type defs
