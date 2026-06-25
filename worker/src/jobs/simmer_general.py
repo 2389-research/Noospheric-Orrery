@@ -513,22 +513,26 @@ TEXT:
 
 Extract all entities present in the text according to the spec."""
 
-SPEC_REVISE_ASI_PROMPT = """You are refining a GENERALIZED entity-extraction SPEC (a reusable prompt that must work on documents it has never seen). You are NOT extracting entities and you MUST NOT list specific entity names in the spec.{domain_note}
+SPEC_REVISE_ASI_PROMPT = """You are making ONE surgical edit to a GENERALIZED entity-extraction SPEC (a reusable prompt that must work on documents it has never seen). You are NOT extracting entities and you MUST NOT list specific entity names in the spec.{domain_note}
 
 Current spec:
 ---
 {spec}
 ---
 
-Highest-leverage improvement to make (ASI) — from a judge that reviewed how this spec actually performed when run:
+The single highest-leverage fix to make (ASI) — from a judge that reviewed how this spec actually performed when run:
 {asi}
 
-Rewrite the spec's type definitions and INCLUDE/EXCLUDE rules to apply this improvement — GENERALLY,
-by describing the PATTERN, not by naming specific entities (e.g. "EXCLUDE vague descriptors like
-'quality'", "INCLUDE single-word domain fields", "extract multi-word names whole, not fragments").
-Keep a few ILLUSTRATIVE examples, but the body must be RULES, never a list of answer-key entities.
+Apply ONLY this fix. Make the MINIMAL change needed:
+- Add, remove, or amend ONLY the specific rule(s) or type definition(s) the ASI calls out.
+- PRESERVE every other rule, type definition, and example EXACTLY as written — do NOT rewrite, reword,
+  reorder, or "improve" anything the ASI did not mention. The rest of the spec is working; keep it.
+- Express the fix as a general PATTERN, not by naming specific entities (e.g. "EXCLUDE vague descriptors
+  like 'quality'", "extract multi-word names whole, not fragments"). Keep examples ILLUSTRATIVE only —
+  never a list of answer-key entities.
 
-Return the full revised spec (markdown). No commentary."""
+A broad rewrite regresses the spec; weak models over-correct and trade away criteria that were working.
+Change as little as possible. Return the FULL spec with only that surgical change applied. No commentary."""
 
 
 def _parse_golden_keys(golden_md: str) -> set:
