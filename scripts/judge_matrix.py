@@ -175,6 +175,15 @@ async def run_cell(
         spec_content, spec_score = await _refine_spec_rules(
             golden_md, sample_chunks, settings, job_id, db_path, iterations
         )
+
+        # ── Read back trajectory ──────────────────────────────────────────────
+        conn = get_connection(db_path)
+        rows = conn.execute(
+            "SELECT iteration, composite, judge_mode FROM simmer_iterations "
+            "WHERE job_id = ? AND phase = 'extraction_spec' ORDER BY iteration",
+            (job_id,),
+        ).fetchall()
+        conn.close()
     finally:
         elapsed = time.monotonic() - t0
         # Restore relay to its original classmethod
@@ -183,15 +192,12 @@ async def run_cell(
                 _Relay.from_settings = classmethod(_orig_classmethod)
             except Exception:
                 pass
-
-    # ── Read back trajectory ─────────────────────────────────────────────────
-    conn = get_connection(db_path)
-    rows = conn.execute(
-        "SELECT iteration, composite, judge_mode FROM simmer_iterations "
-        "WHERE job_id = ? AND phase = 'extraction_spec' ORDER BY iteration",
-        (job_id,),
-    ).fetchall()
-    conn.close()
+        # Always clean up the temp DB (even on failure) so cells don't leak files
+        if db_path and os.path.exists(db_path):
+            try:
+                os.unlink(db_path)
+            except Exception:
+                pass
 
     composite_trajectory = [
         {"iteration": r[0], "composite": r[1], "judge_mode": r[2]}
@@ -200,12 +206,6 @@ async def run_cell(
     # Best recorded judge_mode (last non-null)
     judge_mode_values = [r[2] for r in rows if r[2]]
     judge_mode = judge_mode_values[-1] if judge_mode_values else "unknown"
-
-    # Clean up temp DB
-    try:
-        os.unlink(db_path)
-    except Exception:
-        pass
 
     return {
         "cell": cell_label,
@@ -247,16 +247,27 @@ def main():
     results = []
     for n, k in cells:
         print(f"\n=== Cell {n}x{k} (panel={args.panel}) ===", flush=True)
-        result = asyncio.run(
-            run_cell(
-                n=n,
-                k=k,
-                panel=args.panel,
-                golden_path=args.golden,
-                chunks_dir=args.chunks,
-                iterations=args.iterations,
+        try:
+            result = asyncio.run(
+                run_cell(
+                    n=n,
+                    k=k,
+                    panel=args.panel,
+                    golden_path=args.golden,
+                    chunks_dir=args.chunks,
+                    iterations=args.iterations,
+                )
             )
-        )
+        except Exception as exc:
+            # Isolate per-cell failures: record the error and keep sweeping so a single
+            # bad cell can't discard every completed cell's result on a costly live run.
+            print(f"[judge_matrix] cell {n}x{k} failed: {exc}", file=sys.stderr, flush=True)
+            results.append({
+                "cell": f"{n}x{k}/{args.panel}", "n": n, "k": k, "panel": args.panel,
+                "judge_mode": "error", "error": str(exc), "elapsed_s": None,
+                "relay_calls": None, "composite_trajectory": [], "final_spec_score": None,
+            })
+            continue
         results.append(result)
         print(
             f"  elapsed={result['elapsed_s']}s  relay_calls={result['relay_calls']}  "

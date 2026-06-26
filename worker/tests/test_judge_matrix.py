@@ -36,7 +36,7 @@ def test_load_chunks(tmp_path):
 
 
 def test_load_chunks_source_header(tmp_path):
-    """A [Source: ...] header is stripped from the text and used as the title."""
+    """A [Source: ...] header is parsed for the title; the full file content is preserved as text."""
     (tmp_path / "chunk.txt").write_text("[Source: My Title]\n\nbody text here")
     chunks = judge_matrix.load_chunks(str(tmp_path))
     assert len(chunks) == 1
