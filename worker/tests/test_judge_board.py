@@ -64,6 +64,16 @@ async def test_resolve_panel_auto_uses_composer_and_picks_from_menu():
     assert [j.name for j in panel] == ["precision_hawk", "taxonomy_purist"]  # only menu names, ≤N
 
 @pytest.mark.asyncio
+async def test_resolve_panel_auto_tolerates_messy_model_formatting():
+    s = _settings(); s.judge_panel = "auto"; s.judge_count = 2
+    relay = types.SimpleNamespace(complete=AsyncMock(
+        return_value=types.SimpleNamespace(text="- precision_hawk\ntaxonomy_purist: for taxonomy\n3. bogus")))
+    with patch.object(judge_board.Relay, "from_settings", return_value=relay):
+        panel = await judge_board.resolve_panel(s, criteria={"precision": "..."},
+                                                candidate="c", problem_class="text/creative")
+    assert [j.name for j in panel] == ["precision_hawk", "taxonomy_purist"]
+
+@pytest.mark.asyncio
 async def test_resolve_panel_falls_back_to_default_on_composer_garbage():
     s = _settings(); s.judge_panel = "auto"; s.judge_count = 2
     relay = types.SimpleNamespace(complete=AsyncMock(

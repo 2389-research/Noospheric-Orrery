@@ -39,16 +39,24 @@ CRITERIA:
 MENU (choose by exact name):
 {menu}
 
+PROBLEM CLASS: {problem_class}
+
+CANDIDATE (snippet of what is being evaluated):
+{candidate}
+
 Return ONLY the chosen lens names, one per line, at most {n}. No commentary."""
 
 
 def _judges_from_names(names):
+    """Map raw lines to JudgeDefinitions, tolerating local-model formatting
+    ('- name', 'name: desc', '1. name'). First menu-matching token per line wins; dedup."""
     seen, out = set(), []
-    for n in names:
-        n = n.strip().lower()
-        if n in LENS_LIBRARY and n not in seen:
-            seen.add(n)
-            out.append(JudgeDefinition(name=n, lens=LENS_LIBRARY[n]))
+    for line in names:
+        for token in re.findall(r"[a-z][a-z0-9_]*", line.lower()):
+            if token in LENS_LIBRARY and token not in seen:
+                seen.add(token)
+                out.append(JudgeDefinition(name=token, lens=LENS_LIBRARY[token]))
+                break   # one judge per line
     return out
 
 
@@ -66,7 +74,9 @@ async def resolve_panel(settings, criteria, candidate, *, problem_class):
     try:
         resp = await relay.complete(
             model=settings.classification_model, max_tokens=256,
-            messages=[{"role": "user", "content": COMPOSER_PROMPT.format(n=n, criteria=crit, menu=menu)}])
+            messages=[{"role": "user", "content": COMPOSER_PROMPT.format(
+                n=n, criteria=crit, menu=menu, problem_class=problem_class,
+                candidate=str(candidate)[:1500])}])
         panel = _judges_from_names(resp.text.splitlines())[:n]
     except Exception as e:
         print(f"  [judge_board] composer failed: {e}", flush=True)
