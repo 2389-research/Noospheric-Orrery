@@ -184,6 +184,9 @@ def make_board_judge(panel, settings):
     async def judge_fn(candidate, evidence, criteria, _settings, *, iteration=0,
                        evaluator_output=None, seed_candidate=None, seed_scores=None,
                        problem_class="text/creative"):
+        # _settings is intentionally ignored: the board is configured against the closed-over
+        # `settings` at resolve time (panel + K are fixed for the run). The loop passes settings
+        # positionally to match relay_judge's signature, but per-call override is not supported.
         outputs = []  # list[(name, raw, JudgeOutput)]
         if not panel:
             for k in range(K):
