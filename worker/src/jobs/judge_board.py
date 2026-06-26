@@ -92,6 +92,13 @@ def _extract_asi(text: str, criteria: dict) -> str:
     return asi
 
 
+def _scores_only(raw_text: str) -> str:
+    """The portion of a panelist's output BEFORE the ASI block — scores + reasoning only.
+    Deliberation must not expose other judges' ASIs (prevents anchoring; the ASI is synthesized
+    separately in combine_outputs). Splits at the 'ASI' header."""
+    return re.split(r"\n\s*ASI\b[^\n]*:", raw_text, maxsplit=1, flags=re.IGNORECASE)[0].rstrip()
+
+
 async def relay_panelist(judge_def, candidate, evidence, criteria, settings, *,
                          iteration=0, evaluator_output=None, seed_candidate=None,
                          seed_scores=None, problem_class="text/creative"):
@@ -195,10 +202,10 @@ def make_board_judge(panel, settings):
 
         deliberations = []
         if len(panel) >= 2 and getattr(settings, "judge_deliberate", True):
-            # one round: each judge sees the others' raw scores (not ASI)
+            # one round: each judge sees the others' scores + reasoning (NOT their ASI — that anchors)
             by_name = {}
             for name, raw, _ in outputs:
-                by_name.setdefault(name, raw)   # first sample's text per lens
+                by_name.setdefault(name, _scores_only(raw))   # first sample's scores per lens, ASI stripped
             for name, own in by_name.items():
                 others = [(n, t) for n, t in by_name.items() if n != name]
                 deliberations.append(await relay_deliberate(name, own, others, settings))

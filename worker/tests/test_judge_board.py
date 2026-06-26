@@ -154,3 +154,11 @@ async def test_self_consistency_uses_relay_judge_K_times(monkeypatch):
     judge = judge_board.make_board_judge([], s)    # empty panel = self-consistency
     out = await judge("c", "ev", {"c": "..."}, s, iteration=0)
     assert rj.await_count == 3 and out.scores == {"c": 6}   # median of 5,7,6
+
+
+def test_scores_only_drops_asi_block():
+    raw = ("ITERATION 1 SCORES:\n  coverage: 7/10 — ok\nCOMPOSITE: 7.0/10\n\n"
+           "ASI (highest-leverage direction):\nThe secret fix.")
+    out = judge_board._scores_only(raw)
+    assert "coverage: 7/10" in out and "COMPOSITE" in out
+    assert "secret fix" not in out and "ASI" not in out
