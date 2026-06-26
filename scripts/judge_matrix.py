@@ -109,6 +109,7 @@ async def run_cell(
     golden_path: str,
     chunks_dir: str,
     iterations: int,
+    out_dir: str | None = None,
 ) -> dict:
     """Run one matrix cell and return the result dict.
 
@@ -179,7 +180,7 @@ async def run_cell(
         # ── Read back trajectory ──────────────────────────────────────────────
         conn = get_connection(db_path)
         rows = conn.execute(
-            "SELECT iteration, composite, judge_mode FROM simmer_iterations "
+            "SELECT iteration, composite, judge_mode, asi, scores FROM simmer_iterations "
             "WHERE job_id = ? AND phase = 'extraction_spec' ORDER BY iteration",
             (job_id,),
         ).fetchall()
@@ -200,12 +201,22 @@ async def run_cell(
                 pass
 
     composite_trajectory = [
-        {"iteration": r[0], "composite": r[1], "judge_mode": r[2]}
+        {"iteration": r[0], "composite": r[1], "judge_mode": r[2],
+         "scores": json.loads(r[4]) if r[4] else {}, "asi": r[3]}
         for r in rows
     ]
     # Best recorded judge_mode (last non-null)
     judge_mode_values = [r[2] for r in rows if r[2]]
     judge_mode = judge_mode_values[-1] if judge_mode_values else "unknown"
+
+    # ── Persist artifacts for qualitative inspection (final spec + per-round ASIs) ──
+    if out_dir:
+        safe = cell_label.replace("/", "__").replace(",", "_")
+        od = Path(out_dir)
+        od.mkdir(parents=True, exist_ok=True)
+        (od / f"{safe}.spec.md").write_text(spec_content or "", encoding="utf-8")
+        (od / f"{safe}.iters.json").write_text(
+            json.dumps(composite_trajectory, indent=2), encoding="utf-8")
 
     return {
         "cell": cell_label,
@@ -239,7 +250,13 @@ def main():
     parser.add_argument(
         "--panel",
         default="auto",
-        help="Judge panel: 'auto' (model picks lenses) or a fixed panel name (default: auto).",
+        help="Judge panel: 'auto' (model picks lenses) or a fixed comma-list of lens names (default: auto).",
+    )
+    parser.add_argument(
+        "--out-dir",
+        default=None,
+        help="If set, write each cell's final spec (<cell>.spec.md) and per-round ASIs/scores "
+             "(<cell>.iters.json) here for qualitative inspection.",
     )
     args = parser.parse_args()
 
@@ -256,6 +273,7 @@ def main():
                     golden_path=args.golden,
                     chunks_dir=args.chunks,
                     iterations=args.iterations,
+                    out_dir=args.out_dir,
                 )
             )
         except Exception as exc:
