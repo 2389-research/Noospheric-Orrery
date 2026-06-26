@@ -30,6 +30,49 @@ LENS_LIBRARY: dict[str, str] = {
 
 DEFAULT_PANEL = ["coverage_hawk", "precision_hawk"]   # fallback when composition fails
 
+COMPOSER_PROMPT = """You are composing a small panel of evaluation judges. Choose the {n} MOST useful
+lenses for evaluating a candidate against these criteria. Pick ONLY from the menu — do not invent.
+
+CRITERIA:
+{criteria}
+
+MENU (choose by exact name):
+{menu}
+
+Return ONLY the chosen lens names, one per line, at most {n}. No commentary."""
+
+
+def _judges_from_names(names):
+    seen, out = set(), []
+    for n in names:
+        n = n.strip().lower()
+        if n in LENS_LIBRARY and n not in seen:
+            seen.add(n)
+            out.append(JudgeDefinition(name=n, lens=LENS_LIBRARY[n]))
+    return out
+
+
+async def resolve_panel(settings, criteria, candidate, *, problem_class):
+    """Resolve the panel ONCE per run. Explicit JUDGE_PANEL list bypasses the composer;
+    'auto' runs one bounded composer call that picks ≤N names FROM the menu. Falls back to
+    DEFAULT_PANEL on empty/garbage. Always truncated to judge_count."""
+    n = max(1, int(settings.judge_count))
+    if settings.judge_panel and settings.judge_panel.strip().lower() != "auto":
+        panel = _judges_from_names(settings.judge_panel.split(","))
+        return (panel or _judges_from_names(DEFAULT_PANEL))[:n]
+    menu = "\n".join(f"- {name}: {lens}" for name, lens in LENS_LIBRARY.items())
+    crit = "\n".join(f"- {k}: {v}" for k, v in criteria.items())
+    relay = Relay.from_settings(settings)
+    try:
+        resp = await relay.complete(
+            model=settings.classification_model, max_tokens=256,
+            messages=[{"role": "user", "content": COMPOSER_PROMPT.format(n=n, criteria=crit, menu=menu)}])
+        panel = _judges_from_names(resp.text.splitlines())[:n]
+    except Exception as e:
+        print(f"  [judge_board] composer failed: {e}", flush=True)
+        panel = []
+    return panel or _judges_from_names(DEFAULT_PANEL)[:n]
+
 
 def _extract_asi(text: str, criteria: dict) -> str:
     out = parse_judge_output(text, criteria)

@@ -44,6 +44,36 @@ async def test_combine_falls_back_to_pick_one_when_synth_asi_empty():
     assert result.asi == "fix-coverage"  # fell back to the panelist ASI targeting the weakest criterion (coverage)
 
 @pytest.mark.asyncio
+async def test_resolve_panel_from_explicit_config_list_skips_composer():
+    s = _settings(); s.judge_panel = "coverage_hawk, precision_hawk, NOT_A_LENS"; s.judge_count = 3
+    relay = types.SimpleNamespace(complete=AsyncMock())   # must NOT be called
+    with patch.object(judge_board.Relay, "from_settings", return_value=relay):
+        panel = await judge_board.resolve_panel(s, criteria={"coverage": "..."},
+                                                candidate="c", problem_class="text/creative")
+    assert [j.name for j in panel] == ["coverage_hawk", "precision_hawk"]   # unknown dropped
+    relay.complete.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_resolve_panel_auto_uses_composer_and_picks_from_menu():
+    s = _settings(); s.judge_panel = "auto"; s.judge_count = 2
+    relay = types.SimpleNamespace(complete=AsyncMock(
+        return_value=types.SimpleNamespace(text="precision_hawk\ntaxonomy_purist\nbogus")))
+    with patch.object(judge_board.Relay, "from_settings", return_value=relay):
+        panel = await judge_board.resolve_panel(s, criteria={"precision": "..."},
+                                                candidate="c", problem_class="text/creative")
+    assert [j.name for j in panel] == ["precision_hawk", "taxonomy_purist"]  # only menu names, ≤N
+
+@pytest.mark.asyncio
+async def test_resolve_panel_falls_back_to_default_on_composer_garbage():
+    s = _settings(); s.judge_panel = "auto"; s.judge_count = 2
+    relay = types.SimpleNamespace(complete=AsyncMock(
+        return_value=types.SimpleNamespace(text="no valid names here")))
+    with patch.object(judge_board.Relay, "from_settings", return_value=relay):
+        panel = await judge_board.resolve_panel(s, criteria={"x": "..."},
+                                                candidate="c", problem_class="text/creative")
+    assert [j.name for j in panel] == judge_board.DEFAULT_PANEL[:2]
+
+@pytest.mark.asyncio
 async def test_relay_panelist_returns_named_output_with_lens():
     from simmer_sdk.types import JudgeDefinition
     text = ("ITERATION 0 SCORES:\n  coverage: 7/10 — ok — add\nCOMPOSITE: 7.0/10\n\n"
