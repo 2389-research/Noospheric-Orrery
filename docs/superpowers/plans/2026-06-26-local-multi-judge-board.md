@@ -635,7 +635,7 @@ async def relay_deliberate(name, own_output, other_outputs, settings):
     return name, resp.text
 
 
-def make_board_judge(panel, settings, *, judge_mode_unused=None):
+def make_board_judge(panel, settings):
     """Return a judge_fn (relay_judge-compatible signature) that runs the board.
 
     panel == []  → SELF-CONSISTENCY: run relay_judge K times (no lens), combine.
@@ -702,6 +702,8 @@ git commit -m "feat(simmer): make_board_judge — score×K, gated deliberation, 
 **Files:**
 - Modify: `worker/src/jobs/simmer_general.py`
 - Modify: `worker/tests/test_judge_board.py` (add wiring tests) or a new `worker/tests/test_simmer_wiring.py`
+
+> **Note:** `simmer_domain.py` imports and reuses `_build_golden_set_judged` and `_refine_spec_rules` from `simmer_general.py`. Injecting `_resolve_judge_fn` *inside* those two functions gives the **domain** simmer board capability for free — no separate wiring in `simmer_domain.py`.
 
 - [ ] **Step 1: Write the failing tests** (new file `worker/tests/test_simmer_wiring.py`)
 
