@@ -9,6 +9,7 @@ from simmer_sdk import refine
 from orrery_relay import Relay
 from ..db import get_connection
 from ..config import get_settings
+from . import judge_board
 
 SEED_GOLDEN_SET = """# Golden Set
 
@@ -371,10 +372,12 @@ async def _build_golden_set_judged(sample_chunks, settings, job_id: str, db_path
     async def generate_fn(candidate, asi):
         return await _generate_golden(candidate, asi, evidence, settings, domain_path=domain_path)
 
+    judge_fn, judge_mode = await _resolve_judge_fn(settings, criteria, seed, "text/creative")
     best_golden, _ = await simmer_loop(
         phase="golden_set", job_id=job_id, db_path=db_path, settings=settings,
         criteria=criteria, iterations=iterations, seed_candidate=seed,
-        generate_fn=generate_fn, evidence=evidence, evaluator_fn=None)
+        generate_fn=generate_fn, evidence=evidence, evaluator_fn=None,
+        judge_fn=judge_fn, judge_mode=judge_mode)
     return best_golden
 
 
@@ -562,6 +565,22 @@ def _strip_fences(text: str) -> str:
     return t.strip()
 
 
+async def _resolve_judge_fn(settings, criteria, seed_candidate, problem_class):
+    """Decide the judge for this run (O3 — resolve once). Returns (judge_fn, judge_mode).
+    Floor (N=1, K=1) → (None, 'relay-judge') so the loop uses the unchanged relay_judge.
+    K>1 with N=1   → self-consistency: board judge over an EMPTY panel (no composer call).
+    N>=2           → resolve the lens panel once, then a board judge."""
+    n = max(1, int(getattr(settings, "judge_count", 1)))
+    k = max(1, int(getattr(settings, "judge_samples", 1)))
+    if n == 1 and k == 1:
+        return None, "relay-judge"
+    if n == 1:   # self-consistency only
+        return judge_board.make_board_judge([], settings), "relay-board"
+    panel = await judge_board.resolve_panel(settings, criteria, seed_candidate,
+                                            problem_class=problem_class)
+    return judge_board.make_board_judge(panel, settings), "relay-board"
+
+
 async def _refine_spec_rules(golden_md, sample_chunks, settings, job_id, db_path, iterations, domain_path=None, taxonomy=None):
     """DECOMPOSED Phase 2 on the canonical simmer loop (simmer_core.simmer_loop):
       generator = rules-spec (seed template → revise from ASI)
@@ -632,11 +651,12 @@ async def _refine_spec_rules(golden_md, sample_chunks, settings, job_id, db_path
     }
     # Evidence for the judge = the golden answer key (what the spec SHOULD produce); the evaluator
     # output (F1 + misses/fps) is passed to the judge separately by the loop.
+    judge_fn, judge_mode = await _resolve_judge_fn(settings, criteria, seed, "pipeline/engineering")
     return await simmer_loop(
         phase="extraction_spec", job_id=job_id, db_path=db_path, settings=settings,
         criteria=criteria, iterations=iterations, seed_candidate=seed,
         generate_fn=generate_fn, evidence=golden_md[:12000], evaluator_fn=evaluator_fn,
-        problem_class="pipeline/engineering")
+        problem_class="pipeline/engineering", judge_fn=judge_fn, judge_mode=judge_mode)
 
 
 async def run_simmer_general(job: dict, db_path: str) -> None:
