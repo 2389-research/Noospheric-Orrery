@@ -43,7 +43,8 @@ single-judge path optionally spend extra calls (self-consistency) where it measu
 | D2 | **Judge count N is low: 1–3.** Build and test with 1–2; N=3 supported but not required for v1 validation. | User-stated. Keeps cost bounded on serial-Ollama. |
 | D3 | **Count-agnostic "combine" primitive.** Aggregation (median scores) + ASI synthesis operate on *N JudgeOutputs* regardless of whether the N came from N lenses (board) or K samples of one judge (self-consistency). | The combine code is then *not wasted* at N=1 — it doubles as self-consistency variance reduction. |
 | D4 | **Unify with an N=1 fast path (option C).** Single judge entry point parameterized by count. N=1/K=1 = exactly today's generic judge (no composer, no deliberation, no consensus — bypassed). Composition + deliberation + consensus engage only at N≥2 (or K>1). | Unified surface, **zero regression** at the default. The thing PR #29 restored stays byte-for-byte at the floor. |
-| D5 | **Reuse SDK pure functions; swap execution for relay.** `build_board_composition_prompt`, `build_board_panelist_prompt`, `build_deliberation_prompt`, `compute_consensus_scores`, `primitives.py`, `parse_judge_output`. Never call `judge_board.py`'s agentic dispatch. | Same pattern that made `relay_judge` work. Most of the work is *assembly*, not invention. |
+| D5 | **Reuse SDK pure functions; swap execution for relay.** `build_board_panelist_prompt` (+ `get_primitives_for_judge`), `build_deliberation_prompt`, `build_synthesis_prompt`, `compute_consensus_scores`, `parse_judge_output`. Never call `judge_board.py`'s agentic dispatch. | Same pattern that made `relay_judge` work. Most of the work is *assembly*, not invention. |
+| D5a | **The menu-constrained composer (B) is NEW orrery code, not a reused SDK function.** The SDK's `build_board_composition_prompt` emits *free-form* judge definitions (it does not constrain the model to a fixed menu), so it's inspiration at most. Likewise the lens library is net-new authoring — `primitives.py` holds cross-cutting *primitives* (`seed_calibration`, `cluster_failures`…) that `get_primitives_for_judge` feeds *into* the panelist prompt, **not** judge lenses/personas. | Avoids the planner wiring up the wrong SDK function. |
 | D6 | **Drop-in `JudgeOutput` contract.** The board returns the same `JudgeOutput` shape `relay_judge` returns today. | The loop, reflect, recorder, calibration, best-so-far are untouched. |
 | D7 | **Self-consistency (K) default OFF.** K>1 is an opt-in knob, validated empirically before any default change. Its score-variance benefit is real; its ASI-quality benefit is unproven. | Don't bake in unproven cost. |
 
@@ -104,8 +105,10 @@ no composer/deliberation) = `3 + asi-synth`.
 
 ### 3.3 The lens library (A) and composer (B)
 
-- **Library:** a small orrery-owned set of named lenses, each a one-line description, seeded from
-  simmer-sdk `primitives.py` and tuned to our criteria. Candidate lenses (to be finalized in the
+- **Library:** a small **orrery-owned, net-new** set of named lenses, each a one-line description,
+  tuned to our criteria. (These are judge *personas*, distinct from SDK `primitives.py`, which holds
+  cross-cutting evaluation primitives — those are passed *into* `build_board_panelist_prompt` via
+  `get_primitives_for_judge`, separately from the lens.) Candidate lenses (to be finalized in the
   plan), e.g.:
   - `coverage_hawk` — fixated on recall / missed entities
   - `precision_hawk` — fixated on noise / wrongly-extracted entities
