@@ -39,6 +39,30 @@ def _extract_asi(text: str, criteria: dict) -> str:
     return asi
 
 
+async def relay_panelist(judge_def, candidate, evidence, criteria, settings, *,
+                         iteration=0, evaluator_output=None, seed_candidate=None,
+                         seed_scores=None, problem_class="text/creative"):
+    """One panelist = ONE bounded relay.complete with a lens, everything pre-loaded inline, no tools.
+    Mirror of relay_judge but built with build_board_panelist_prompt so it carries the lens +
+    judge skill + board primitives. Returns (name, raw_text, JudgeOutput)."""
+    relay = Relay.from_settings(settings)
+    primitives = get_primitives_for_judge(
+        has_evaluator=evaluator_output is not None, has_search_space=False)
+    prompt = build_board_panelist_prompt(
+        judge_def=judge_def, iteration=iteration, artifact_type="text",
+        problem_class=problem_class, criteria=criteria, candidate=candidate,
+        primitives=primitives, seed_candidate=seed_candidate, seed_scores=seed_scores,
+        evaluator_output=evaluator_output, judge_preamble=NON_AGENTIC_JUDGE_PREAMBLE)
+    prompt += ("\n\nSOURCE MATERIAL — judge the candidate strictly against THIS "
+               "(provided inline; do not use tools):\n" + evidence)
+    resp = await relay.complete(model=settings.classification_model, max_tokens=3072,
+                                messages=[{"role": "user", "content": prompt}])
+    out = parse_judge_output(resp.text, criteria)
+    if out.asi:
+        out.asi = re.sub(r"^\s*ASI\b[^\n:]*:\s*", "", out.asi, flags=re.IGNORECASE).strip()
+    return judge_def.name, resp.text, out
+
+
 async def combine_outputs(outputs, criteria, settings, *, artifact_type, deliberations=None):
     """Count-agnostic COMBINE: median scores (SDK) + ONE synthesized ASI (synth-call).
 

@@ -42,3 +42,21 @@ async def test_combine_falls_back_to_pick_one_when_synth_asi_empty():
             outs, criteria={"coverage": "...", "precision": "..."}, settings=_settings(),
             artifact_type="text", deliberations=[])
     assert result.asi == "fix-coverage"  # fell back to the panelist ASI targeting the weakest criterion (coverage)
+
+@pytest.mark.asyncio
+async def test_relay_panelist_returns_named_output_with_lens():
+    from simmer_sdk.types import JudgeDefinition
+    text = ("ITERATION 0 SCORES:\n  coverage: 7/10 — ok — add\nCOMPOSITE: 7.0/10\n\n"
+            "ASI (highest-leverage direction):\nDo the thing.")
+    relay = types.SimpleNamespace(complete=AsyncMock(return_value=types.SimpleNamespace(text=text)))
+    with patch.object(judge_board.Relay, "from_settings", return_value=relay):
+        name, raw, out = await judge_board.relay_panelist(
+            JudgeDefinition(name="coverage_hawk", lens=judge_board.LENS_LIBRARY["coverage_hawk"]),
+            candidate="cand", evidence="EVIDENCE_SENTINEL", criteria={"coverage": "..."},
+            settings=_settings(), iteration=0, evaluator_output=None,
+            seed_candidate=None, seed_scores=None, problem_class="text/creative")
+    assert name == "coverage_hawk"
+    assert out.scores == {"coverage": 7} and out.asi == "Do the thing."
+    # evidence is pre-loaded inline (non-agentic) — assert it reached the prompt
+    sent = relay.complete.await_args.kwargs["messages"][0]["content"]
+    assert "EVIDENCE_SENTINEL" in sent
