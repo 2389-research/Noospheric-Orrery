@@ -41,4 +41,4 @@ async def test_combine_falls_back_to_pick_one_when_synth_asi_empty():
         result = await judge_board.combine_outputs(
             outs, criteria={"coverage": "...", "precision": "..."}, settings=_settings(),
             artifact_type="text", deliberations=[])
-    assert result.asi  # non-empty: fell back to a panelist ASI targeting the weakest criterion (coverage)
+    assert result.asi == "fix-coverage"  # fell back to the panelist ASI targeting the weakest criterion (coverage)

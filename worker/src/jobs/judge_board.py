@@ -47,6 +47,8 @@ async def combine_outputs(outputs, criteria, settings, *, artifact_type, deliber
     (build_synthesis_prompt). If that yields no usable ASI, fall back to the ASI of the judge whose
     weakest (lowest-consensus) criterion has the most headroom — deterministic, zero extra call.
     """
+    if not outputs:
+        return JudgeOutput(scores={}, asi="", reasoning={})
     scores = compute_consensus_scores([o[2].scores for o in outputs])
     relay = Relay.from_settings(settings)
     prompt = build_synthesis_prompt(
