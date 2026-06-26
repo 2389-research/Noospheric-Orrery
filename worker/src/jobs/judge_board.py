@@ -150,3 +150,60 @@ async def combine_outputs(outputs, criteria, settings, *, artifact_type, deliber
         for k, v in (jo.reasoning or {}).items():
             reasoning.setdefault(k, v)
     return JudgeOutput(scores=scores, asi=asi, reasoning=reasoning)
+
+
+async def relay_deliberate(name, own_output, other_outputs, settings):
+    """One deliberation round for one judge — bounded relay call. Returns (name, text)."""
+    relay = Relay.from_settings(settings)
+    prompt = (NON_AGENTIC_JUDGE_PREAMBLE + "\n\n"
+              + build_deliberation_prompt(judge_name=name, own_output=own_output,
+                                         other_outputs=other_outputs))
+    resp = await relay.complete(model=settings.classification_model, max_tokens=2048,
+                                messages=[{"role": "user", "content": prompt}])
+    return name, resp.text
+
+
+def make_board_judge(panel, settings):
+    """Return a judge_fn (relay_judge-compatible signature) that runs the board.
+
+    panel == []  → SELF-CONSISTENCY: run relay_judge K times (no lens), combine.
+    panel != []  → BOARD: each lens × K samples via relay_panelist; optional one deliberation
+                   round when len(panel) >= 2 and settings.judge_deliberate; then combine.
+    Always returns a JudgeOutput (drop-in for the loop). Context discipline: the synthesized ASI
+    is the only thing combine surfaces forward; per-panelist scores never leave this function.
+    """
+    K = max(1, int(settings.judge_samples))
+
+    async def judge_fn(candidate, evidence, criteria, _settings, *, iteration=0,
+                       evaluator_output=None, seed_candidate=None, seed_scores=None,
+                       problem_class="text/creative"):
+        outputs = []  # list[(name, raw, JudgeOutput)]
+        if not panel:
+            for k in range(K):
+                jo = await relay_judge(candidate, evidence, criteria, settings,
+                                       iteration=iteration, evaluator_output=evaluator_output,
+                                       seed_candidate=seed_candidate, seed_scores=seed_scores,
+                                       problem_class=problem_class)
+                outputs.append((f"sample-{k+1}", jo.raw_text or "", jo))
+        else:
+            for jd in panel:
+                for _k in range(K):
+                    outputs.append(await relay_panelist(
+                        jd, candidate, evidence, criteria, settings, iteration=iteration,
+                        evaluator_output=evaluator_output, seed_candidate=seed_candidate,
+                        seed_scores=seed_scores, problem_class=problem_class))
+
+        deliberations = []
+        if len(panel) >= 2 and getattr(settings, "judge_deliberate", True):
+            # one round: each judge sees the others' raw scores (not ASI)
+            by_name = {}
+            for name, raw, _ in outputs:
+                by_name.setdefault(name, raw)   # first sample's text per lens
+            for name, own in by_name.items():
+                others = [(n, t) for n, t in by_name.items() if n != name]
+                deliberations.append(await relay_deliberate(name, own, others, settings))
+
+        return await combine_outputs(outputs, criteria, settings,
+                                     artifact_type="text", deliberations=deliberations)
+
+    return judge_fn

@@ -100,3 +100,57 @@ async def test_relay_panelist_returns_named_output_with_lens():
     # evidence is pre-loaded inline (non-agentic) — assert it reached the prompt
     sent = relay.complete.await_args.kwargs["messages"][0]["content"]
     assert "EVIDENCE_SENTINEL" in sent
+
+
+@pytest.mark.asyncio
+async def test_board_judge_scores_each_lens_times_K_then_combines(monkeypatch):
+    from simmer_sdk.types import JudgeDefinition
+    panel = [JudgeDefinition(name="coverage_hawk", lens="..."),
+             JudgeDefinition(name="precision_hawk", lens="...")]
+    panelist_calls = []
+    async def fake_panelist(jd, *a, **k):
+        panelist_calls.append((jd.name, k.get("iteration")))
+        return jd.name, "raw", JudgeOutput(scores={"coverage": 6}, asi=f"asi-{jd.name}", reasoning={})
+    async def fake_combine(outputs, criteria, settings, *, artifact_type, deliberations=None):
+        return JudgeOutput(scores={"coverage": 7}, asi="SYNTH", reasoning={})
+    monkeypatch.setattr(judge_board, "relay_panelist", fake_panelist)
+    monkeypatch.setattr(judge_board, "combine_outputs", fake_combine)
+    monkeypatch.setattr(judge_board, "relay_deliberate",
+                        AsyncMock(return_value=("coverage_hawk", "delib")))
+    s = _settings(); s.judge_samples = 2; s.judge_deliberate = False
+    judge = judge_board.make_board_judge(panel, s)
+    out = await judge("cand", "ev", {"coverage": "..."}, s, iteration=1)
+    # 2 lenses × K=2 samples = 4 panelist calls; combine returns the consensus
+    assert len(panelist_calls) == 4 and out.asi == "SYNTH"
+
+
+@pytest.mark.asyncio
+async def test_board_judge_deliberation_only_when_panel_ge_2(monkeypatch):
+    from simmer_sdk.types import JudgeDefinition
+    async def fake_panelist(jd, *a, **k):
+        return jd.name, "raw", JudgeOutput(scores={"c": 5}, asi="x", reasoning={})
+    async def fake_combine(outputs, *a, **k): return JudgeOutput(scores={"c": 5}, asi="y", reasoning={})
+    delib = AsyncMock(return_value=("n", "d"))
+    monkeypatch.setattr(judge_board, "relay_panelist", fake_panelist)
+    monkeypatch.setattr(judge_board, "combine_outputs", fake_combine)
+    monkeypatch.setattr(judge_board, "relay_deliberate", delib)
+    # single lens, deliberate=True → deliberation must NOT run (nothing to deliberate against)
+    s = _settings(); s.judge_samples = 1; s.judge_deliberate = True
+    judge = judge_board.make_board_judge([JudgeDefinition(name="coverage_hawk", lens="...")], s)
+    await judge("c", "ev", {"c": "..."}, s, iteration=0)
+    delib.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_self_consistency_uses_relay_judge_K_times(monkeypatch):
+    # empty panel + K>1 → self-consistency over the existing relay_judge
+    rj = AsyncMock(side_effect=[JudgeOutput(scores={"c": c}, asi=f"a{c}", reasoning={}) for c in (5, 7, 6)])
+    async def fake_combine(outputs, *a, **k):
+        return JudgeOutput(scores=judge_board.compute_consensus_scores([o[2].scores for o in outputs]),
+                           asi="SYNTH", reasoning={})
+    monkeypatch.setattr(judge_board, "relay_judge", rj)
+    monkeypatch.setattr(judge_board, "combine_outputs", fake_combine)
+    s = _settings(); s.judge_samples = 3
+    judge = judge_board.make_board_judge([], s)    # empty panel = self-consistency
+    out = await judge("c", "ev", {"c": "..."}, s, iteration=0)
+    assert rj.await_count == 3 and out.scores == {"c": 6}   # median of 5,7,6

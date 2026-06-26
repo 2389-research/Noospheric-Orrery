@@ -85,6 +85,7 @@ async def relay_judge(candidate: str, evidence: str, criteria: dict, settings, *
     # precise pattern misses). Strip any leaked header so the ASI is just the actionable text.
     if out.asi:
         out.asi = re.sub(r"^\s*ASI\b[^\n:]*:\s*", "", out.asi, flags=re.IGNORECASE).strip()
+    out.raw_text = resp.text
     return out
 
 
