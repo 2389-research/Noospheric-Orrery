@@ -25,6 +25,10 @@ class Settings:
     db_path: str = "/data/orrery.db"
     documents_dir: str = "/data/documents"
     specs_dir: str = "/data/specs"
+    judge_count: int = 1
+    judge_samples: int = 1
+    judge_panel: str = "auto"
+    judge_deliberate: bool = True
 
 
 # Env var name mapping — keys are Settings field names, values are env var names.
@@ -47,6 +51,10 @@ _ENV_MAP = {
     "db_path": "DB_PATH",
     "documents_dir": "DOCUMENTS_DIR",
     "specs_dir": "SPECS_DIR",
+    "judge_count": "JUDGE_COUNT",
+    "judge_samples": "JUDGE_SAMPLES",
+    "judge_panel": "JUDGE_PANEL",
+    "judge_deliberate": "JUDGE_DELIBERATE",
 }
 
 
@@ -82,7 +90,12 @@ def get_settings() -> Settings:
         default = path_defaults.get(f.name, getattr(defaults, f.name))
         val = os.environ.get(env_var)
         if val is not None:
-            kwargs[f.name] = f.type(val) if f.type in (int, float) else val
+            if f.type is bool:
+                kwargs[f.name] = str(val).strip().lower() in ("1", "true", "yes", "on")
+            elif f.type in (int, float):
+                kwargs[f.name] = f.type(val)
+            else:
+                kwargs[f.name] = val
         else:
             kwargs[f.name] = default
 

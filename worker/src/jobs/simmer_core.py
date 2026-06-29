@@ -85,11 +85,12 @@ async def relay_judge(candidate: str, evidence: str, criteria: dict, settings, *
     # precise pattern misses). Strip any leaked header so the ASI is just the actionable text.
     if out.asi:
         out.asi = re.sub(r"^\s*ASI\b[^\n:]*:\s*", "", out.asi, flags=re.IGNORECASE).strip()
+    out.raw_text = resp.text
     return out
 
 
 def _record_judged_iteration(db_path, job_id, phase, iteration, judgment, seed_scores,
-                             regressed, key_change, candidate_preview):
+                             regressed, key_change, candidate_preview, judge_mode="relay-judge"):
     """Write one simmer_iterations row + its criterion_details, matching the artifact contract
     the frontend reads (scores, composite, asi, judge_mode, criterion_details[])."""
     scores = judgment.scores or {}
@@ -100,7 +101,7 @@ def _record_judged_iteration(db_path, job_id, phase, iteration, judgment, seed_s
             "INSERT INTO simmer_iterations (id, job_id, phase, iteration, scores, composite, key_change, asi, judge_mode, regressed, candidate_preview) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (iter_id, job_id, phase, iteration, json.dumps(scores), judgment.composite,
-             key_change, judgment.asi, "relay-judge", regressed, candidate_preview),
+             key_change, judgment.asi, judge_mode, regressed, candidate_preview),
         )
         for crit, score in scores.items():
             conn.execute(
@@ -118,7 +119,8 @@ def _record_judged_iteration(db_path, job_id, phase, iteration, judgment, seed_s
 
 async def simmer_loop(*, phase, job_id, db_path, settings, criteria, iterations,
                       seed_candidate, generate_fn, evidence, evaluator_fn=None,
-                      problem_class="text/creative"):
+                      problem_class="text/creative",
+                      judge_fn=None, judge_mode="relay-judge"):
     """Canonical generate→evaluate→judge→reflect loop with decomposed, non-agentic primitives.
 
     - seed_candidate: the iteration-0 candidate (from the decomposed generator).
@@ -133,6 +135,7 @@ async def simmer_loop(*, phase, job_id, db_path, settings, criteria, iterations,
 
     Returns (best_candidate, best_composite). Records every iteration to simmer_iterations.
     """
+    judge = judge_fn or relay_judge
     candidate = seed_candidate
     seed_artifact = seed_candidate   # fixed iteration-0 reference for judge calibration
     seed_scores = None
@@ -140,7 +143,7 @@ async def simmer_loop(*, phase, job_id, db_path, settings, criteria, iterations,
     prev_comp = None
     for i in range(iterations + 1):
         evaluator_output = await evaluator_fn(candidate) if evaluator_fn else None
-        judgment = await relay_judge(
+        judgment = await judge(
             candidate, evidence, criteria, settings,
             iteration=i, evaluator_output=evaluator_output,
             seed_candidate=seed_artifact, seed_scores=seed_scores,  # build_judge_prompt gates on iteration>0
@@ -152,7 +155,8 @@ async def simmer_loop(*, phase, job_id, db_path, settings, criteria, iterations,
         _record_judged_iteration(
             db_path, job_id, phase, i, judgment, seed_scores, regressed,
             key_change=("seed" if i == 0 else "regenerated from ASI"),
-            candidate_preview=candidate[:500])
+            candidate_preview=candidate[:500],
+            judge_mode=judge_mode)
         print(f"  [{phase}] iter {i}: {comp}/10 scores={judgment.scores} asi={(judgment.asi or '')[:80]!r}", flush=True)
         if comp > best[0]:
             best = (comp, candidate)

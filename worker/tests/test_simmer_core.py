@@ -209,3 +209,32 @@ async def test_loop_keeps_best_and_flags_regression(test_db):
     assert best == "seed"   # iteration-0 candidate had the best composite
     rows = {it: bool(regressed) for it, _, _, _, _, regressed in _iters(test_db)}
     assert rows == {0: False, 1: True, 2: False}
+
+
+@pytest.mark.asyncio
+async def test_loop_uses_injected_judge_fn_and_records_its_mode(test_db):
+    _job(test_db)
+    async def generate_fn(candidate, asi): return "next"
+    fake = AsyncMock(side_effect=[JudgeOutput(scores={"coverage": 7}, asi="a", reasoning={}) for _ in range(2)])
+    await simmer_loop(
+        phase="golden_set", job_id="j1", db_path=test_db, settings=_settings(),
+        criteria={"coverage": "..."}, iterations=1, seed_candidate="seed",
+        generate_fn=generate_fn, evidence="ev",
+        judge_fn=fake, judge_mode="relay-board")
+    assert fake.await_count == 2                 # the injected fn was used, not relay_judge
+    rows = _iters(test_db)
+    assert all(jm == "relay-board" for *_, jm, _ in rows)   # mode recorded
+
+@pytest.mark.asyncio
+async def test_loop_defaults_to_relay_judge(test_db):
+    _job(test_db)
+    async def generate_fn(candidate, asi): return "next"
+    with patch.object(simmer_core, "relay_judge",
+                      new=AsyncMock(side_effect=[JudgeOutput(scores={"c": 6}, asi="a", reasoning={}) for _ in range(2)])) as rj:
+        await simmer_loop(
+            phase="golden_set", job_id="j1", db_path=test_db, settings=_settings(),
+            criteria={"c": "..."}, iterations=1, seed_candidate="seed",
+            generate_fn=generate_fn, evidence="ev")     # no judge_fn → default
+    assert rj.await_count == 2                           # default path unchanged
+    rows = _iters(test_db)
+    assert all(jm == "relay-judge" for *_, jm, _ in rows)
