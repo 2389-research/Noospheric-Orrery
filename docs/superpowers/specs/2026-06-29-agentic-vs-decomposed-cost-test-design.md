@@ -126,8 +126,8 @@ exact, **tokens are NOT a fair comparison axis.** The fair, common axis is **US 
 published Anthropic rates** (Sonnet 4.6 = $3/$15 per Mtok in/out; Haiku 4.5 = $0.8/$4 — both present
 in the SDK `PRICING` table, friendly + `us.anthropic.*` ids):
 
-- **Decomposed arm $:** exact tokens × published rate (runner-owned rate table; identical to the SDK
-  `PRICING` values). Exact.
+- **Decomposed arm $:** exact tokens × published rate, priced by importing `simmer_sdk.usage.PRICING`
+  directly (so the two arms can never drift to different rates). Exact.
 - **Agentic arm $:** the SDK-reported `estimated_cost_usd`, which uses `total_cost_usd` when the
   provider reports it (accurate aggregate). This is the primary agentic cost.
 
@@ -158,12 +158,14 @@ exact-match F1 (too brittle: a valid entity with a different type reads as a mis
 ## Phase 0 — cost-source spike (gating, before any full run)
 
 A minimal, ~1-iteration agentic `refine()` call on the **actual backend we'll use**, then inspect
-`result.usage.to_dict()`:
-- If `estimated_cost_usd > 0` **and** the underlying `total_cost_usd` was populated (accurate
-  aggregate) → proceed; agentic cost basis is sound.
-- If `total_cost_usd` is `None` (cost is only `final-turn-tokens × rate`) → **stop and decide**:
-  switch to a backend that reports it (e.g. gateway/Anthropic API), or re-scope the agentic cost
-  metric, before spending on the full bake-off.
+the tracker's per-call records — specifically whether any `CallRecord._agent_cost` is set (that
+attribute is populated **only** when the provider returned a non-`None` `total_cost_usd`). Do **not**
+gate on `estimated_cost_usd > 0` alone — that is nonzero even in the fallback case (final-turn-tokens
+× rate), so it would pass a run whose agentic cost is an undercount.
+- If at least one `_agent_cost` is set → proceed; agentic dollar cost is the accurate CLI aggregate.
+- If no `_agent_cost` anywhere (cost is only `final-turn-tokens × rate`) → **stop and decide**: switch
+  to a backend that reports `total_cost_usd` (e.g. gateway/Anthropic API), or re-scope the agentic
+  cost metric, before spending on the full bake-off.
 
 This spike is cheap insurance against publishing an unfair cost number — exactly the empirical check
 the spec review flagged.
@@ -178,8 +180,8 @@ the spec review flagged.
 
 | Unit | Responsibility | Committed? |
 |------|----------------|-----------|
-| `worker/src/jobs/simmer_general_agentic.py` | old agentic general flow, restored verbatim from `58498de` + `total_usage` capture | **no** (experiment scratch) |
-| `worker/src/jobs/simmer_domain_agentic.py` | old agentic domain flow, restored verbatim from `58498de` + `total_usage` capture | **no** |
+| `worker/src/jobs/simmer_general_agentic.py` | old agentic general flow, restored verbatim from `58498de` + `result.usage` capture | **no** (experiment scratch) |
+| `worker/src/jobs/simmer_domain_agentic.py` | old agentic domain flow, restored verbatim from `58498de` + `result.usage` capture | **no** |
 | experiment runner (e.g. `scripts/cost_bakeoff.py`) | pin DB copy, set isolated env, run both arms, attach relay `on_usage`, dump `cost.json` + metrics manifest | **no** |
 | `docs/.../2026-06-29-agentic-vs-decomposed-cost-test.md` | methodology: exact commands, what's measured, how to reproduce, the results table + qualitative findings | **yes** |
 
