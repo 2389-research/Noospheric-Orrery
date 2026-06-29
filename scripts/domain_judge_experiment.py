@@ -17,7 +17,7 @@
 #
 # Each --variants entry is "name:NxK"; JUDGE_PANEL defaults to 'auto' (override with --panel).
 
-import argparse, asyncio, json, os, shutil, sqlite3, sys, time, traceback, uuid
+import argparse, asyncio, json, os, shutil, sys, time, traceback, uuid
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -26,15 +26,20 @@ sys.path.insert(0, str(REPO / "worker"))
 
 def build_pinned_base(src_db, out, domain, n_chunks):
     """Copy the DB and trim DOMAIN's valid-status chunk pool to exactly n_chunks (deterministic)."""
+    from src.db import get_connection
     base = str(out / "base_pinned.db")
     shutil.copy(os.path.expanduser(src_db), base)
-    c = sqlite3.connect(base)
+    c = get_connection(base)  # WAL + busy_timeout per project convention
     pool = [r[0] for r in c.execute(
         """SELECT c.id FROM chunks c JOIN documents d ON c.document_id=d.id
            JOIN document_domains dd ON d.id=dd.document_id
            WHERE dd.domain_path=? AND d.status IN ('classified','extracted','enriched')
            ORDER BY c.id""", (domain,)).fetchall()]
     keep = pool[:n_chunks]
+    if not keep:
+        c.close()
+        raise SystemExit(f"[pin] no valid-status chunks for domain {domain!r} — nothing to run.")
+    # values are bound via ? placeholders; only the placeholder count is interpolated
     qmarks = ",".join("?" * len(keep))
     c.execute(
         f"""DELETE FROM chunks WHERE id IN
@@ -48,7 +53,8 @@ def build_pinned_base(src_db, out, domain, n_chunks):
 
 
 def capture(run_db, job_id, domain, vout):
-    c = sqlite3.connect(run_db)
+    from src.db import get_connection
+    c = get_connection(run_db)
     iters = [dict(iteration=r[0], phase=r[1], composite=r[2],
                   scores=json.loads(r[3]) if r[3] else {}, asi=r[4], judge_mode=r[5])
              for r in c.execute(

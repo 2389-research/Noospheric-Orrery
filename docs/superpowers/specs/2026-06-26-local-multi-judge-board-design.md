@@ -96,7 +96,7 @@ relay_board_judge(...):
   # Phase 3 — COMBINE (count-agnostic)
   scores  = compute_consensus_scores([o.scores for o in outputs])       # median, pure Python (SDK)
   asi     = synthesize_asi(outputs)                                     # see 3.4
-  return JudgeOutput(scores=scores, composite=mean(scores), asi=asi, reasoning=merged_reasoning)
+  return JudgeOutput(scores=scores, asi=asi, reasoning=merged_reasoning)  # .composite is derived from scores
 ```
 
 Call-count per judge invocation: `compose? (0–1) + N×K (score) + N (deliberate, if N≥2) + asi-synth (0–1)`.
@@ -117,8 +117,10 @@ no composer/deliberation) = `3 + asi-synth`.
 - **Composer:** one `relay.complete` that receives the library + criteria + a candidate snippet and
   returns the chosen lens *names* (≤N). Output is a short list — easy to parse. On parse failure or
   empty result, fall back to a fixed default sub-panel (no crash, no stall).
-- Composer runs **once per judge invocation** (i.e. per iteration), not once per simmer run, so the
-  panel can adapt as the artifact evolves. (Open question O3 — could be cached per run.)
+- Composer runs **once per simmer run** (O3, resolved): the panel is resolved a single time and
+  reused across iterations, bounding cost on serial Ollama. (Per-iteration adaptive composition was
+  considered and deferred — see O3.) Matches the implementation (`_resolve_judge_fn` /
+  `resolve_panel`).
 
 ### 3.4 ASI synthesis (the crux)
 
@@ -254,13 +256,13 @@ around.** This is why N is capped low, K defaults off, and deliberation is a tog
 
 ---
 
-## 9. Open Questions (resolve during planning)
+## 9. Open Questions (resolved during planning — see the plan doc's "Resolved open questions")
 
-- **O1:** ASI synthesis mechanism — `synth-call` vs `pick-one` for v1.
-- **O2:** Final lens library contents and whether lenses are phase-specific (golden vs spec criteria differ).
-- **O3:** Composer cadence — per-iteration (adaptive) vs once-per-run (cached, cheaper).
-- **O4:** Per-panelist persistence — log-only vs new column/side-table in v1.
-- **O5:** Whether `JUDGE_DELIBERATE` is worth shipping in v1 or deferred until 2a shows panels help at all.
+- **O1:** ASI synthesis mechanism — **resolved:** `synth-call` with a deterministic `pick-one` fallback.
+- **O2:** Lens library / phase-specificity — **resolved:** small orrery-owned generic library, composer picks per phase.
+- **O3:** Composer cadence — **resolved:** once-per-run (cached, cheaper); per-iteration adaptive deferred.
+- **O4:** Per-panelist persistence — **resolved:** log-only for v1.
+- **O5:** `JUDGE_DELIBERATE` — **resolved:** shipped behind the toggle (default on at panel≥2).
 
 ---
 
