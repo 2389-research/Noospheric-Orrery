@@ -83,37 +83,90 @@ Both arms run on the **same pinned DB copy**, the **same domain**, the **same mo
    domain-type discovery + additive golden; that architectural difference is the thing under test.
    We hold only the *external* inputs constant.)
 
+### SDK pinning (prerequisite — there are multiple `simmer-sdk` copies on disk)
+
+Usage capture depends on which `simmer_sdk` is imported. Verified 2026-06-29:
+- `worker/.venv/bin/python` resolves `simmer_sdk` to the **editable install at
+  `~/Documents/GitHub/simmer-sdk/`**, which **has** `usage.py` (`UsageTracker`, `PRICING`) and a
+  `SimmerResult.usage` field, and whose agentic stages record usage
+  (`generator.py:347`, `judge.py:240`, `judge_board.py:289` → `_usage_tracker.record_agent(...)`,
+  wired in `refine.py:418`).
+- The **vendored** `worker/simmer-sdk/` copy (used only for the Docker build) is an **older version
+  with no usage tracking**. The experiment must NOT run against it.
+
+The experiment runs via `worker/.venv/bin/python`. The runner **asserts at startup** that the
+imported SDK exposes usage — `hasattr(SimmerResult, '__dataclass_fields__') and 'usage' in
+SimmerResult.__dataclass_fields__`, and that `simmer_sdk.usage` imports — and **fails fast** with a
+clear message otherwise. (O3-style runtime grounding, not an assumption.)
+
 ### Cost & artifact capture
 
-- **Agentic cost:** `refine()` returns `total_usage` (the SDK `UsageTracker`: tokens by model/role +
-  cost). The old code discarded it; the restored module **captures `golden_result.total_usage` and
-  `spec_result.total_usage`** and writes them to the arm's `cost.json`. This is the *only* additive
-  change to the restored code and does not alter how agents are invoked or prompted.
+- **Agentic cost:** each `refine()` returns a `SimmerResult` with a **`usage`** field (a
+  `UsageTracker`; `.to_dict()` → `total_input_tokens`, `total_output_tokens`, `estimated_cost_usd`,
+  `by_role`, `by_model`). The old code discarded it; the restored module **captures
+  `golden_result.usage` and `spec_result.usage`** and writes them to the arm's `cost.json`. This is
+  the *only* additive change to the restored code and does not alter how agents are invoked/prompted.
+  - **Caveat (decisive for the cost basis below):** for the agentic `ClaudeSDKClient` path,
+    `record_agent` (usage.py:100-118) stores only the **final turn's** `input/output_tokens` from
+    `ResultMessage.usage` — these are an **undercount** of a multi-turn agentic session. The accurate
+    figure is `total_cost_usd`, which `record_agent` aggregates over the whole session (when the
+    provider reports it). So **agentic token counts are unreliable; agentic dollar cost is accurate.**
 - **Decomposed cost:** the runner monkeypatches `Relay.from_settings` to attach an `on_usage`
-  callback (orrery-relay already emits `UsageEvent` with `input_tokens`/`output_tokens` per call),
-  feeding the **same** SDK `UsageTracker` + `PRICING` table. One cost model prices both arms.
+  callback (orrery-relay emits `UsageEvent` with `input_tokens`/`output_tokens` for **every** bounded
+  call), feeding a runner-owned `UsageTracker`. Decomposed token counts are **exact**.
 - **Artifacts saved per arm:** the golden set, final spec, every `iteration-N-judgment.md`, the
   `eval-N/` extraction-result dirs (Phase 2), the `simmer_iterations` + `simmer_criterion_details`
-  rows (in the arm's DB copy), and `cost.json`.
+  rows (in the arm's DB copy), and `cost.json` (raw `usage.to_dict()` for each phase + the derived
+  USD figures below).
 
-### Cost basis (fairness)
+### Cost basis (fairness) — compare in USD, not tokens
 
-Both arms are priced from **token counts via the same SDK `PRICING` table** — this is the
-apples-to-apples number. On bedrock the agentic CLI may also report `total_cost_usd`; when present we
-record it as a **secondary cross-check** only, never as the primary comparison metric (mixing
-CLI-reported and estimated costs across arms would not be comparable).
+Because agentic token counts are final-turn-only (undercounted) while decomposed token counts are
+exact, **tokens are NOT a fair comparison axis.** The fair, common axis is **US dollars at the same
+published Anthropic rates** (Sonnet 4.6 = $3/$15 per Mtok in/out; Haiku 4.5 = $0.8/$4 — both present
+in the SDK `PRICING` table, friendly + `us.anthropic.*` ids):
+
+- **Decomposed arm $:** exact tokens × published rate (runner-owned rate table; identical to the SDK
+  `PRICING` values). Exact.
+- **Agentic arm $:** the SDK-reported `estimated_cost_usd`, which uses `total_cost_usd` when the
+  provider reports it (accurate aggregate). This is the primary agentic cost.
+
+Both numbers are real dollars at the same rates → comparable. **Tokens are still reported** for both
+arms, but the agentic token line is explicitly labeled *final-turn-only (lower bound)* and is never
+the comparison basis.
+
+**Gating risk:** if the chosen backend does **not** populate `total_cost_usd` (it is a CLI/agent
+concept and may be `None` on bedrock), the agentic `estimated_cost_usd` silently falls back to
+`final-turn-tokens × rate` — a severe undercount that would unfairly favor the agentic arm. We do
+**not** proceed to the full bake-off until a spike (Phase 0 below) confirms the agentic cost source
+is real on the backend we run.
 
 ## Metrics reported
 
 Per arm, per phase (golden / spec) and total:
-- input tokens, output tokens, total tokens
-- estimated cost (USD) from the shared `PRICING` table
+- **estimated cost (USD)** — the **primary comparison axis** (decomposed: exact tokens × published
+  rate; agentic: SDK `estimated_cost_usd` / `total_cost_usd`). See "Cost basis" for why USD, not tokens.
+- input/output/total tokens — reported, but the **agentic token line is labeled *final-turn-only
+  (lower bound)*** and is not the comparison basis.
 - API-call count
 - wall-clock seconds
 
 Then a **qualitative read** (by Claude, reading the artifacts) of both goldens and both specs:
 coverage, precision, taxonomy/type quality, generalizability, and obvious failure modes — *not*
 exact-match F1 (too brittle: a valid entity with a different type reads as a miss).
+
+## Phase 0 — cost-source spike (gating, before any full run)
+
+A minimal, ~1-iteration agentic `refine()` call on the **actual backend we'll use**, then inspect
+`result.usage.to_dict()`:
+- If `estimated_cost_usd > 0` **and** the underlying `total_cost_usd` was populated (accurate
+  aggregate) → proceed; agentic cost basis is sound.
+- If `total_cost_usd` is `None` (cost is only `final-turn-tokens × rate`) → **stop and decide**:
+  switch to a backend that reports it (e.g. gateway/Anthropic API), or re-scope the agentic cost
+  metric, before spending on the full bake-off.
+
+This spike is cheap insurance against publishing an unfair cost number — exactly the empirical check
+the spec review flagged.
 
 ## Default scope
 
@@ -145,11 +198,17 @@ exact-match F1 (too brittle: a valid entity with a different type reads as a mis
 - If the pinned domain has fewer than N valid-status chunks, fail fast with a clear message rather
   than running on a different sample than intended.
 
-## Open questions (resolved)
+## Open questions
 
 - **O1 — same models both arms?** Resolved: the live `.env` already runs Sonnet 4.6 + Haiku 4.5, the
   same pairing the old flow hardcoded. No tuning needed; cost delta is pure architecture.
-- **O2 — how to get cost out of the agentic flow that bypasses orrery-relay?** Resolved:
-  `refine().total_usage` (SDK `UsageTracker`) reports it natively.
+- **O2 — how to get accurate cost out of the agentic flow that bypasses orrery-relay?** Resolved in
+  mechanism, **gated on Phase 0 for accuracy.** The worker's SDK populates `SimmerResult.usage` via
+  `record_agent` on the agentic path, but its **tokens are final-turn-only**; only `total_cost_usd`
+  is accurate, and that may be `None` on some backends. Hence the comparison is in **USD** and the
+  Phase 0 spike must confirm `total_cost_usd` is populated before the full run. (Earlier draft wrongly
+  named the field `total_usage` and assumed token-based pricing was apples-to-apples — corrected.)
 - **O3 — does the old code still run against today's SDK/schema/config?** Resolved: verified yes;
-  zero drift in every dependency it touches.
+  zero drift in every dependency it touches. **Caveat:** there are multiple `simmer-sdk` copies on
+  disk; usage capture only works against the editable `~/Documents/GitHub/simmer-sdk` that
+  `worker/.venv` resolves — the runner asserts this at startup (see "SDK pinning").
