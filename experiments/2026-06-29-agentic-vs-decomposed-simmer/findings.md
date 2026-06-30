@@ -105,9 +105,10 @@ bounded, single-pass structure produced a more transferable spec for 1/27th the 
 
 ## Reproduction
 
-Experiment code is **uncommitted scratch** (intentionally — see "What's committed" below):
-- `worker/src/jobs/simmer_domain_agentic.py` — old agentic flow restored from `58498de` + additive
-  `result.usage` capture → `cost.json`.
+Experiment code is **scratch**, kept in `DS-scratch/noospheric_agentic_vs_decomposed_simmer/`
+(intentionally out of this repo — see "What's committed" below):
+- `simmer_domain_agentic.py` — old agentic flow restored from `58498de` + additive
+  `result.usage` capture → `cost.json`. (Recoverable in-repo at tag `exp/pre-decomposition-simmer`.)
 - Scratch runners (`bakeoff_agentic.py`, `bakeoff_decomposed.py`): load `.env`, copy + pin the DB to N
   chunks, isolate `SPECS_DIR`, run one arm. The decomposed runner monkeypatches `Relay.from_settings`
   to attach an `on_usage` hook → `UsageTracker`.
