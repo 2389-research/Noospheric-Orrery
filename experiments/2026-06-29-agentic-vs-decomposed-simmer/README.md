@@ -30,7 +30,7 @@ On Claude, is the old **agentic `refine()`** simmer worth its cost vs the shippe
   a `simmer_sdk.usage.UsageTracker`, priced by the same `PRICING` table (Sonnet
   $3/$15, Haiku $0.8/$4 per Mtok). No `total_cost_usd` bridge / undercount.
 - **Artifacts (NOT in this repo):**
-  [`DS-scratch/noospheric_agentic_vs_decomposed_simmer/`](https://github.com/2389-research/DS-scratch)
+  [`DS-scratch/noospheric_agentic_vs_decomposed_simmer/`](https://github.com/2389-research/DS-scratch/tree/main/noospheric_agentic_vs_decomposed_simmer)
   — the resurrected agentic module + notes. The raw `cost.json`, per-run
   goldens/specs, and the `bakeoff_*.py` runners were ephemeral scratchpad and did
   not survive a machine restart; they are regenerable from the module + this setup.

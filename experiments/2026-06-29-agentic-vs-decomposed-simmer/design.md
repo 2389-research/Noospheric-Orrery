@@ -181,7 +181,7 @@ gateway/`total_cost_usd`. Spike artifacts are scratch (uncommitted).
 | `worker/src/jobs/simmer_general_agentic.py` | old agentic general flow, restored verbatim from `58498de` + `result.usage` capture | **no** (experiment scratch) |
 | `worker/src/jobs/simmer_domain_agentic.py` | old agentic domain flow, restored verbatim from `58498de` + `result.usage` capture | **no** |
 | experiment runner (e.g. `scripts/cost_bakeoff.py`) | pin DB copy, set isolated env, run both arms, attach relay `on_usage`, dump `cost.json` + metrics manifest | **no** |
-| `docs/.../2026-06-29-agentic-vs-decomposed-cost-test.md` | methodology: exact commands, what's measured, how to reproduce, the results table + qualitative findings | **yes** |
+| `findings.md` (same dir) | methodology: exact commands, what's measured, how to reproduce, the results table + qualitative findings | **yes** |
 
 ## What is and isn't committed
 

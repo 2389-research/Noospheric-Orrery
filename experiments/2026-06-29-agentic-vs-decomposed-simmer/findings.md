@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-29
 **Branch:** `experiment/agentic-vs-decomposed-cost`
-**Design:** `2026-06-29-agentic-vs-decomposed-cost-test-design.md` (same dir)
+**Design:** `design.md` (same dir)
 **Status:** Complete, n=1 (one domain, one run per arm). Directional, not statistically significant.
 
 ## TL;DR
