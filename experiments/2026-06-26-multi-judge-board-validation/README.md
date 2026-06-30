@@ -4,8 +4,12 @@
 **Branch:** `feat/local-multi-judge-board`
 **Status:** Directional (n=2/arm) — promising, not yet a verdict to change defaults.
 
-Validation of the optional multi-judge board (see the design + plan docs in this dir) against the
-**real** domain-simmer flow on a local model.
+Validation of the optional multi-judge board against the **real** domain-simmer flow on a local model.
+
+Companion design/plan (kept in the design-doc area, not here):
+[`design`](../../docs/superpowers/specs/2026-06-26-local-multi-judge-board-design.md) ·
+[`plan`](../../docs/superpowers/plans/2026-06-26-local-multi-judge-board.md). The decision this fed:
+[`ADR-0001`](../../docs/adr/0001-decomposed-simmer-over-agentic-refine.md).
 
 ## Method (the valid one)
 
