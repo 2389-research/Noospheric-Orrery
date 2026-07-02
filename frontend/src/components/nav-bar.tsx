@@ -9,6 +9,7 @@ const TABS = [
   { label: "Upload", href: "upload", writeOnly: true },
   { label: "Pipeline", href: "pipeline", writeOnly: true },
   { label: "Entities", href: "entities", writeOnly: false },
+  { label: "Documents", href: "documents", writeOnly: false },
   { label: "Orrery", href: "orrery", writeOnly: false },
 ];
 

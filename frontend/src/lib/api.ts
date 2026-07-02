@@ -5,24 +5,34 @@ export function setApiWorkspaceId(id: string | null) {
   _currentWorkspaceId = id;
 }
 
-async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
+function buildHeaders(options?: RequestInit): Record<string, string> {
   const headers: Record<string, string> = {
     ...(options?.headers as Record<string, string> || {}),
   };
-
-  // Add workspace ID header
   if (_currentWorkspaceId) {
     headers["X-Workspace-Id"] = _currentWorkspaceId;
   }
+  return headers;
+}
 
-  const res = await fetch(`/api${path}`, { ...options, headers });
+async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`/api${path}`, { ...options, headers: buildHeaders(options) });
   if (!res.ok) throw new Error(`API error: ${res.status} ${await res.text()}`);
   return res.json();
+}
+
+async function fetchAPIText(path: string, options?: RequestInit): Promise<string> {
+  const res = await fetch(`/api${path}`, { ...options, headers: buildHeaders(options) });
+  if (!res.ok) throw new Error(`API error: ${res.status} ${await res.text()}`);
+  return res.text();
 }
 
 export const api = {
   getStats: () => fetchAPI<import("./types").Stats>("/stats"),
   getDocuments: () => fetchAPI<import("./types").DocumentSummary[]>("/documents"),
+  getDocument: (id: string) => fetchAPI<import("./types").DocumentDetail>(`/documents/${id}`),
+  getDocumentFile: (id: string) => fetchAPIText(`/documents/${id}/file`),
+  deleteDocument: (id: string) => fetchAPI<{ deleted: boolean; entities_removed: string[] }>(`/documents/${id}`, { method: "DELETE" }),
   getDomains: () => fetchAPI<import("./types").DomainInfo[]>("/domains"),
   getEntities: (params?: { type?: string; domain?: string; job_id?: string; limit?: number }) => {
     const query = new URLSearchParams();

@@ -9,6 +9,19 @@ export interface DocumentSummary {
   thumbnail_path?: string;
 }
 
+export interface DocumentDetail {
+  id: string;
+  title: string;
+  source_path: string | null;
+  content: string;
+  content_type?: "text" | "image";
+  thumbnail_path?: string | null;
+  status: string;
+  created_at: string;
+  domains: { path: string; is_primary: boolean; confidence: number }[];
+  entities: { id: string; canonical_name: string; type: string }[];
+}
+
 export interface DomainInfo {
   id: string;
   path: string;

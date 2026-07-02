@@ -180,6 +180,9 @@ class DocumentRepository(ABC):
     @abstractmethod
     def get_sample(self, limit: int = 10, status_filter: list[str] | None = None) -> list[Document]: ...
 
+    @abstractmethod
+    def delete(self, doc_id: str) -> dict: ...
+
 
 class ChunkRepository(ABC):
     @abstractmethod
