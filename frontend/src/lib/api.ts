@@ -75,6 +75,8 @@ export const api = {
     fetchAPI<import("./types").Correction[]>("/corrections"),
   triggerJudgeCorrections: () =>
     fetchAPI<{ job_id: string; status: string }>("/corrections/judge", { method: "POST" }),
+  resolveCorrection: (id: string, action: "approve" | "reject") =>
+    fetchAPI<{ status: string; applied?: boolean }>(`/corrections/review/${id}?action=${action}`, { method: "POST" }),
   getEntity: (entityId: string) =>
     fetchAPI<{
       id: string;

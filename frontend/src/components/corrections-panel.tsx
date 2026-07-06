@@ -69,6 +69,11 @@ export function CorrectionsPanel() {
     setJudging(false);
   };
 
+  const handleResolve = async (id: string, action: "approve" | "reject") => {
+    await api.resolveCorrection(id, action);
+    refresh();
+  };
+
   const sorted = [...items].sort(sortCorrections);
   const unjudged = items.filter((c) => !c.judge_verdict).length;
 
@@ -130,6 +135,18 @@ export function CorrectionsPanel() {
                   <span className="text-[9px] text-muted-foreground/55 italic">awaiting judge</span>
                 </div>
               )}
+
+              <div className="flex items-center gap-2 border-t border-border/10 pt-1.5">
+                {c.action === "merge" && (
+                  <span className="text-[9px] text-muted-foreground/50 italic mr-auto">merge apply deferred — approve records the decision</span>
+                )}
+                <Button size="sm" variant="outline"
+                  className="h-5 text-[10px] px-2 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 ml-auto"
+                  onClick={() => handleResolve(c.id, "approve")}>approve</Button>
+                <Button size="sm" variant="ghost"
+                  className="h-5 text-[10px] px-2 text-muted-foreground/85"
+                  onClick={() => handleResolve(c.id, "reject")}>reject</Button>
+              </div>
             </div>
           ))}
         </div>
