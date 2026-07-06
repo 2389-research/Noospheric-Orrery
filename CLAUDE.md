@@ -228,6 +228,14 @@ Normalization happens at two levels:
 
 The `normalization_review_queue` table holds pairs the system is uncertain about. Use `GET /normalize/review` + `POST /normalize/review/{id}` to resolve them.
 
+### Graph Corrections (self-healing loop) — see `docs/graph-corrections.md`
+
+Agents consuming the graph can propose corrections (`propose_correction` MCP write tool → `graph_issues`); an advisory model **judge** annotates each; a human approves/rejects in the `CorrectionsPanel`; approval **reversibly** edits the graph. **`docs/graph-corrections.md` is the canonical reference for how each action (invalidate · retype · rename · merge; split unbuilt) applies AND reverses — read/update it when touching this code.** Key invariants:
+- **Reversible soft-delete, never hard-delete** on the corrections path. Active graph = `WHERE invalid_at IS NULL` (threaded through graph/entities/traversal reads; NOT yet search). Every apply writes an append-only `normalization_log` row (history + undo + model-vs-human calibration data).
+- **Judge is advisory, human-gated** — it orders the queue, never auto-applies. Bounded non-agentic relay call (`think:false`), source-grounded, no web search. Periodic sweep (`JUDGE_SWEEP_INTERVAL_SECONDS`, default 900) + manual `POST /corrections/judge`.
+- **Merge** recomputes the survivor's 1-hop co-occurrence edges (weights must combine, not double-count) and soft-deletes the loser — do NOT replace it with the naive redirect in `embedding_normalizer` (that double-counts + hard-deletes). `rollback_merge` uses the log's snapshot; undo across overlapping neighborhoods is LIFO (see the doc's ordering constraint).
+- Dedup lookups (`get`/`get_by_name`) pass `include_invalid=True` so re-ingest re-attaches to an invalidated node instead of resurrecting it as a duplicate.
+
 ### Cosmic Viz is a Self-Contained HTML File
 
 `frontend/public/cosmic-viz.html` is a single-file Canvas2D app. It communicates with the Next.js shell via `postMessage`:
