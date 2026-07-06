@@ -1,5 +1,6 @@
 import os
 import asyncio
+import time
 import traceback
 from pathlib import Path
 from .config import get_settings
@@ -71,6 +72,11 @@ async def poll_loop():
     settings = get_settings()
     print(f"Worker started, polling every {settings.worker_poll_interval}s", flush=True)
 
+    from orrery_relay import Relay
+    from .jobs.graph_repair import run_judge_sweep
+    relay = Relay.from_settings(settings)
+    last_sweep = 0.0  # 0 → sweep on the first iteration
+
     while True:
         # Scan all workspace DBs for queued jobs
         db_paths = _find_workspace_dbs(settings.db_path)
@@ -101,6 +107,16 @@ async def poll_loop():
                     conn.close()
             except Exception as e:
                 print(f"Error polling {db_path}: {e}", flush=True)
+
+        now = time.monotonic()
+        if now - last_sweep >= settings.judge_sweep_interval_seconds:
+            last_sweep = now
+            try:
+                result = await run_judge_sweep(db_paths, relay, settings.classification_model)
+                if result["judged"] or result["failed"]:
+                    print(f"judge sweep: judged {result['judged']}, {result['failed']} failed/left un-judged", flush=True)
+            except Exception as e:
+                print(f"judge sweep error: {e}", flush=True)
 
         await asyncio.sleep(settings.worker_poll_interval)
 
