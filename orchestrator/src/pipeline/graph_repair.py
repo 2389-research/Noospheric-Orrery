@@ -266,7 +266,8 @@ def rollback_merge(conn, loser_id, *, commit=True):
 
 def resolve_correction(conn, issue_id, action, *, reviewer="human"):
     """Human decision on a pending issue. action ∈ {'approve','reject'}. On approve, apply the
-    issue's correction (merge is recorded but NOT applied — deferred). The apply + status update
+    issue's correction (merge collapses the less-sourced entity into the more-sourced one; tie →
+    target_b survives — reversible via rollback_merge). The apply + status update
     commit together (atomic): the apply_* helpers are called with commit=False and this function
     does the single commit at the end, so a crash mid-way leaves the issue pending + graph clean.
     Reversible via the log."""
@@ -299,7 +300,11 @@ def resolve_correction(conn, issue_id, action, *, reviewer="human"):
     elif act == "rename":
         apply_rename(conn, issue["target_entity_id"], issue["proposed_name"], **kw)
     elif act == "merge":
-        applied = False  # deferred: record the decision, do not mutate
+        a, b = issue["target_entity_id"], issue["target_b_entity_id"]
+        ca = conn.execute("SELECT COUNT(*) FROM entity_sources WHERE entity_id=?", (a,)).fetchone()[0]
+        cb = conn.execute("SELECT COUNT(*) FROM entity_sources WHERE entity_id=?", (b,)).fetchone()[0]
+        survivor, loser = (a, b) if ca > cb else (b, a)  # more-sourced survives; tie → target_b
+        apply_merge(conn, loser, survivor, **kw)  # kw carries commit=False (single atomic commit below)
     conn.execute("UPDATE graph_issues SET status='accepted', reviewer=?, resolved_at=CURRENT_TIMESTAMP WHERE id=?",
                  (reviewer, issue_id))
     conn.commit()  # single atomic commit for apply + status

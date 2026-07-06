@@ -137,9 +137,6 @@ export function CorrectionsPanel() {
               )}
 
               <div className="flex items-center gap-2 border-t border-border/10 pt-1.5">
-                {c.action === "merge" && (
-                  <span className="text-[9px] text-muted-foreground/50 italic mr-auto">merge apply deferred — approve records the decision</span>
-                )}
                 <Button size="sm" variant="outline"
                   className="h-5 text-[10px] px-2 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 ml-auto"
                   onClick={() => handleResolve(c.id, "approve")}>approve</Button>

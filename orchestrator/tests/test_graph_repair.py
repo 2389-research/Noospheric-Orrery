@@ -203,16 +203,16 @@ def test_resolve_approve_invalidate_mutates(test_db):
     assert conn.execute("SELECT COUNT(*) FROM normalization_log WHERE action='invalidate'").fetchone()[0] == 1
 
 
-def test_resolve_approve_merge_records_without_mutation(test_db):
+def test_resolve_approve_merge_applies(test_db):
     import sqlite3
     from src.pipeline.graph_repair import propose_correction, resolve_correction
-    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)
-    iid = propose_correction(conn, action="merge", entity="panopticon", target_b="ebay")["issue_id"]
+    conn = sqlite3.connect(test_db); _seed_merge_fixture(conn)
+    iid = propose_correction(conn, action="merge", entity="web sim", target_b="websim", rationale="dupe")["issue_id"]
     res = resolve_correction(conn, iid, "approve", reviewer="human")
+    assert res["applied"] is True
+    # survivor = websim (2 sources) beats web sim (tie → target_b) — loser web sim soft-deleted
+    assert conn.execute("SELECT invalid_at FROM entities WHERE canonical_name='web sim'").fetchone()[0] is not None
     assert conn.execute("SELECT status FROM graph_issues WHERE id=?", (iid,)).fetchone()[0] == "accepted"
-    # merge apply deferred → no entity removed, no invalid_at set
-    assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 2
-    assert res.get("applied") is False
 
 
 def _seed_merge_fixture(conn):
