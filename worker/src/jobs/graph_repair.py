@@ -133,6 +133,25 @@ async def judge_pending_issues(conn: sqlite3.Connection, relay, model: str) -> d
     return {"judged": judged, "failed": failed}
 
 
+async def run_judge_sweep(db_paths: list[str], relay, model: str) -> dict:
+    """Judge pending issues across many workspace DBs. Per-path isolation: a failing
+    DB is logged and skipped, never blocking the others. Returns summed {judged, failed}."""
+    from ..db import get_connection
+    total_judged = total_failed = 0
+    for db_path in db_paths:
+        try:
+            conn = get_connection(db_path)
+            try:
+                r = await judge_pending_issues(conn, relay, model)
+            finally:
+                conn.close()
+            total_judged += r.get("judged", 0)
+            total_failed += r.get("failed", 0)
+        except Exception as e:
+            print(f"judge_sweep: workspace {db_path} failed: {e}", flush=True)
+    return {"judged": total_judged, "failed": total_failed}
+
+
 async def run_judge_corrections(job: dict, db_path: str) -> None:
     """Worker entrypoint: judge all pending issues in this workspace DB. Lazy Relay import
     (mirrors handle_job's lazy handler imports) so the pure functions stay import-light."""

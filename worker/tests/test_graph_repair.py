@@ -1,7 +1,8 @@
 import sqlite3
 import uuid
 import pytest
-from src.jobs.graph_repair import judge_pending_issues, judge_correction
+from src.db import init_db, get_connection
+from src.jobs.graph_repair import judge_pending_issues, judge_correction, run_judge_sweep
 
 
 class FakeRelay:
@@ -148,3 +149,33 @@ async def test_judge_evidence_scoped_to_target_entity_id(test_db):
     assert "liquid metal element" not in prompt           # homonym's chunk must NOT leak
     assert "Planet" in prompt                             # target id's type
     assert "Element" not in prompt                        # homonym's type must NOT leak
+
+
+def _seed_pending(db_path, name="panopticon"):
+    conn = get_connection(db_path)
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('e1', ?, 'Product')", (name,))
+    conn.execute("INSERT INTO documents (id, title, status) VALUES ('d1', 'Doc', 'extracted')")
+    conn.execute("INSERT INTO chunks (id, document_id, chunk_index, text) VALUES ('c1','d1',0,'used as a metaphor')")
+    conn.execute("INSERT INTO entity_sources (entity_id, document_id, chunk_id) VALUES ('e1','d1','c1')")
+    conn.execute("INSERT INTO graph_issues (id, action, target_entity_id, target_entity_name, status) "
+                 "VALUES ('i1','invalidate','e1',?, 'pending')", (name,))
+    conn.commit(); conn.close()
+
+
+async def test_sweep_judges_across_multiple_workspaces(tmp_path):
+    db_a = str(tmp_path / "a.db"); db_b = str(tmp_path / "b.db")
+    for p in (db_a, db_b):
+        init_db(p); _seed_pending(p)
+    result = await run_judge_sweep([db_a, db_b], FakeRelay(verdict="accept", confidence=0.9), model="m")
+    assert result["judged"] == 2
+    for p in (db_a, db_b):
+        conn = get_connection(p)
+        assert conn.execute("SELECT judge_verdict FROM graph_issues WHERE id='i1'").fetchone()[0] == "accept"
+        conn.close()
+
+
+async def test_sweep_tolerates_bad_db_path(tmp_path):
+    db_a = str(tmp_path / "a.db"); init_db(db_a); _seed_pending(db_a)
+    # a nonexistent path must not raise or block the good DB
+    result = await run_judge_sweep([str(tmp_path / "missing.db"), db_a], FakeRelay(), model="m")
+    assert result["judged"] == 1
