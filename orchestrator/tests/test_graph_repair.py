@@ -35,6 +35,13 @@ def test_propose_merge_requires_and_resolves_second_entity(test_db):
     assert row["target_b_entity_id"] == "e2"
 
 
+def test_propose_merge_self_raises(test_db):
+    conn = _seed(test_db)
+    # entity and target_b resolve to the same id (case-insensitive) -> reject.
+    with pytest.raises(ValueError, match="itself"):
+        propose_correction(conn, action="merge", entity="websim", target_b="WebSim")
+
+
 def test_propose_retype_records_proposed_type(test_db):
     conn = _seed(test_db)
     res = propose_correction(conn, action="retype", entity="panopticon", proposed_type="Concept")

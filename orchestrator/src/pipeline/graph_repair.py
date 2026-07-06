@@ -48,10 +48,16 @@ def propose_correction(
         if not target_b:
             raise ValueError("merge requires target_b (the other entity)")
         b_id, b_name = _resolve_entity(conn, target_b)
-    if action == "retype" and not (proposed_type and proposed_type.strip()):
-        raise ValueError("retype requires a non-empty proposed_type")
-    if action == "rename" and not (proposed_name and proposed_name.strip()):
-        raise ValueError("rename requires a non-empty proposed_name")
+        if b_id == target_id:
+            raise ValueError("cannot merge an entity with itself")
+    if action == "retype":
+        if not (proposed_type and proposed_type.strip()):
+            raise ValueError("retype requires a non-empty proposed_type")
+        proposed_type = proposed_type.strip()
+    if action == "rename":
+        if not (proposed_name and proposed_name.strip()):
+            raise ValueError("rename requires a non-empty proposed_name")
+        proposed_name = proposed_name.strip()
 
     issue_id = str(uuid.uuid4())
     conn.execute(
@@ -67,9 +73,12 @@ def propose_correction(
 
 
 def get_pending_issues(conn: sqlite3.Connection) -> list[dict]:
-    """All pending proposals, newest first — the queue the judge/UI consume."""
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
+    """All pending proposals, newest first — the queue the judge/UI consume.
+
+    Uses a local cursor and column names from cursor.description so we never
+    reassign the shared connection's row_factory (a side-effect on the caller)."""
+    cursor = conn.execute(
         "SELECT * FROM graph_issues WHERE status = 'pending' ORDER BY created_at DESC"
-    ).fetchall()
-    return [dict(r) for r in rows]
+    )
+    columns = [c[0] for c in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
