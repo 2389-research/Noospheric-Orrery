@@ -71,6 +71,10 @@ export const api = {
     fetchAPI<{ id: string; entity_a: string; entity_b: string; similarity: number }[]>("/normalize/review"),
   resolveReview: (reviewId: string, action: "merge" | "keep_separate") =>
     fetchAPI<{ status: string }>(`/normalize/review/${reviewId}?action=${action}`, { method: "POST" }),
+  getCorrections: () =>
+    fetchAPI<import("./types").Correction[]>("/corrections"),
+  triggerJudgeCorrections: () =>
+    fetchAPI<{ job_id: string; status: string }>("/corrections/judge", { method: "POST" }),
   getEntity: (entityId: string) =>
     fetchAPI<{
       id: string;
