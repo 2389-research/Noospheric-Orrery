@@ -121,6 +121,28 @@ CREATE TABLE IF NOT EXISTS normalization_review_queue (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS graph_issues (
+    id TEXT PRIMARY KEY,
+    action TEXT NOT NULL,                 -- invalidate | merge | retype | rename
+    target_entity_id TEXT NOT NULL REFERENCES entities(id),
+    target_entity_name TEXT NOT NULL,
+    target_b_entity_id TEXT REFERENCES entities(id),  -- merge: the other node
+    target_b_name TEXT,
+    proposed_type TEXT,                   -- retype
+    proposed_name TEXT,                   -- rename
+    rationale TEXT,
+    proposer TEXT,                        -- proposing agent id
+    status TEXT NOT NULL DEFAULT 'pending', -- pending | accepted | rejected
+    judge_verdict TEXT,                   -- advisory, written by the judge stage
+    judge_confidence REAL,                -- advisory
+    judge_rationale TEXT,                 -- advisory
+    reviewer TEXT,                        -- human, written on resolve
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_graph_issues_status ON graph_issues(status);
+CREATE INDEX IF NOT EXISTS idx_graph_issues_target ON graph_issues(target_entity_id);
+
 CREATE TABLE IF NOT EXISTS simmer_iterations (
     id TEXT PRIMARY KEY,
     job_id TEXT REFERENCES jobs(id),
