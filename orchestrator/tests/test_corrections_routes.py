@@ -33,3 +33,21 @@ def test_propose_bad_action_is_400(test_client, test_store):
         "action": "frobnicate", "entity": "panopticon",
     })
     assert resp.status_code == 400
+
+
+def test_judge_endpoint_enqueues_job(test_client, test_store):
+    resp = test_client.post("/corrections/judge")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "queued" and "job_id" in body
+    row = test_store.conn.execute(
+        "SELECT type, target, status FROM jobs WHERE id = ?", (body["job_id"],)).fetchone()
+    assert row[0] == "judge_corrections"
+    assert row[2] == "queued"
+
+
+def test_judge_endpoint_dedupes(test_client, test_store):
+    first = test_client.post("/corrections/judge")
+    assert first.status_code == 200
+    second = test_client.post("/corrections/judge")
+    assert second.status_code == 409

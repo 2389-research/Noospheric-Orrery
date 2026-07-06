@@ -1,3 +1,4 @@
+import uuid
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from ..dependencies import get_auth_store, AuthStore
@@ -37,5 +38,18 @@ def list_corrections(auth: AuthStore = Depends(get_auth_store)):
     store = auth.store
     try:
         return get_pending_issues(store.conn)
+    finally:
+        store.close()
+
+
+@router.post("/corrections/judge")
+def trigger_judge(auth: AuthStore = Depends(get_auth_store)):
+    store = auth.store
+    try:
+        if store.jobs.get_existing("judge_corrections", "all", ["queued", "running"]):
+            raise HTTPException(status_code=409, detail="A correction-judge job is already queued or running")
+        job_id = str(uuid.uuid4())
+        store.jobs.create(job_id, "judge_corrections", "all")
+        return {"job_id": job_id, "status": "queued"}
     finally:
         store.close()
