@@ -35,6 +35,9 @@ async def handle_job(job: dict, db_path: str) -> None:
     elif job["type"] == "extract_batch_image":
         from .jobs.extract_batch_image import run_extract_batch_image
         await run_extract_batch_image(job, db_path)
+    elif job["type"] == "judge_corrections":
+        from .jobs.graph_repair import run_judge_corrections
+        await run_judge_corrections(job, db_path)
     else:
         raise ValueError(f"Unknown job type: {job['type']}")
 

@@ -107,3 +107,19 @@ async def judge_pending_issues(conn: sqlite3.Connection, relay, model: str) -> d
         judged += 1
     conn.commit()
     return {"judged": judged}
+
+
+async def run_judge_corrections(job: dict, db_path: str) -> None:
+    """Worker entrypoint: judge all pending issues in this workspace DB. Lazy Relay import
+    (mirrors handle_job's lazy handler imports) so the pure functions stay import-light."""
+    from orrery_relay import Relay
+    from ..config import get_settings
+    from ..db import get_connection
+    settings = get_settings()
+    relay = Relay.from_settings(settings)
+    conn = get_connection(db_path)
+    try:
+        result = await judge_pending_issues(conn, relay, settings.classification_model)
+        print(f"judge_corrections: judged {result['judged']} pending issue(s)", flush=True)
+    finally:
+        conn.close()
