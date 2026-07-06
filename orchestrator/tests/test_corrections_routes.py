@@ -35,6 +35,19 @@ def test_propose_bad_action_is_400(test_client, test_store):
     assert resp.status_code == 400
 
 
+def test_invalidated_entity_hidden_from_reads(test_client, test_store):
+    conn = test_store.conn
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('e1','ghostnode','Product')")
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('e2','realnode','Product')")
+    conn.execute("INSERT INTO relationships (id, from_entity, to_entity, type, weight) VALUES ('r1','e1','e2','co_occurs',2)")
+    conn.commit()
+    # propose + approve invalidate on ghostnode
+    pid = test_client.post("/corrections/propose", json={"action":"invalidate","entity":"ghostnode"}).json()["issue_id"]
+    assert test_client.post(f"/corrections/review/{pid}?action=approve").status_code == 200
+    names = [e["canonical_name"] for e in test_client.get("/entities").json()]
+    assert "ghostnode" not in names and "realnode" in names
+
+
 def test_resolve_route_reject_and_approve(test_client, test_store):
     conn = test_store.conn
     conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('e1','panopticon','Product')")

@@ -234,7 +234,7 @@ class SQLiteEntityRepository(EntityRepository):
         self._conn = conn
 
     def count(self):
-        return self._conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+        return self._conn.execute("SELECT COUNT(*) FROM entities WHERE invalid_at IS NULL").fetchone()[0]
 
     def create(self, id, name, type):
         self._conn.execute(
@@ -244,7 +244,9 @@ class SQLiteEntityRepository(EntityRepository):
         return id
 
     def get(self, entity_id):
-        row = self._conn.execute("SELECT * FROM entities WHERE id = ?", (entity_id,)).fetchone()
+        row = self._conn.execute(
+            "SELECT * FROM entities WHERE id = ? AND invalid_at IS NULL", (entity_id,)
+        ).fetchone()
         if not row:
             return None
         count = self._conn.execute(
@@ -255,7 +257,8 @@ class SQLiteEntityRepository(EntityRepository):
 
     def get_by_name(self, name, type):
         row = self._conn.execute(
-            "SELECT * FROM entities WHERE canonical_name = ? AND type = ?", (name, type)
+            "SELECT * FROM entities WHERE canonical_name = ? AND type = ? AND invalid_at IS NULL",
+            (name, type)
         ).fetchone()
         if not row:
             return None
@@ -267,7 +270,7 @@ class SQLiteEntityRepository(EntityRepository):
                    FROM entities e"""
         params = []
         joins = []
-        conditions = []
+        conditions = ["e.invalid_at IS NULL"]
 
         if domain_filter:
             joins.append("JOIN entity_sources es2 ON e.id = es2.entity_id "
@@ -311,7 +314,7 @@ class SQLiteEntityRepository(EntityRepository):
                    (SELECT COUNT(*) FROM entity_sources es2 WHERE es2.entity_id = e.id) as source_count
             FROM entities e
             JOIN entity_sources es ON e.id = es.entity_id
-            WHERE es.document_id = ?
+            WHERE es.document_id = ? AND e.invalid_at IS NULL
             ORDER BY source_count DESC
         """, (doc_id,)).fetchall()
         return [Entity(id=r["id"], canonical_name=r["canonical_name"], type=r["type"],
@@ -322,7 +325,7 @@ class SQLiteEntityRepository(EntityRepository):
             SELECT e.canonical_name FROM entities e
             JOIN entity_sources es ON e.id = es.entity_id
             JOIN document_domains dd ON es.document_id = dd.document_id
-            WHERE dd.domain_path = ?
+            WHERE dd.domain_path = ? AND e.invalid_at IS NULL
             GROUP BY e.id ORDER BY COUNT(*) DESC LIMIT ?
         """, (domain_path, limit)).fetchall()
         return [Entity(id="", canonical_name=r["canonical_name"], type="") for r in rows]
@@ -406,6 +409,7 @@ class SQLiteRelationshipRepository(RelationshipRepository):
                 CASE WHEN r.from_entity = ? THEN r.to_entity ELSE r.from_entity END
             ) = e.id
             WHERE (r.from_entity = ? OR r.to_entity = ?) AND r.type = 'co_occurs'
+              AND r.invalid_at IS NULL AND e.invalid_at IS NULL
             GROUP BY e.id ORDER BY total_weight DESC LIMIT ?
         """, (entity_id, entity_id, entity_id, limit)).fetchall()
         return [CoEntity(id=r["id"], canonical_name=r["canonical_name"], type=r["type"],
@@ -448,6 +452,7 @@ class SQLiteRelationshipRepository(RelationshipRepository):
                 CASE WHEN r.from_entity = ? THEN r.to_entity ELSE r.from_entity END
             ) = e.id
             WHERE (r.from_entity = ? OR r.to_entity = ?) AND r.type = 'co_occurs'
+              AND r.invalid_at IS NULL AND e.invalid_at IS NULL
             GROUP BY e.id ORDER BY total_weight DESC LIMIT ?
         """, (entity_id, entity_id, entity_id, co_limit)).fetchall()
 
