@@ -97,6 +97,75 @@ def test_get_pending_issues_returns_only_pending(test_db):
     assert pending[0]["target_entity_name"] == "websim"
 
 
+def _seed_entity_with_edge(conn):
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('e1','panopticon','Product')")
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('e2','ebay','Organization')")
+    conn.execute("INSERT INTO relationships (id, from_entity, to_entity, type, weight) VALUES ('r1','e1','e2','co_occurs',3)")
+    conn.commit()
+
+
+def test_apply_invalidation_round_trips(test_db):
+    import sqlite3
+    from src.pipeline.graph_repair import apply_invalidation, rollback_invalidation
+    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)
+    r = apply_invalidation(conn, "e1", reason="metaphor", actor="human")
+    assert r["edges_invalidated"] == 1
+    assert conn.execute("SELECT invalid_at FROM entities WHERE id='e1'").fetchone()[0] is not None
+    assert conn.execute("SELECT invalid_at FROM relationships WHERE id='r1'").fetchone()[0] is not None
+    assert conn.execute("SELECT invalid_at FROM entities WHERE id='e2'").fetchone()[0] is None  # neighbor untouched
+    back = rollback_invalidation(conn, "e1")
+    assert back["edges_restored"] == 1
+    assert conn.execute("SELECT invalid_at FROM entities WHERE id='e1'").fetchone()[0] is None
+    assert conn.execute("SELECT invalid_at FROM relationships WHERE id='r1'").fetchone()[0] is None
+
+
+def test_apply_retype_and_rename_log(test_db):
+    import sqlite3
+    from src.pipeline.graph_repair import apply_retype, apply_rename
+    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)
+    apply_retype(conn, "e1", "Concept", actor="human", reason="x")
+    assert conn.execute("SELECT type FROM entities WHERE id='e1'").fetchone()[0] == "Concept"
+    apply_rename(conn, "e2", "eBay", actor="human", reason="x")
+    assert conn.execute("SELECT canonical_name FROM entities WHERE id='e2'").fetchone()[0] == "eBay"
+    logs = conn.execute("SELECT action, before_value, after_value FROM normalization_log ORDER BY action").fetchall()
+    assert ("rename","ebay","eBay") in [(a,b,c) for a,b,c in logs]
+    assert ("retype","Product","Concept") in [(a,b,c) for a,b,c in logs]
+
+
+def test_resolve_reject_sets_status_only(test_db):
+    import sqlite3
+    from src.pipeline.graph_repair import propose_correction, resolve_correction
+    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)
+    iid = propose_correction(conn, action="invalidate", entity="panopticon")["issue_id"]
+    resolve_correction(conn, iid, "reject", reviewer="human")
+    row = conn.execute("SELECT status, reviewer FROM graph_issues WHERE id=?", (iid,)).fetchone()
+    assert row[0] == "rejected" and row[1] == "human"
+    assert conn.execute("SELECT invalid_at FROM entities WHERE id='e1'").fetchone()[0] is None  # no mutation
+
+
+def test_resolve_approve_invalidate_mutates(test_db):
+    import sqlite3
+    from src.pipeline.graph_repair import propose_correction, resolve_correction
+    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)
+    iid = propose_correction(conn, action="invalidate", entity="panopticon", rationale="metaphor")["issue_id"]
+    resolve_correction(conn, iid, "approve", reviewer="human")
+    assert conn.execute("SELECT status FROM graph_issues WHERE id=?", (iid,)).fetchone()[0] == "accepted"
+    assert conn.execute("SELECT invalid_at FROM entities WHERE id='e1'").fetchone()[0] is not None
+    assert conn.execute("SELECT COUNT(*) FROM normalization_log WHERE action='invalidate'").fetchone()[0] == 1
+
+
+def test_resolve_approve_merge_records_without_mutation(test_db):
+    import sqlite3
+    from src.pipeline.graph_repair import propose_correction, resolve_correction
+    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)
+    iid = propose_correction(conn, action="merge", entity="panopticon", target_b="ebay")["issue_id"]
+    res = resolve_correction(conn, iid, "approve", reviewer="human")
+    assert conn.execute("SELECT status FROM graph_issues WHERE id=?", (iid,)).fetchone()[0] == "accepted"
+    # merge apply deferred → no entity removed, no invalid_at set
+    assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 2
+    assert res.get("applied") is False
+
+
 def test_apply_schema_columns_exist(test_db):
     import sqlite3
     conn = sqlite3.connect(test_db)
