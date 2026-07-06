@@ -35,6 +35,21 @@ def test_propose_bad_action_is_400(test_client, test_store):
     assert resp.status_code == 400
 
 
+def test_resolve_route_reject_and_approve(test_client, test_store):
+    conn = test_store.conn
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('e1','panopticon','Product')")
+    conn.commit()
+    pid = test_client.post("/corrections/propose", json={"action":"invalidate","entity":"panopticon"}).json()["issue_id"]
+    r = test_client.post(f"/corrections/review/{pid}?action=reject")
+    assert r.status_code == 200 and r.json()["status"] == "rejected"
+    # resolved issue leaves the pending queue
+    assert all(c["id"] != pid for c in test_client.get("/corrections").json())
+
+
+def test_resolve_route_bad_action_400(test_client, test_store):
+    assert test_client.post("/corrections/review/nope?action=frob").status_code == 400
+
+
 def test_judge_endpoint_enqueues_job(test_client, test_store):
     resp = test_client.post("/corrections/judge")
     assert resp.status_code == 200

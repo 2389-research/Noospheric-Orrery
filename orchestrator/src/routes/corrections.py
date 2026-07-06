@@ -2,7 +2,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from ..dependencies import get_auth_store, AuthStore
-from ..pipeline.graph_repair import propose_correction, get_pending_issues
+from ..pipeline.graph_repair import propose_correction, get_pending_issues, resolve_correction
 
 router = APIRouter()
 
@@ -38,6 +38,19 @@ def list_corrections(auth: AuthStore = Depends(get_auth_store)):
     store = auth.store
     try:
         return get_pending_issues(store.conn)
+    finally:
+        store.close()
+
+
+@router.post("/corrections/review/{issue_id}")
+def review(issue_id: str, action: str = "approve", auth: AuthStore = Depends(get_auth_store)):
+    if action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
+    store = auth.store
+    try:
+        return resolve_correction(store.conn, issue_id, action)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         store.close()
 
