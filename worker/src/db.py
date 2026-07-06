@@ -210,6 +210,29 @@ def init_db(db_path: str) -> None:
              OR source_path LIKE '%.png' OR source_path LIKE '%.webp'
              OR source_path LIKE '%.gif')
     """)
+    # Migrate: graph self-healing soft-delete + generalized correction log
+    ent_cols = {r[1] for r in conn.execute("PRAGMA table_info(entities)").fetchall()}
+    if "invalid_at" not in ent_cols:
+        conn.execute("ALTER TABLE entities ADD COLUMN invalid_at TIMESTAMP")
+    if "invalid_reason" not in ent_cols:
+        conn.execute("ALTER TABLE entities ADD COLUMN invalid_reason TEXT")
+    if "updated_at" not in ent_cols:
+        conn.execute("ALTER TABLE entities ADD COLUMN updated_at TIMESTAMP")
+    rel_cols = {r[1] for r in conn.execute("PRAGMA table_info(relationships)").fetchall()}
+    if "invalid_at" not in rel_cols:
+        conn.execute("ALTER TABLE relationships ADD COLUMN invalid_at TIMESTAMP")
+    if "invalid_reason" not in rel_cols:
+        conn.execute("ALTER TABLE relationships ADD COLUMN invalid_reason TEXT")
+    log_cols = {r[1] for r in conn.execute("PRAGMA table_info(normalization_log)").fetchall()}
+    for col, decl in [
+        ("action", "TEXT"), ("before_value", "TEXT"), ("after_value", "TEXT"),
+        ("actor", "TEXT"), ("reason", "TEXT"), ("model_verdict", "TEXT"),
+        ("model_confidence", "REAL"), ("reviewer", "TEXT"),
+    ]:
+        if col not in log_cols:
+            conn.execute(f"ALTER TABLE normalization_log ADD COLUMN {col} {decl}")
+    # Backfill: existing merge-log rows predate `action`
+    conn.execute("UPDATE normalization_log SET action = 'merge' WHERE action IS NULL")
     conn.commit()
     conn.close()
 

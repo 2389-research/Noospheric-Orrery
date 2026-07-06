@@ -97,6 +97,19 @@ def test_get_pending_issues_returns_only_pending(test_db):
     assert pending[0]["target_entity_name"] == "websim"
 
 
+def test_apply_schema_columns_exist(test_db):
+    import sqlite3
+    conn = sqlite3.connect(test_db)
+    ecols = {r[1] for r in conn.execute("PRAGMA table_info(entities)").fetchall()}
+    rcols = {r[1] for r in conn.execute("PRAGMA table_info(relationships)").fetchall()}
+    lcols = {r[1] for r in conn.execute("PRAGMA table_info(normalization_log)").fetchall()}
+    conn.close()
+    assert {"invalid_at", "invalid_reason", "updated_at"} <= ecols
+    assert {"invalid_at", "invalid_reason"} <= rcols
+    assert {"action", "before_value", "after_value", "actor", "reason",
+            "model_verdict", "model_confidence", "reviewer"} <= lcols
+
+
 def test_graph_issues_table_exists(test_db):
     import sqlite3
     conn = sqlite3.connect(test_db)
