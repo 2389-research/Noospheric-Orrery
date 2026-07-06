@@ -243,9 +243,10 @@ class SQLiteEntityRepository(EntityRepository):
         self._conn.commit()
         return id
 
-    def get(self, entity_id):
+    def get(self, entity_id, include_invalid=False):
+        clause = "" if include_invalid else " AND invalid_at IS NULL"
         row = self._conn.execute(
-            "SELECT * FROM entities WHERE id = ? AND invalid_at IS NULL", (entity_id,)
+            f"SELECT * FROM entities WHERE id = ?{clause}", (entity_id,)
         ).fetchone()
         if not row:
             return None
@@ -255,9 +256,10 @@ class SQLiteEntityRepository(EntityRepository):
         return Entity(id=row["id"], canonical_name=row["canonical_name"], type=row["type"],
                       source_count=count, embedding=row["embedding"], created_at=row["created_at"])
 
-    def get_by_name(self, name, type):
+    def get_by_name(self, name, type, include_invalid=False):
+        clause = "" if include_invalid else " AND invalid_at IS NULL"
         row = self._conn.execute(
-            "SELECT * FROM entities WHERE canonical_name = ? AND type = ? AND invalid_at IS NULL",
+            f"SELECT * FROM entities WHERE canonical_name = ? AND type = ?{clause}",
             (name, type)
         ).fetchone()
         if not row:

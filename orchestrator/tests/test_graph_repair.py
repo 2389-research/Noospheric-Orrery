@@ -117,6 +117,55 @@ def test_apply_invalidation_round_trips(test_db):
     assert back["edges_restored"] == 1
     assert conn.execute("SELECT invalid_at FROM entities WHERE id='e1'").fetchone()[0] is None
     assert conn.execute("SELECT invalid_at FROM relationships WHERE id='r1'").fetchone()[0] is None
+    # rollback is audited
+    assert conn.execute(
+        "SELECT COUNT(*) FROM normalization_log WHERE action='rollback_invalidate'"
+    ).fetchone()[0] == 1
+
+
+def test_rollback_restores_only_own_edges(test_db):
+    """A shared edge invalidated by a PRIOR independent invalidation must not be resurrected
+    when a later invalidate+rollback touches the same neighbor."""
+    import sqlite3
+    from src.pipeline.graph_repair import apply_invalidation, rollback_invalidation
+    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)  # e1-e2 via r1
+    # Prior, independent invalidation of shared neighbor e2 → invalidates r1.
+    apply_invalidation(conn, "e2", reason="prior")
+    assert conn.execute("SELECT invalid_at FROM relationships WHERE id='r1'").fetchone()[0] is not None
+    # Now invalidate e1: r1 is already invalid, so e1's apply does NOT own it.
+    r = apply_invalidation(conn, "e1", reason="metaphor")
+    assert r["edges_invalidated"] == 0
+    back = rollback_invalidation(conn, "e1")
+    assert back["edges_restored"] == r["edges_invalidated"]  # 0, matches
+    # e1 restored, but r1 + e2 stay invalid (owned by e2's invalidation, not resurrected).
+    assert conn.execute("SELECT invalid_at FROM entities WHERE id='e1'").fetchone()[0] is None
+    assert conn.execute("SELECT invalid_at FROM relationships WHERE id='r1'").fetchone()[0] is not None
+    assert conn.execute("SELECT invalid_at FROM entities WHERE id='e2'").fetchone()[0] is not None
+
+
+def test_apply_commit_false_defers(test_db):
+    """commit=False must not persist: a rollback (simulated crash) before the atomic
+    commit leaves the graph and log untouched — the substrate resolve_correction relies on."""
+    import sqlite3
+    from src.pipeline.graph_repair import apply_invalidation
+    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)
+    apply_invalidation(conn, "e1", reason="x", commit=False)
+    conn.rollback()
+    assert conn.execute("SELECT invalid_at FROM entities WHERE id='e1'").fetchone()[0] is None
+    assert conn.execute("SELECT invalid_at FROM relationships WHERE id='r1'").fetchone()[0] is None
+    assert conn.execute("SELECT COUNT(*) FROM normalization_log").fetchone()[0] == 0
+
+
+def test_resolve_approve_retype_is_atomic(test_db):
+    """resolve commits the apply + status together, exactly once (no double-apply on the log)."""
+    import sqlite3
+    from src.pipeline.graph_repair import propose_correction, resolve_correction
+    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)
+    iid = propose_correction(conn, action="retype", entity="panopticon", proposed_type="Concept")["issue_id"]
+    resolve_correction(conn, iid, "approve", reviewer="human")
+    assert conn.execute("SELECT status FROM graph_issues WHERE id=?", (iid,)).fetchone()[0] == "accepted"
+    assert conn.execute("SELECT type FROM entities WHERE id='e1'").fetchone()[0] == "Concept"
+    assert conn.execute("SELECT COUNT(*) FROM normalization_log WHERE action='retype'").fetchone()[0] == 1
 
 
 def test_apply_retype_and_rename_log(test_db):

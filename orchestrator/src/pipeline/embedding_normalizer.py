@@ -136,7 +136,7 @@ def _run_batch_store(store, results):
     for e in entities:
         singular = collapse_plural(e.canonical_name, all_names)
         if singular:
-            target = store.entities.get_by_name(singular, e.type)
+            target = store.entities.get_by_name(singular, e.type, include_invalid=True)
             if target and target.id != e.id:
                 _merge_entities_store(store, from_id=e.id, from_name=e.canonical_name,
                                       to_id=target.id, to_name=singular, method="plural", similarity=1.0)

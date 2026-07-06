@@ -1,6 +1,7 @@
 # ABOUTME: Pure functions for the graph self-healing correction loop (intake slice).
 # Takes an injected sqlite3.Connection; no FastAPI/worker coupling. Proposing never
 # mutates the graph — it only validates + inserts a pending row into graph_issues.
+import json
 import sqlite3
 import uuid
 
@@ -98,69 +99,96 @@ def _log(conn, *, action, before_value=None, after_value=None, from_entity_id=No
 
 
 def apply_invalidation(conn, entity_id, *, reason=None, actor="human",
-                       model_verdict=None, model_confidence=None, reviewer=None):
-    """Soft-delete a node + its incident edges (the entire blast radius). Reversible."""
+                       model_verdict=None, model_confidence=None, reviewer=None, commit=True):
+    """Soft-delete a node + the edges *this call* invalidates (only those valid at apply
+    time). The exact set of edge ids is recorded in the log's after_value so rollback can
+    restore precisely those, without resurrecting edges a prior independent invalidation set."""
     name_row = conn.execute("SELECT canonical_name FROM entities WHERE id = ?", (entity_id,)).fetchone()
     if name_row is None:
         raise ValueError(f"entity not found: {entity_id!r}")
+    # Capture exactly which incident edges we are about to invalidate (those still valid).
+    edge_ids = [r[0] for r in conn.execute(
+        "SELECT id FROM relationships WHERE (from_entity = ? OR to_entity = ?) AND invalid_at IS NULL",
+        (entity_id, entity_id),
+    ).fetchall()]
     conn.execute("UPDATE entities SET invalid_at = CURRENT_TIMESTAMP, invalid_reason = ?, "
                  "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND invalid_at IS NULL", (reason, entity_id))
-    cur = conn.execute("UPDATE relationships SET invalid_at = CURRENT_TIMESTAMP, invalid_reason = ? "
-                       "WHERE (from_entity = ? OR to_entity = ?) AND invalid_at IS NULL",
-                       (reason, entity_id, entity_id))
-    edges = cur.rowcount
-    _log(conn, action="invalidate", before_value=name_row[0], from_entity_id=entity_id,
-         from_name=name_row[0], actor=actor, reason=reason, model_verdict=model_verdict,
-         model_confidence=model_confidence, reviewer=reviewer)
-    conn.commit()
-    return {"edges_invalidated": edges}
+    if edge_ids:
+        ph = ",".join("?" * len(edge_ids))
+        conn.execute(f"UPDATE relationships SET invalid_at = CURRENT_TIMESTAMP, invalid_reason = ? "
+                     f"WHERE id IN ({ph})", [reason] + edge_ids)
+    _log(conn, action="invalidate", before_value=name_row[0], after_value=json.dumps(edge_ids),
+         from_entity_id=entity_id, from_name=name_row[0], actor=actor, reason=reason,
+         model_verdict=model_verdict, model_confidence=model_confidence, reviewer=reviewer)
+    if commit:
+        conn.commit()
+    return {"edges_invalidated": len(edge_ids)}
 
 
-def rollback_invalidation(conn, entity_id):
-    """Clear the soft-delete on a node + its incident edges. Exact inverse of apply_invalidation."""
+def rollback_invalidation(conn, entity_id, *, commit=True):
+    """Exact inverse of apply_invalidation: restore the node + ONLY the edge ids that the
+    most-recent invalidate recorded — so edges a prior independent invalidation set stay
+    invalid. Audited via a `rollback_invalidate` log row."""
+    row = conn.execute(
+        "SELECT after_value FROM normalization_log WHERE action = 'invalidate' AND from_entity_id = ? "
+        "ORDER BY rowid DESC LIMIT 1", (entity_id,),
+    ).fetchone()
+    edge_ids = json.loads(row[0]) if row and row[0] else []
     conn.execute("UPDATE entities SET invalid_at = NULL, invalid_reason = NULL WHERE id = ?", (entity_id,))
-    cur = conn.execute("UPDATE relationships SET invalid_at = NULL, invalid_reason = NULL "
-                       "WHERE from_entity = ? OR to_entity = ?", (entity_id, entity_id))
-    conn.commit()
-    return {"edges_restored": cur.rowcount}
+    if edge_ids:
+        ph = ",".join("?" * len(edge_ids))
+        conn.execute(f"UPDATE relationships SET invalid_at = NULL, invalid_reason = NULL "
+                     f"WHERE id IN ({ph})", edge_ids)
+    _log(conn, action="rollback_invalidate", after_value=json.dumps(edge_ids),
+         from_entity_id=entity_id)
+    if commit:
+        conn.commit()
+    return {"edges_restored": len(edge_ids)}
 
 
 def apply_retype(conn, entity_id, new_type, *, actor="human", reason=None,
-                 model_verdict=None, model_confidence=None, reviewer=None):
+                 model_verdict=None, model_confidence=None, reviewer=None, commit=True):
     row = conn.execute("SELECT type FROM entities WHERE id = ?", (entity_id,)).fetchone()
     if row is None:
         raise ValueError(f"entity not found: {entity_id!r}")
     conn.execute("UPDATE entities SET type = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (new_type, entity_id))
     _log(conn, action="retype", before_value=row[0], after_value=new_type, from_entity_id=entity_id,
          actor=actor, reason=reason, model_verdict=model_verdict, model_confidence=model_confidence, reviewer=reviewer)
-    conn.commit()
+    if commit:
+        conn.commit()
     return {"before": row[0], "after": new_type}
 
 
 def apply_rename(conn, entity_id, new_name, *, actor="human", reason=None,
-                 model_verdict=None, model_confidence=None, reviewer=None):
+                 model_verdict=None, model_confidence=None, reviewer=None, commit=True):
     row = conn.execute("SELECT canonical_name FROM entities WHERE id = ?", (entity_id,)).fetchone()
     if row is None:
         raise ValueError(f"entity not found: {entity_id!r}")
     conn.execute("UPDATE entities SET canonical_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (new_name, entity_id))
     _log(conn, action="rename", before_value=row[0], after_value=new_name, from_entity_id=entity_id,
          actor=actor, reason=reason, model_verdict=model_verdict, model_confidence=model_confidence, reviewer=reviewer)
-    conn.commit()
+    if commit:
+        conn.commit()
     return {"before": row[0], "after": new_name}
 
 
 def resolve_correction(conn, issue_id, action, *, reviewer="human"):
     """Human decision on a pending issue. action ∈ {'approve','reject'}. On approve, apply the
-    issue's correction (merge is recorded but NOT applied — deferred). Reversible via the log."""
+    issue's correction (merge is recorded but NOT applied — deferred). The apply + status update
+    commit together (atomic): the apply_* helpers are called with commit=False and this function
+    does the single commit at the end, so a crash mid-way leaves the issue pending + graph clean.
+    Reversible via the log."""
     if action not in ("approve", "reject"):
         raise ValueError("action must be 'approve' or 'reject'")
-    conn.row_factory = sqlite3.Row
-    issue = conn.execute("SELECT * FROM graph_issues WHERE id = ?", (issue_id,)).fetchone()
-    if issue is None:
+    # Read the issue via a local cursor (no side-effect on the shared conn's row_factory).
+    cursor = conn.execute("SELECT * FROM graph_issues WHERE id = ?", (issue_id,))
+    columns = [c[0] for c in cursor.description]
+    row = cursor.fetchone()
+    if row is None:
         raise ValueError(f"issue not found: {issue_id!r}")
+    issue = dict(zip(columns, row))
     if issue["status"] != "pending":
         raise ValueError(f"issue already resolved: {issue['status']}")
-    issue = dict(issue)
 
     if action == "reject":
         conn.execute("UPDATE graph_issues SET status='rejected', reviewer=?, resolved_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -169,7 +197,7 @@ def resolve_correction(conn, issue_id, action, *, reviewer="human"):
         return {"status": "rejected", "applied": False}
 
     kw = dict(actor="human", reason=issue.get("rationale"), model_verdict=issue.get("judge_verdict"),
-              model_confidence=issue.get("judge_confidence"), reviewer=reviewer)
+              model_confidence=issue.get("judge_confidence"), reviewer=reviewer, commit=False)
     applied = True
     act = issue["action"]
     if act == "invalidate":
@@ -182,5 +210,5 @@ def resolve_correction(conn, issue_id, action, *, reviewer="human"):
         applied = False  # deferred: record the decision, do not mutate
     conn.execute("UPDATE graph_issues SET status='accepted', reviewer=?, resolved_at=CURRENT_TIMESTAMP WHERE id=?",
                  (reviewer, issue_id))
-    conn.commit()
+    conn.commit()  # single atomic commit for apply + status
     return {"status": "accepted", "applied": applied}
