@@ -172,6 +172,98 @@ def apply_rename(conn, entity_id, new_name, *, actor="human", reason=None,
     return {"before": row[0], "after": new_name}
 
 
+def _incident_edges(conn, *ids):
+    ph = ",".join("?" * len(ids))
+    return conn.execute(
+        f"SELECT id, from_entity, to_entity, type, weight, source_chunk, invalid_at "
+        f"FROM relationships WHERE from_entity IN ({ph}) OR to_entity IN ({ph})", ids + ids).fetchall()
+
+
+def apply_merge(conn, loser_id, survivor_id, *, actor="human", reason=None,
+                model_verdict=None, model_confidence=None, reviewer=None, commit=True):
+    """Collapse loser into survivor: reattribute mentions, RECOMPUTE survivor's 1-hop co-occurrence
+    edges over the combined chunk set (weights combine, no duplicates), alias the loser name, and
+    SOFT-DELETE the loser. Reversible: the full before-state is snapshotted in the log."""
+    ls = conn.execute("SELECT id, canonical_name FROM entities WHERE id = ?", (loser_id,)).fetchone()
+    ss = conn.execute("SELECT id, canonical_name FROM entities WHERE id = ?", (survivor_id,)).fetchone()
+    if ls is None or ss is None:
+        raise ValueError("merge needs two existing entities")
+    if loser_id == survivor_id:
+        raise ValueError("cannot merge an entity with itself")
+
+    # --- snapshot for exact undo ---
+    moved_src_rowids = [r[0] for r in conn.execute(
+        "SELECT rowid FROM entity_sources WHERE entity_id = ?", (loser_id,)).fetchall()]
+    edge_snapshot = [list(r) for r in _incident_edges(conn, loser_id, survivor_id)]
+    loser_row = {"id": ls[0], "canonical_name": ls[1]}
+    snapshot = json.dumps({"loser": loser_row, "moved_src_rowids": moved_src_rowids, "edges": edge_snapshot})
+
+    # 1. reattribute the loser's mentions to the survivor
+    conn.execute("UPDATE entity_sources SET entity_id = ? WHERE entity_id = ?", (survivor_id, loser_id))
+
+    # 2. drop old incident edges of BOTH (we recompute the survivor's from scratch)
+    conn.execute("DELETE FROM relationships WHERE from_entity IN (?,?) OR to_entity IN (?,?)",
+                 (loser_id, survivor_id, loser_id, survivor_id))
+
+    # 3. recompute survivor's co-occurrence edges over its (now combined) chunk set, active neighbors only,
+    #    weight = distinct shared chunks (so a shared chunk counts once). Mirrors cooccurrence.py semantics.
+    rows = conn.execute(
+        """SELECT es.entity_id AS neighbor, COUNT(DISTINCT es.chunk_id) AS w, MIN(es.chunk_id) AS first_chunk
+             FROM entity_sources es
+             JOIN entities e ON e.id = es.entity_id
+            WHERE es.chunk_id IN (SELECT chunk_id FROM entity_sources WHERE entity_id = ?)
+              AND es.entity_id != ?
+              AND e.invalid_at IS NULL
+            GROUP BY es.entity_id""",
+        (survivor_id, survivor_id)).fetchall()
+    for neighbor, w, first_chunk in rows:
+        conn.execute("INSERT INTO relationships (id, from_entity, to_entity, type, weight, source_chunk) "
+                     "VALUES (?,?,?,?,?,?)", (str(uuid.uuid4()), survivor_id, neighbor, "co_occurs", w, first_chunk))
+
+    # 4. alias for future ingest dedup
+    conn.execute("INSERT OR REPLACE INTO merge_map (from_name, to_entity_id) VALUES (?, ?)", (ls[1], survivor_id))
+
+    # 5. soft-delete the loser (reversible)
+    conn.execute("UPDATE entities SET invalid_at = CURRENT_TIMESTAMP, invalid_reason = ?, "
+                 "updated_at = CURRENT_TIMESTAMP WHERE id = ?", (reason, loser_id))
+
+    _log(conn, action="merge", before_value=ls[1], after_value=snapshot, from_entity_id=loser_id,
+         from_name=ls[1], to_entity_id=survivor_id, to_name=ss[1], actor=actor, reason=reason,
+         model_verdict=model_verdict, model_confidence=model_confidence, reviewer=reviewer)
+    if commit:
+        conn.commit()
+    return {"survivor": survivor_id, "loser": loser_id, "edges_recomputed": len(rows)}
+
+
+def rollback_merge(conn, loser_id, *, commit=True):
+    """Exact inverse of apply_merge, from the log snapshot."""
+    row = conn.execute("SELECT after_value FROM normalization_log WHERE action='merge' AND from_entity_id=? "
+                       "ORDER BY rowid DESC LIMIT 1", (loser_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"no merge log for {loser_id!r}")
+    snap = json.loads(row[0])
+    survivor_id = conn.execute("SELECT to_entity_id FROM merge_map WHERE to_entity_id IS NOT NULL "
+                               "AND from_name = ?", (snap["loser"]["canonical_name"],)).fetchone()
+    # move sources back to the loser
+    if snap["moved_src_rowids"]:
+        ph = ",".join("?" * len(snap["moved_src_rowids"]))
+        conn.execute(f"UPDATE entity_sources SET entity_id = ? WHERE rowid IN ({ph})",
+                     [loser_id] + snap["moved_src_rowids"])
+    # restore the exact pre-merge incident edges: delete current, re-insert snapshot
+    surv = survivor_id[0] if survivor_id else None
+    conn.execute("DELETE FROM relationships WHERE from_entity IN (?,?) OR to_entity IN (?,?)",
+                 (loser_id, surv, loser_id, surv))
+    for e in snap["edges"]:
+        conn.execute("INSERT INTO relationships (id,from_entity,to_entity,type,weight,source_chunk,invalid_at) "
+                     "VALUES (?,?,?,?,?,?,?)", (e[0], e[1], e[2], e[3], e[4], e[5], e[6]))
+    conn.execute("DELETE FROM merge_map WHERE from_name = ?", (snap["loser"]["canonical_name"],))
+    conn.execute("UPDATE entities SET invalid_at=NULL, invalid_reason=NULL WHERE id=?", (loser_id,))
+    _log(conn, action="rollback_merge", from_entity_id=loser_id, from_name=snap["loser"]["canonical_name"])
+    if commit:
+        conn.commit()
+    return {"restored": loser_id}
+
+
 def resolve_correction(conn, issue_id, action, *, reviewer="human"):
     """Human decision on a pending issue. action ∈ {'approve','reject'}. On approve, apply the
     issue's correction (merge is recorded but NOT applied — deferred). The apply + status update

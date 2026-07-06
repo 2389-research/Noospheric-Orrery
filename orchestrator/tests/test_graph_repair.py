@@ -215,6 +215,59 @@ def test_resolve_approve_merge_records_without_mutation(test_db):
     assert res.get("applied") is False
 
 
+def _seed_merge_fixture(conn):
+    # survivor s (2 sources), loser l (1 source), neighbor x. l and s BOTH co-occur with x in chunk c1
+    # (shared chunk → must be counted ONCE for the merged s–x edge, not double).
+    conn.executescript("""
+      INSERT INTO entities (id,canonical_name,type) VALUES
+        ('s','websim','Product'),('l','web sim','Product'),('x','harper reed','Person');
+      INSERT INTO documents (id,title,status) VALUES ('d','D','extracted');
+      INSERT INTO chunks (id,document_id,chunk_index,text) VALUES
+        ('c1','d',0,'websim web sim harper reed'),('c2','d',1,'websim only'),('c3','d',2,'web sim harper reed');
+      INSERT INTO entity_sources (entity_id,document_id,chunk_id) VALUES
+        ('s','d','c1'),('s','d','c2'),('l','d','c1'),('l','d','c3'),
+        ('x','d','c1'),('x','d','c3');
+      INSERT INTO relationships (id,from_entity,to_entity,type,weight,source_chunk) VALUES
+        ('e_sx','s','x','co_occurs',1,'c1'),   -- s–x from c1
+        ('e_lx','l','x','co_occurs',1,'c3');    -- l–x from c3
+    """)
+    conn.commit()
+
+
+def test_apply_merge_collapses_and_recomputes_weight(test_db):
+    import sqlite3
+    from src.pipeline.graph_repair import apply_merge
+    conn = sqlite3.connect(test_db); _seed_merge_fixture(conn)
+    apply_merge(conn, loser_id="l", survivor_id="s", actor="human", reason="spacing")
+    # loser soft-deleted, not hard-deleted
+    assert conn.execute("SELECT invalid_at FROM entities WHERE id='l'").fetchone()[0] is not None
+    assert conn.execute("SELECT COUNT(*) FROM entities WHERE id='l'").fetchone()[0] == 1
+    # loser's sources moved to survivor
+    assert conn.execute("SELECT COUNT(*) FROM entity_sources WHERE entity_id='l'").fetchone()[0] == 0
+    # exactly ONE active s–x edge, weight = distinct chunks where (s or l) co-occurs with x = {c1,c3} = 2
+    rows = conn.execute("SELECT weight FROM relationships WHERE type='co_occurs' AND invalid_at IS NULL "
+                        "AND ((from_entity='s' AND to_entity='x') OR (from_entity='x' AND to_entity='s'))").fetchall()
+    assert len(rows) == 1 and rows[0][0] == 2
+    # no active edge references the loser
+    assert conn.execute("SELECT COUNT(*) FROM relationships WHERE (from_entity='l' OR to_entity='l') AND invalid_at IS NULL").fetchone()[0] == 0
+    # merge_map alias set
+    assert conn.execute("SELECT to_entity_id FROM merge_map WHERE from_name='web sim'").fetchone()[0] == 's'
+
+
+def test_rollback_merge_restores_exactly(test_db):
+    import sqlite3
+    from src.pipeline.graph_repair import apply_merge, rollback_merge
+    conn = sqlite3.connect(test_db); _seed_merge_fixture(conn)
+    before_sources = conn.execute("SELECT entity_id,chunk_id FROM entity_sources ORDER BY 1,2").fetchall()
+    before_edges = conn.execute("SELECT id,from_entity,to_entity,weight FROM relationships ORDER BY id").fetchall()
+    apply_merge(conn, loser_id="l", survivor_id="s")
+    rollback_merge(conn, loser_id="l")
+    assert conn.execute("SELECT invalid_at FROM entities WHERE id='l'").fetchone()[0] is None
+    assert conn.execute("SELECT entity_id,chunk_id FROM entity_sources ORDER BY 1,2").fetchall() == before_sources
+    assert conn.execute("SELECT id,from_entity,to_entity,weight FROM relationships ORDER BY id").fetchall() == before_edges
+    assert conn.execute("SELECT COUNT(*) FROM merge_map WHERE from_name='web sim'").fetchone()[0] == 0
+
+
 def test_apply_schema_columns_exist(test_db):
     import sqlite3
     conn = sqlite3.connect(test_db)
