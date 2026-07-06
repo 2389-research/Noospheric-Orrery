@@ -1,7 +1,6 @@
 import sqlite3
 import uuid
 import pytest
-from src.db import init_db
 from src.jobs.graph_repair import judge_pending_issues, judge_correction
 
 
@@ -14,6 +13,29 @@ class FakeRelay:
     async def complete_structured(self, *, model, messages, max_tokens, schema, **kwargs):
         self.calls.append(messages[0]["content"])
         return dict(self._v)
+
+
+class MalformedRelay:
+    """Simulates a dropped tool_use block / Ollama JSON parse failure: returns {}."""
+    def __init__(self):
+        self.calls = []
+
+    async def complete_structured(self, *, model, messages, max_tokens, schema, **kwargs):
+        self.calls.append(messages[0]["content"])
+        return {}
+
+
+class FlakyRelay:
+    """Succeeds on every call except the Nth (1-indexed), which raises — poison-pill test."""
+    def __init__(self, raise_on_call=2):
+        self._raise_on = raise_on_call
+        self.calls = 0
+
+    async def complete_structured(self, *, model, messages, max_tokens, schema, **kwargs):
+        self.calls += 1
+        if self.calls == self._raise_on:
+            raise RuntimeError("relay boom")
+        return {"verdict": "accept", "confidence": 0.9, "rationale": "ok"}
 
 
 def _seed(db_path):
@@ -61,3 +83,68 @@ async def test_judge_skips_already_judged(test_db):
     result = await judge_pending_issues(conn, relay, model="test-model")
     assert result["judged"] == 0
     assert relay.calls == []
+
+
+async def test_judge_malformed_verdict_not_latched(test_db):
+    """A blank/garbage verdict must NOT be written as an empty string (which would latch the
+    issue as 'judged' and never retry). It stays NULL and is counted as failed."""
+    conn = _seed(test_db)
+    relay = MalformedRelay()
+    result = await judge_pending_issues(conn, relay, model="test-model")
+    assert result["judged"] == 0
+    assert result["failed"] == 1
+    row = conn.execute(
+        "SELECT judge_verdict, judge_confidence, judge_rationale, status FROM graph_issues"
+    ).fetchone()
+    assert row[0] is None  # retryable — not latched
+    assert row[1] is None
+    assert row[2] is None
+    assert row[3] == "pending"
+
+
+async def test_judge_batch_survives_one_relay_exception(test_db):
+    """One relay exception must not roll back or block the rest of the batch (no poison pill).
+    Successful verdicts are committed; the failing issue stays NULL and is counted."""
+    conn = _seed(test_db)
+    # Add a second pending issue so the batch has 2 to judge.
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('e2', 'ozymandias', 'Product')")
+    conn.execute(
+        "INSERT INTO graph_issues (id, action, target_entity_id, target_entity_name, rationale, proposer, status) "
+        "VALUES (?, 'invalidate', 'e2', 'ozymandias', 'literary analogy', 'agent-x', 'pending')",
+        (str(uuid.uuid4()),),
+    )
+    conn.commit()
+    relay = FlakyRelay(raise_on_call=2)  # second issue judged raises
+    result = await judge_pending_issues(conn, relay, model="test-model")  # must NOT propagate
+    assert result["judged"] == 1
+    assert result["failed"] == 1
+    verdicts = [r[0] for r in conn.execute("SELECT judge_verdict FROM graph_issues").fetchall()]
+    # Exactly one committed verdict survived; the failure stayed NULL (retryable).
+    assert verdicts.count("accept") == 1
+    assert verdicts.count(None) == 1
+
+
+async def test_judge_evidence_scoped_to_target_entity_id(test_db):
+    """Two same-named entities of different types with different chunks. A proposal against ONE id
+    must only surface THAT id's evidence — the homonym's chunk must not leak into the prompt."""
+    conn = sqlite3.connect(test_db)
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('planet', 'mercury', 'Planet')")
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('metal', 'mercury', 'Element')")
+    conn.execute("INSERT INTO documents (id, title, status) VALUES ('d1', 'Doc', 'extracted')")
+    conn.execute("INSERT INTO chunks (id, document_id, chunk_index, text) VALUES ('cp', 'd1', 0, 'mercury is the closest planet to the sun')")
+    conn.execute("INSERT INTO chunks (id, document_id, chunk_index, text) VALUES ('cm', 'd1', 1, 'mercury is a liquid metal element at room temperature')")
+    conn.execute("INSERT INTO entity_sources (entity_id, document_id, chunk_id) VALUES ('planet', 'd1', 'cp')")
+    conn.execute("INSERT INTO entity_sources (entity_id, document_id, chunk_id) VALUES ('metal', 'd1', 'cm')")
+    conn.execute(
+        "INSERT INTO graph_issues (id, action, target_entity_id, target_entity_name, rationale, proposer, status) "
+        "VALUES (?, 'invalidate', 'planet', 'mercury', 'not a real planet', 'agent-x', 'pending')",
+        (str(uuid.uuid4()),),
+    )
+    conn.commit()
+    relay = FakeRelay()
+    await judge_pending_issues(conn, relay, model="test-model")
+    prompt = relay.calls[0]
+    assert "closest planet to the sun" in prompt          # the target id's chunk
+    assert "liquid metal element" not in prompt           # homonym's chunk must NOT leak
+    assert "Planet" in prompt                             # target id's type
+    assert "Element" not in prompt                        # homonym's type must NOT leak
