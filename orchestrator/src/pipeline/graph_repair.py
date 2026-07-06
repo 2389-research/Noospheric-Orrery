@@ -18,7 +18,7 @@ def _resolve_entity(conn: sqlite3.Connection, name_or_id: str) -> tuple[str, str
     if row is None:
         row = conn.execute(
             "SELECT id, canonical_name FROM entities "
-            "WHERE lower(canonical_name) = lower(?) ORDER BY id LIMIT 1",
+            "WHERE lower(canonical_name) = lower(?) AND invalid_at IS NULL ORDER BY id LIMIT 1",
             (name_or_id,),
         ).fetchone()
     if row is None:
@@ -103,9 +103,12 @@ def apply_invalidation(conn, entity_id, *, reason=None, actor="human",
     """Soft-delete a node + the edges *this call* invalidates (only those valid at apply
     time). The exact set of edge ids is recorded in the log's after_value so rollback can
     restore precisely those, without resurrecting edges a prior independent invalidation set."""
-    name_row = conn.execute("SELECT canonical_name FROM entities WHERE id = ?", (entity_id,)).fetchone()
+    name_row = conn.execute("SELECT canonical_name, invalid_at FROM entities WHERE id = ?", (entity_id,)).fetchone()
     if name_row is None:
         raise ValueError(f"entity not found: {entity_id!r}")
+    if name_row[1] is not None:
+        # Already soft-deleted (a prior invalidation/merge). Mirrors apply_merge's guard.
+        raise ValueError(f"entity already invalidated: {entity_id!r}")
     # Capture exactly which incident edges we are about to invalidate (those still valid).
     edge_ids = [r[0] for r in conn.execute(
         "SELECT id FROM relationships WHERE (from_entity = ? OR to_entity = ?) AND invalid_at IS NULL",
@@ -185,11 +188,15 @@ def apply_merge(conn, loser_id, survivor_id, *, actor="human", reason=None,
     edges over the combined chunk set (weights combine, no duplicates), alias the loser name, and
     SOFT-DELETE the loser. Reversible: the full before-state is snapshotted in the log."""
     ls = conn.execute("SELECT id, canonical_name, invalid_at FROM entities WHERE id = ?", (loser_id,)).fetchone()
-    ss = conn.execute("SELECT id, canonical_name FROM entities WHERE id = ?", (survivor_id,)).fetchone()
+    ss = conn.execute("SELECT id, canonical_name, invalid_at FROM entities WHERE id = ?", (survivor_id,)).fetchone()
     if ls is None or ss is None:
         raise ValueError("merge needs two existing entities")
     if loser_id == survivor_id:
         raise ValueError("cannot merge an entity with itself")
+    if ss[2] is not None:
+        # Can't merge into a soft-deleted survivor — the recomputed edges would attach to a
+        # node hidden from the active graph.
+        raise ValueError(f"survivor already invalidated: {survivor_id!r}")
     if ls[2] is not None:
         # Already soft-deleted (a prior merge/invalidation). A second apply would snapshot the
         # post-merge state as if it were the before-state → un-reversible. Refuse.
@@ -328,6 +335,9 @@ def resolve_correction(conn, issue_id, action, *, reviewer="human"):
         cb = conn.execute("SELECT COUNT(*) FROM entity_sources WHERE entity_id=?", (b,)).fetchone()[0]
         survivor, loser = (a, b) if ca > cb else (b, a)  # more-sourced survives; tie → target_b
         apply_merge(conn, loser, survivor, **kw)  # kw carries commit=False (single atomic commit below)
+    else:
+        # A row with an unrecognized action must be rejected, not silently accepted-without-apply.
+        raise ValueError(f"unknown action: {act}")
     conn.execute("UPDATE graph_issues SET status='accepted', reviewer=?, resolved_at=CURRENT_TIMESTAMP WHERE id=?",
                  (reviewer, issue_id))
     conn.commit()  # single atomic commit for apply + status

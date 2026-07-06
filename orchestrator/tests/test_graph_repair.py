@@ -107,7 +107,8 @@ def _seed_entity_with_edge(conn):
 def test_apply_invalidation_round_trips(test_db):
     import sqlite3
     from src.pipeline.graph_repair import apply_invalidation, rollback_invalidation
-    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)
+    conn = sqlite3.connect(test_db)
+    _seed_entity_with_edge(conn)
     r = apply_invalidation(conn, "e1", reason="metaphor", actor="human")
     assert r["edges_invalidated"] == 1
     assert conn.execute("SELECT invalid_at FROM entities WHERE id='e1'").fetchone()[0] is not None
@@ -128,7 +129,8 @@ def test_rollback_restores_only_own_edges(test_db):
     when a later invalidate+rollback touches the same neighbor."""
     import sqlite3
     from src.pipeline.graph_repair import apply_invalidation, rollback_invalidation
-    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)  # e1-e2 via r1
+    conn = sqlite3.connect(test_db)
+    _seed_entity_with_edge(conn)  # e1-e2 via r1
     # Prior, independent invalidation of shared neighbor e2 → invalidates r1.
     apply_invalidation(conn, "e2", reason="prior")
     assert conn.execute("SELECT invalid_at FROM relationships WHERE id='r1'").fetchone()[0] is not None
@@ -148,7 +150,8 @@ def test_apply_commit_false_defers(test_db):
     commit leaves the graph and log untouched — the substrate resolve_correction relies on."""
     import sqlite3
     from src.pipeline.graph_repair import apply_invalidation
-    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)
+    conn = sqlite3.connect(test_db)
+    _seed_entity_with_edge(conn)
     apply_invalidation(conn, "e1", reason="x", commit=False)
     conn.rollback()
     assert conn.execute("SELECT invalid_at FROM entities WHERE id='e1'").fetchone()[0] is None
@@ -160,7 +163,8 @@ def test_resolve_approve_retype_is_atomic(test_db):
     """resolve commits the apply + status together, exactly once (no double-apply on the log)."""
     import sqlite3
     from src.pipeline.graph_repair import propose_correction, resolve_correction
-    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)
+    conn = sqlite3.connect(test_db)
+    _seed_entity_with_edge(conn)
     iid = propose_correction(conn, action="retype", entity="panopticon", proposed_type="Concept")["issue_id"]
     resolve_correction(conn, iid, "approve", reviewer="human")
     assert conn.execute("SELECT status FROM graph_issues WHERE id=?", (iid,)).fetchone()[0] == "accepted"
@@ -171,7 +175,8 @@ def test_resolve_approve_retype_is_atomic(test_db):
 def test_apply_retype_and_rename_log(test_db):
     import sqlite3
     from src.pipeline.graph_repair import apply_retype, apply_rename
-    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)
+    conn = sqlite3.connect(test_db)
+    _seed_entity_with_edge(conn)
     apply_retype(conn, "e1", "Concept", actor="human", reason="x")
     assert conn.execute("SELECT type FROM entities WHERE id='e1'").fetchone()[0] == "Concept"
     apply_rename(conn, "e2", "eBay", actor="human", reason="x")
@@ -184,7 +189,8 @@ def test_apply_retype_and_rename_log(test_db):
 def test_resolve_reject_sets_status_only(test_db):
     import sqlite3
     from src.pipeline.graph_repair import propose_correction, resolve_correction
-    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)
+    conn = sqlite3.connect(test_db)
+    _seed_entity_with_edge(conn)
     iid = propose_correction(conn, action="invalidate", entity="panopticon")["issue_id"]
     resolve_correction(conn, iid, "reject", reviewer="human")
     row = conn.execute("SELECT status, reviewer FROM graph_issues WHERE id=?", (iid,)).fetchone()
@@ -195,7 +201,8 @@ def test_resolve_reject_sets_status_only(test_db):
 def test_resolve_approve_invalidate_mutates(test_db):
     import sqlite3
     from src.pipeline.graph_repair import propose_correction, resolve_correction
-    conn = sqlite3.connect(test_db); _seed_entity_with_edge(conn)
+    conn = sqlite3.connect(test_db)
+    _seed_entity_with_edge(conn)
     iid = propose_correction(conn, action="invalidate", entity="panopticon", rationale="metaphor")["issue_id"]
     resolve_correction(conn, iid, "approve", reviewer="human")
     assert conn.execute("SELECT status FROM graph_issues WHERE id=?", (iid,)).fetchone()[0] == "accepted"
@@ -206,7 +213,8 @@ def test_resolve_approve_invalidate_mutates(test_db):
 def test_resolve_approve_merge_applies(test_db):
     import sqlite3
     from src.pipeline.graph_repair import propose_correction, resolve_correction
-    conn = sqlite3.connect(test_db); _seed_merge_fixture(conn)
+    conn = sqlite3.connect(test_db)
+    _seed_merge_fixture(conn)
     iid = propose_correction(conn, action="merge", entity="web sim", target_b="websim", rationale="dupe")["issue_id"]
     res = resolve_correction(conn, iid, "approve", reviewer="human")
     assert res["applied"] is True
@@ -237,7 +245,8 @@ def _seed_merge_fixture(conn):
 def test_apply_merge_collapses_and_recomputes_weight(test_db):
     import sqlite3
     from src.pipeline.graph_repair import apply_merge
-    conn = sqlite3.connect(test_db); _seed_merge_fixture(conn)
+    conn = sqlite3.connect(test_db)
+    _seed_merge_fixture(conn)
     apply_merge(conn, loser_id="l", survivor_id="s", actor="human", reason="spacing")
     # loser soft-deleted, not hard-deleted
     assert conn.execute("SELECT invalid_at FROM entities WHERE id='l'").fetchone()[0] is not None
@@ -257,7 +266,8 @@ def test_apply_merge_collapses_and_recomputes_weight(test_db):
 def test_rollback_merge_restores_exactly(test_db):
     import sqlite3
     from src.pipeline.graph_repair import apply_merge, rollback_merge
-    conn = sqlite3.connect(test_db); _seed_merge_fixture(conn)
+    conn = sqlite3.connect(test_db)
+    _seed_merge_fixture(conn)
     before_sources = conn.execute("SELECT entity_id,chunk_id FROM entity_sources ORDER BY 1,2").fetchall()
     before_edges = conn.execute("SELECT id,from_entity,to_entity,weight FROM relationships ORDER BY id").fetchall()
     apply_merge(conn, loser_id="l", survivor_id="s")
@@ -312,7 +322,8 @@ def test_merge_preserves_and_restores_prior_alias(test_db):
     re-points it to the survivor; rollback_merge restores the ORIGINAL alias target, not delete."""
     import sqlite3
     from src.pipeline.graph_repair import apply_merge, rollback_merge
-    conn = sqlite3.connect(test_db); _seed_merge_fixture(conn)
+    conn = sqlite3.connect(test_db)
+    _seed_merge_fixture(conn)
     conn.execute("INSERT INTO merge_map (from_name, to_entity_id) VALUES ('web sim', 'x')")  # prior alias
     conn.commit()
     apply_merge(conn, loser_id="l", survivor_id="s")
@@ -327,10 +338,68 @@ def test_apply_merge_double_apply_raises(test_db):
     import sqlite3
     import pytest
     from src.pipeline.graph_repair import apply_merge
-    conn = sqlite3.connect(test_db); _seed_merge_fixture(conn)
+    conn = sqlite3.connect(test_db)
+    _seed_merge_fixture(conn)
     apply_merge(conn, loser_id="l", survivor_id="s")
     with pytest.raises(ValueError, match="already merged"):
         apply_merge(conn, loser_id="l", survivor_id="s")
+
+
+def test_apply_invalidation_refuses_already_invalid(test_db):
+    """A second invalidate on an already soft-deleted node must refuse (mirrors apply_merge)."""
+    import sqlite3
+    import pytest
+    from src.pipeline.graph_repair import apply_invalidation
+    conn = sqlite3.connect(test_db)
+    _seed_entity_with_edge(conn)
+    apply_invalidation(conn, "e1", reason="metaphor")
+    with pytest.raises(ValueError, match="already invalidated"):
+        apply_invalidation(conn, "e1", reason="again")
+
+
+def test_apply_merge_refuses_invalid_survivor(test_db):
+    """Cannot merge a loser into a soft-deleted survivor."""
+    import sqlite3
+    import pytest
+    from src.pipeline.graph_repair import apply_invalidation, apply_merge
+    conn = sqlite3.connect(test_db)
+    _seed_merge_fixture(conn)
+    apply_invalidation(conn, "s", reason="gone")  # survivor soft-deleted
+    with pytest.raises(ValueError, match="survivor already invalidated"):
+        apply_merge(conn, loser_id="l", survivor_id="s")
+
+
+def test_resolve_unknown_action_raises_and_leaves_pending(test_db):
+    """A graph_issues row with an unrecognized action must be rejected on approve,
+    not silently accepted-without-apply."""
+    import sqlite3
+    import uuid
+    import pytest
+    from src.pipeline.graph_repair import resolve_correction
+    conn = sqlite3.connect(test_db)
+    _seed_entity_with_edge(conn)
+    iid = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO graph_issues (id, action, target_entity_id, target_entity_name, status) "
+        "VALUES (?, 'frobnicate', 'e1', 'panopticon', 'pending')", (iid,))
+    conn.commit()
+    with pytest.raises(ValueError, match="unknown action"):
+        resolve_correction(conn, iid, "approve", reviewer="human")
+    # the bad row stays pending (not accepted)
+    assert conn.execute("SELECT status FROM graph_issues WHERE id=?", (iid,)).fetchone()[0] == "pending"
+
+
+def test_resolve_entity_by_name_skips_invalidated(test_db):
+    """The by-name resolution path must exclude soft-deleted entities so proposing/resolving
+    doesn't target an already-invalidated node."""
+    import sqlite3
+    import pytest
+    from src.pipeline.graph_repair import apply_invalidation, propose_correction
+    conn = sqlite3.connect(test_db)
+    _seed_entity_with_edge(conn)
+    apply_invalidation(conn, "e1", reason="metaphor")  # 'panopticon' now invalid
+    with pytest.raises(ValueError, match="not found"):
+        propose_correction(conn, action="retype", entity="panopticon", proposed_type="Concept")
 
 
 def test_apply_schema_columns_exist(test_db):

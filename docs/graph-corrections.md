@@ -11,7 +11,7 @@ search-surface threading, and auto-apply are deferred (see bottom).
 
 ## The loop
 
-```
+```text
 agent uses graph (MCP read tools)
   └─ propose_correction (MCP write) ─▶ graph_issues (status=pending)
        └─ judge (worker job: periodic sweep + manual) ─▶ advisory {verdict, confidence, rationale}

@@ -43,7 +43,7 @@ def list_corrections(auth: AuthStore = Depends(get_auth_store)):
 
 
 @router.post("/corrections/review/{issue_id}")
-def review(issue_id: str, action: str = "approve", auth: AuthStore = Depends(get_auth_store)):
+def review(issue_id: str, action: str, auth: AuthStore = Depends(get_auth_store)):
     if action not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
     store = auth.store

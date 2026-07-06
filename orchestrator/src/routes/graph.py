@@ -375,6 +375,7 @@ def get_graph_data_umap(auth: AuthStore = Depends(get_auth_store)):
         SELECT dd1.domain_path, dd2.domain_path, COUNT(*) as weight
         FROM entity_sources es1
         JOIN entity_sources es2 ON es1.entity_id = es2.entity_id AND es1.document_id != es2.document_id
+        JOIN entities e ON e.id = es1.entity_id AND e.invalid_at IS NULL
         JOIN document_domains dd1 ON es1.document_id = dd1.document_id
         JOIN document_domains dd2 ON es2.document_id = dd2.document_id
         WHERE dd1.domain_path < dd2.domain_path

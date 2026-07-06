@@ -70,8 +70,13 @@ export function CorrectionsPanel() {
   };
 
   const handleResolve = async (id: string, action: "approve" | "reject") => {
-    await api.resolveCorrection(id, action);
-    refresh();
+    setNote(null);
+    try {
+      await api.resolveCorrection(id, action);
+      refresh();
+    } catch (e) {
+      setNote(`Error: ${e}`);
+    }
   };
 
   const sorted = [...items].sort(sortCorrections);
