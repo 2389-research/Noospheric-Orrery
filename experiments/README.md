@@ -23,6 +23,7 @@ artifact (or would bloat history), it goes to DS-scratch and is referenced by pa
 
 | Date | Experiment | Status | Verdict |
 |---|---|---|---|
+| 2026-07-06 | [Graph self-healing — correction-judge probe (rerun)](./2026-07-06-graph-self-healing-judge-probe/) | Complete, n=1 | Decomposed relay judge reproduces the core finding: **0 false-accepts / 5 negative controls**; 12/14 raw, both misses conservative. Weaker confidence spread + no defers vs the original subagent probe. |
 | 2026-06-29 | [Agentic vs decomposed simmer — cost/time/quality](./2026-06-29-agentic-vs-decomposed-simmer/) | Complete, n=1 | Decomposed ~27× cheaper, ~3.8× faster, **comparable-to-better** quality. The agentic flow's cost correlated with overfitting, not quality. |
 | 2026-06-26 | [Multi-judge board — gemma4 validation](./2026-06-26-multi-judge-board-validation/) | Directional, n=2/arm | Board produces a richer, better-typed golden (structural taxonomy ASIs) at ~2.3× compute. Ship **opt-in** for taxonomy-sensitive domains; don't flip the default. |
 
