@@ -1,3 +1,95 @@
+import sqlite3
+import pytest
+from src.db import init_db
+from src.pipeline.graph_repair import propose_correction, get_pending_issues, ALLOWED_ACTIONS
+
+
+def _seed(test_db):
+    conn = sqlite3.connect(test_db)
+    conn.row_factory = sqlite3.Row
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('e1', 'panopticon', 'Product')")
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('e2', 'websim', 'Product')")
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('e3', 'web sim', 'Product')")
+    conn.commit()
+    return conn
+
+
+def test_propose_invalidate_inserts_pending_row(test_db):
+    conn = _seed(test_db)
+    res = propose_correction(conn, action="invalidate", entity="panopticon",
+                             rationale="metaphor, not a real product", proposer="agent-x")
+    assert res["status"] == "pending"
+    row = conn.execute("SELECT * FROM graph_issues WHERE id = ?", (res["issue_id"],)).fetchone()
+    assert row["action"] == "invalidate"
+    assert row["target_entity_id"] == "e1"
+    assert row["target_entity_name"] == "panopticon"
+    assert row["proposer"] == "agent-x"
+
+
+def test_propose_merge_requires_and_resolves_second_entity(test_db):
+    conn = _seed(test_db)
+    res = propose_correction(conn, action="merge", entity="web sim", target_b="websim",
+                             rationale="spacing variant")
+    row = conn.execute("SELECT * FROM graph_issues WHERE id = ?", (res["issue_id"],)).fetchone()
+    assert row["target_entity_id"] == "e3"
+    assert row["target_b_entity_id"] == "e2"
+
+
+def test_propose_retype_records_proposed_type(test_db):
+    conn = _seed(test_db)
+    res = propose_correction(conn, action="retype", entity="panopticon", proposed_type="Concept")
+    row = conn.execute("SELECT proposed_type FROM graph_issues WHERE id = ?", (res["issue_id"],)).fetchone()
+    assert row["proposed_type"] == "Concept"
+
+
+def test_propose_rename_records_proposed_name(test_db):
+    conn = _seed(test_db)
+    res = propose_correction(conn, action="rename", entity="websim", proposed_name="WebSim")
+    row = conn.execute("SELECT proposed_name FROM graph_issues WHERE id = ?", (res["issue_id"],)).fetchone()
+    assert row["proposed_name"] == "WebSim"
+
+
+def test_propose_unknown_entity_raises(test_db):
+    conn = _seed(test_db)
+    with pytest.raises(ValueError, match="not found"):
+        propose_correction(conn, action="invalidate", entity="does-not-exist")
+
+
+def test_propose_bad_action_raises(test_db):
+    conn = _seed(test_db)
+    with pytest.raises(ValueError, match="action"):
+        propose_correction(conn, action="frobnicate", entity="panopticon")
+
+
+def test_propose_merge_without_target_b_raises(test_db):
+    conn = _seed(test_db)
+    with pytest.raises(ValueError, match="target_b"):
+        propose_correction(conn, action="merge", entity="web sim")
+
+
+def test_propose_retype_without_type_raises(test_db):
+    conn = _seed(test_db)
+    with pytest.raises(ValueError, match="proposed_type"):
+        propose_correction(conn, action="retype", entity="panopticon")
+
+
+def test_propose_rename_without_name_raises(test_db):
+    conn = _seed(test_db)
+    with pytest.raises(ValueError, match="proposed_name"):
+        propose_correction(conn, action="rename", entity="websim")
+
+
+def test_get_pending_issues_returns_only_pending(test_db):
+    conn = _seed(test_db)
+    r = propose_correction(conn, action="invalidate", entity="panopticon")
+    conn.execute("UPDATE graph_issues SET status='rejected' WHERE id=?", (r["issue_id"],))
+    propose_correction(conn, action="invalidate", entity="websim")
+    conn.commit()
+    pending = get_pending_issues(conn)
+    assert len(pending) == 1
+    assert pending[0]["target_entity_name"] == "websim"
+
+
 def test_graph_issues_table_exists(test_db):
     import sqlite3
     conn = sqlite3.connect(test_db)
