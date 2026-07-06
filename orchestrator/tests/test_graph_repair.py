@@ -268,6 +268,71 @@ def test_rollback_merge_restores_exactly(test_db):
     assert conn.execute("SELECT COUNT(*) FROM merge_map WHERE from_name='web sim'").fetchone()[0] == 0
 
 
+def test_rollback_merge_same_name_losers_uses_logged_survivor(test_db):
+    """Two same-named losers ('web sim') merged into different survivors. Rolling back the FIRST
+    must restore its own survivor's edges via the logged survivor id — not a merge_map name lookup
+    (which the second merge's alias would have clobbered) → wrong survivor."""
+    import sqlite3
+    from src.pipeline.graph_repair import apply_merge, rollback_merge
+    conn = sqlite3.connect(test_db)
+    conn.executescript("""
+      INSERT INTO entities (id,canonical_name,type) VALUES
+        ('s1','survivor one','Product'),('l1','web sim','Product'),('n1','neigh one','Person'),
+        ('s2','survivor two','Product'),('l2','web sim','Concept'),('n2','neigh two','Person');
+      INSERT INTO documents (id,title,status) VALUES ('d','D','extracted');
+      INSERT INTO chunks (id,document_id,chunk_index,text) VALUES
+        ('k1','d',0,'a'),('k2','d',1,'b'),('k3','d',2,'c'),('k4','d',3,'d');
+      INSERT INTO entity_sources (entity_id,document_id,chunk_id) VALUES
+        ('s1','d','k1'),('l1','d','k1'),('n1','d','k1'),
+        ('s2','d','k3'),('l2','d','k3'),('n2','d','k3');
+      INSERT INTO relationships (id,from_entity,to_entity,type,weight,source_chunk) VALUES
+        ('r_s1n1','s1','n1','co_occurs',1,'k1'),('r_l1n1','l1','n1','co_occurs',1,'k1'),
+        ('r_s2n2','s2','n2','co_occurs',1,'k3'),('r_l2n2','l2','n2','co_occurs',1,'k3');
+    """)
+    conn.commit()
+    apply_merge(conn, loser_id="l1", survivor_id="s1")   # merge_map['web sim'] -> s1
+    apply_merge(conn, loser_id="l2", survivor_id="s2")   # INSERT OR REPLACE clobbers -> s2
+    s2_edges_before = conn.execute(
+        "SELECT id,from_entity,to_entity,weight FROM relationships "
+        "WHERE from_entity='s2' OR to_entity='s2' ORDER BY id").fetchall()
+    rollback_merge(conn, loser_id="l1")
+    # l1 restored, and its OWN survivor s1's pre-merge edges are back (r_s1n1 + r_l1n1)
+    assert conn.execute("SELECT invalid_at FROM entities WHERE id='l1'").fetchone()[0] is None
+    restored = conn.execute("SELECT id FROM relationships WHERE id IN ('r_s1n1','r_l1n1')").fetchall()
+    assert len(restored) == 2
+    # s2's merge is untouched by rolling back l1
+    assert conn.execute("SELECT invalid_at FROM entities WHERE id='l2'").fetchone()[0] is not None
+    assert conn.execute(
+        "SELECT id,from_entity,to_entity,weight FROM relationships "
+        "WHERE from_entity='s2' OR to_entity='s2' ORDER BY id").fetchall() == s2_edges_before
+
+
+def test_merge_preserves_and_restores_prior_alias(test_db):
+    """The loser name may already alias to another entity (from ingest normalization). apply_merge
+    re-points it to the survivor; rollback_merge restores the ORIGINAL alias target, not delete."""
+    import sqlite3
+    from src.pipeline.graph_repair import apply_merge, rollback_merge
+    conn = sqlite3.connect(test_db); _seed_merge_fixture(conn)
+    conn.execute("INSERT INTO merge_map (from_name, to_entity_id) VALUES ('web sim', 'x')")  # prior alias
+    conn.commit()
+    apply_merge(conn, loser_id="l", survivor_id="s")
+    assert conn.execute("SELECT to_entity_id FROM merge_map WHERE from_name='web sim'").fetchone()[0] == 's'
+    rollback_merge(conn, loser_id="l")
+    # prior alias restored exactly (not deleted)
+    assert conn.execute("SELECT to_entity_id FROM merge_map WHERE from_name='web sim'").fetchone()[0] == 'x'
+
+
+def test_apply_merge_double_apply_raises(test_db):
+    """A second apply on an already soft-deleted loser must refuse (bad snapshot otherwise)."""
+    import sqlite3
+    import pytest
+    from src.pipeline.graph_repair import apply_merge
+    conn = sqlite3.connect(test_db); _seed_merge_fixture(conn)
+    apply_merge(conn, loser_id="l", survivor_id="s")
+    with pytest.raises(ValueError, match="already merged"):
+        apply_merge(conn, loser_id="l", survivor_id="s")
+
+
 def test_apply_schema_columns_exist(test_db):
     import sqlite3
     conn = sqlite3.connect(test_db)
