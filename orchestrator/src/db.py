@@ -128,6 +128,28 @@ CREATE TABLE IF NOT EXISTS normalization_review_queue (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS graph_issues (
+    id TEXT PRIMARY KEY,
+    action TEXT NOT NULL,                 -- invalidate | merge | retype | rename
+    target_entity_id TEXT NOT NULL REFERENCES entities(id),
+    target_entity_name TEXT NOT NULL,
+    target_b_entity_id TEXT REFERENCES entities(id),  -- merge: the other node
+    target_b_name TEXT,
+    proposed_type TEXT,                   -- retype
+    proposed_name TEXT,                   -- rename
+    rationale TEXT,
+    proposer TEXT,                        -- proposing agent id
+    status TEXT NOT NULL DEFAULT 'pending', -- pending | accepted | rejected
+    judge_verdict TEXT,                   -- advisory, written by the judge stage
+    judge_confidence REAL,                -- advisory
+    judge_rationale TEXT,                 -- advisory
+    reviewer TEXT,                        -- human, written on resolve
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_graph_issues_status ON graph_issues(status);
+CREATE INDEX IF NOT EXISTS idx_graph_issues_target ON graph_issues(target_entity_id);
+
 CREATE TABLE IF NOT EXISTS simmer_iterations (
     id TEXT PRIMARY KEY,
     job_id TEXT REFERENCES jobs(id),
@@ -217,6 +239,29 @@ def init_db(db_path: str) -> None:
                      OR source_path LIKE '%.png' OR source_path LIKE '%.webp'
                      OR source_path LIKE '%.gif')
             """)
+            # Migrate: graph self-healing soft-delete + generalized correction log
+            ent_cols = {r[1] for r in conn.execute("PRAGMA table_info(entities)").fetchall()}
+            if "invalid_at" not in ent_cols:
+                conn.execute("ALTER TABLE entities ADD COLUMN invalid_at TIMESTAMP")
+            if "invalid_reason" not in ent_cols:
+                conn.execute("ALTER TABLE entities ADD COLUMN invalid_reason TEXT")
+            if "updated_at" not in ent_cols:
+                conn.execute("ALTER TABLE entities ADD COLUMN updated_at TIMESTAMP")
+            rel_cols = {r[1] for r in conn.execute("PRAGMA table_info(relationships)").fetchall()}
+            if "invalid_at" not in rel_cols:
+                conn.execute("ALTER TABLE relationships ADD COLUMN invalid_at TIMESTAMP")
+            if "invalid_reason" not in rel_cols:
+                conn.execute("ALTER TABLE relationships ADD COLUMN invalid_reason TEXT")
+            log_cols = {r[1] for r in conn.execute("PRAGMA table_info(normalization_log)").fetchall()}
+            for col, decl in [
+                ("action", "TEXT"), ("before_value", "TEXT"), ("after_value", "TEXT"),
+                ("actor", "TEXT"), ("reason", "TEXT"), ("model_verdict", "TEXT"),
+                ("model_confidence", "REAL"), ("reviewer", "TEXT"),
+            ]:
+                if col not in log_cols:
+                    conn.execute(f"ALTER TABLE normalization_log ADD COLUMN {col} {decl}")
+            # Backfill: existing merge-log rows predate `action`
+            conn.execute("UPDATE normalization_log SET action = 'merge' WHERE action IS NULL")
             conn.commit()
         finally:
             conn.close()
