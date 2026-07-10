@@ -20,6 +20,9 @@ Tools — Graph Traversal:
 - find_paths(entity_a, entity_b, max_depth) — shortest path(s) through co-occurrence edges
 - get_subgraph(entity_names, max_hops) — bounded subgraph around seed entities
 - explore_domain(domain_path) — domain overview with top entities and related domains
+
+Tools — Corrections (write):
+- propose_correction(action, entity, rationale, target_b, proposed_type, proposed_name) — file a graph correction for human review
 """
 
 import os
@@ -375,6 +378,44 @@ async def explore_domain(domain_path: str) -> str:
         for rd in result["related_domains"]:
             lines.append(f"    • {rd['path']} ({rd['shared_entities']} shared entities)")
     return "\n".join(lines)
+
+
+# ── Corrections (write) ───────────────────────────────────────────────────────
+
+@mcp.tool()
+async def propose_correction(
+    action: str,
+    entity: str,
+    rationale: str = "",
+    target_b: str = "",
+    proposed_type: str = "",
+    proposed_name: str = "",
+) -> str:
+    """Propose a correction to the knowledge graph. This files a pending issue for
+    human review — it never mutates the graph directly.
+
+    action: one of 'invalidate' (entity is not a real entity — a metaphor/analogy/artifact),
+            'merge' (entity and target_b are the same referent), 'retype' (entity's type is
+            wrong; give proposed_type), 'rename' (entity's name is garbled; give proposed_name).
+    entity: the entity name (or id) to correct.
+    rationale: why — cite what you saw in the sources.
+    target_b: (merge only) the other entity to merge with.
+    proposed_type / proposed_name: (retype / rename only) the corrected value.
+    """
+    body = {
+        "action": action, "entity": entity, "rationale": rationale,
+        "proposer": "mcp-agent",
+    }
+    if target_b:
+        body["target_b"] = target_b
+    if proposed_type:
+        body["proposed_type"] = proposed_type
+    if proposed_name:
+        body["proposed_name"] = proposed_name
+    result = await call_api("/corrections/propose", method="POST", body=body)
+    if "detail" in result:
+        return f"Could not file correction: {result['detail']}"
+    return f"Filed correction {result['issue_id']} ({action} on '{entity}') — status: {result['status']}. It will be reviewed by a human."
 
 
 if __name__ == "__main__":

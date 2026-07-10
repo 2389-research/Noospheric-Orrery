@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { StatsBar } from "@/components/stats-bar";
 import { DomainTree } from "@/components/domain-tree";
 import { NormalizationPanel } from "@/components/normalization-panel";
+import { CorrectionsPanel } from "@/components/corrections-panel";
 import { api } from "@/lib/api";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 import { useDemoMode } from "@/lib/hooks/use-demo-mode";
@@ -142,6 +143,7 @@ export default function PipelinePage() {
           <NormalizationPanel />
         </section>
       </div>
+      <CorrectionsPanel />
     </div>
   );
 }

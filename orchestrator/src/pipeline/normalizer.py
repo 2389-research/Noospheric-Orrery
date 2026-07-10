@@ -15,8 +15,9 @@ def normalize_entity(store_or_conn, name: str, entity_type: str) -> str:
         merged_to = store.normalization.get_merge_map_entry(clean_name)
         if merged_to:
             return merged_to
-        # Check existing entity
-        existing = store.entities.get_by_name(clean_name, entity_type)
+        # Check existing entity — include invalidated nodes so a re-mention
+        # re-attaches to the (still-invalidated) node instead of duplicating it.
+        existing = store.entities.get_by_name(clean_name, entity_type, include_invalid=True)
         if existing:
             return existing.id
         # Create new

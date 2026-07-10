@@ -35,6 +35,7 @@ def _get_adjacency(conn, entity_ids: list[str]) -> dict[str, list[dict]]:
         JOIN entities e1 ON r.from_entity = e1.id
         JOIN entities e2 ON r.to_entity = e2.id
         WHERE r.type = 'co_occurs' AND (r.from_entity IN ({ph}) OR r.to_entity IN ({ph}))
+          AND r.invalid_at IS NULL AND e1.invalid_at IS NULL AND e2.invalid_at IS NULL
     """, entity_ids + entity_ids).fetchall()
 
     adj: dict[str, list[dict]] = defaultdict(list)
@@ -275,7 +276,7 @@ async def find_paths(
     entity_map = {}
     if all_ids:
         ph = ",".join("?" * len(all_ids))
-        rows = conn.execute(f"SELECT id, canonical_name, type FROM entities WHERE id IN ({ph})", list(all_ids)).fetchall()
+        rows = conn.execute(f"SELECT id, canonical_name, type FROM entities WHERE id IN ({ph}) AND invalid_at IS NULL", list(all_ids)).fetchall()
         entity_map = {r["id"]: {"id": r["id"], "name": r["canonical_name"], "type": r["type"]} for r in rows}
 
     resolved_paths = []
@@ -411,7 +412,7 @@ async def explore_domain(
             SELECT e.id, e.canonical_name, e.type, COUNT(DISTINCT es.document_id) as doc_count
             FROM entity_sources es
             JOIN entities e ON es.entity_id = e.id
-            WHERE es.document_id IN ({ph})
+            WHERE es.document_id IN ({ph}) AND e.invalid_at IS NULL
             GROUP BY e.id ORDER BY doc_count DESC LIMIT 30
         """, doc_ids).fetchall()
         for r in entity_rows:
@@ -426,6 +427,7 @@ async def explore_domain(
         SELECT dd2.domain_path, COUNT(DISTINCT es1.entity_id) as shared_entities
         FROM document_domains dd1
         JOIN entity_sources es1 ON dd1.document_id = es1.document_id
+        JOIN entities e ON e.id = es1.entity_id AND e.invalid_at IS NULL
         JOIN entity_sources es2 ON es1.entity_id = es2.entity_id AND es1.document_id != es2.document_id
         JOIN document_domains dd2 ON es2.document_id = dd2.document_id
         WHERE dd1.domain_path = ? AND dd2.domain_path != ?

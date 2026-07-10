@@ -22,6 +22,7 @@ class Settings:
     chunk_size: int = 2000
     ollama_url: str = "http://localhost:11434"
     worker_poll_interval: int = 5
+    judge_sweep_interval_seconds: int = 900  # periodic advisory-judge sweep cadence (~15 min)
     db_path: str = "/data/orrery.db"
     documents_dir: str = "/data/documents"
     specs_dir: str = "/data/specs"
@@ -48,6 +49,7 @@ _ENV_MAP = {
     "chunk_size": "CHUNK_SIZE",
     "ollama_url": "OLLAMA_URL",
     "worker_poll_interval": "WORKER_POLL_INTERVAL",
+    "judge_sweep_interval_seconds": "JUDGE_SWEEP_INTERVAL_SECONDS",
     "db_path": "DB_PATH",
     "documents_dir": "DOCUMENTS_DIR",
     "specs_dir": "SPECS_DIR",

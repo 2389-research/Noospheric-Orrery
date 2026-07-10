@@ -107,3 +107,26 @@ export interface BatchResults {
 export interface EntityWithNew extends EntitySummary {
   is_new?: boolean;
 }
+
+export type CorrectionAction = "invalidate" | "merge" | "retype" | "rename";
+export type JudgeVerdict = "accept" | "reject" | "defer";
+
+export interface Correction {
+  id: string;
+  action: CorrectionAction;
+  target_entity_id: string;
+  target_entity_name: string;
+  target_b_entity_id: string | null;
+  target_b_name: string | null;
+  proposed_type: string | null;
+  proposed_name: string | null;
+  rationale: string | null;
+  proposer: string | null;
+  status: string;
+  judge_verdict: JudgeVerdict | null;
+  judge_confidence: number | null;
+  judge_rationale: string | null;
+  reviewer: string | null;
+  created_at: string;
+  resolved_at: string | null;
+}

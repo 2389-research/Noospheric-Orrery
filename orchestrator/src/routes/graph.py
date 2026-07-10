@@ -281,7 +281,7 @@ def _layout_domains_umap(domains: list[dict], conn) -> dict[str, dict]:
             SELECT e.canonical_name FROM entities e
             JOIN entity_sources es ON e.id = es.entity_id
             JOIN document_domains dd ON es.document_id = dd.document_id
-            WHERE dd.domain_path = ?
+            WHERE dd.domain_path = ? AND e.invalid_at IS NULL
             GROUP BY e.id
             ORDER BY COUNT(*) DESC LIMIT 12
         """, (path,)).fetchall()
@@ -350,7 +350,7 @@ def get_graph_data_umap(auth: AuthStore = Depends(get_auth_store)):
     entities_raw = conn.execute("""
         SELECT e.id, e.canonical_name, e.type,
                (SELECT COUNT(*) FROM entity_sources es WHERE es.entity_id = e.id) as source_count
-        FROM entities e ORDER BY source_count DESC
+        FROM entities e WHERE e.invalid_at IS NULL ORDER BY source_count DESC
     """).fetchall()
 
     entities = []
@@ -375,6 +375,7 @@ def get_graph_data_umap(auth: AuthStore = Depends(get_auth_store)):
         SELECT dd1.domain_path, dd2.domain_path, COUNT(*) as weight
         FROM entity_sources es1
         JOIN entity_sources es2 ON es1.entity_id = es2.entity_id AND es1.document_id != es2.document_id
+        JOIN entities e ON e.id = es1.entity_id AND e.invalid_at IS NULL
         JOIN document_domains dd1 ON es1.document_id = dd1.document_id
         JOIN document_domains dd2 ON es2.document_id = dd2.document_id
         WHERE dd1.domain_path < dd2.domain_path
