@@ -55,7 +55,9 @@ same time.
 ## Where things go
 
 - Settings: `~/.local/share/ai.2389.noospheric/settings.json`
-  (delete + relaunch to reconfigure the backend)
+  (use the app's **Noospheric → Change Settings…** menu item to reconfigure
+  the backend/API key without reinstalling — it restarts the services with
+  the new settings automatically)
 - Data (the equivalent of the compose stack's `./data/`):
   `~/.local/share/ai.2389.noospheric/orrery-data/`
 - Logs: `~/.local/share/ai.2389.noospheric/logs/`, or press `Ctrl+L` in the
