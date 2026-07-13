@@ -102,6 +102,11 @@ cloud call. Thresholds are **derived from the log, never hardcoded**.
 
 ## Deferred / open
 
+- **⚠️ Document delete (PR #34) reconciliation** — REQUIRED merge gate. PR #34 adds
+  document hard-delete, which breaks `rollback_merge`'s rowid invariant and leaves the
+  galaxy showing invalidated entities. See
+  [`reconcile-document-delete.md`](./reconcile-document-delete.md). Do not ship rollback
+  to `main` without it.
 - **Merge apply edge cases**: cross-feature undo ordering (above); merge is otherwise complete.
 - **Split**: unbuilt (mention-level provenance).
 - **Rollback / undo UI**: functions exist; no button.
