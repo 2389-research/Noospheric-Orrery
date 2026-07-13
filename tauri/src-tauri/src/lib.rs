@@ -529,13 +529,27 @@ fn reopen_settings(app: &tauri::AppHandle) {
 
 fn kill_children(state: &Supervisor) {
     let mut children = state.children.lock().unwrap();
-    for child in children.iter_mut() {
-        // Signal the whole process group (negative pgid == child pid, since each
-        // service was spawned with process_group(0)) so grandchildren die too.
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(-(child.id() as i32), libc::SIGTERM);
+    // Graceful first: SIGTERM the whole process group of each service (negative
+    // pgid == child pid, since each was spawned with process_group(0)).
+    #[cfg(unix)]
+    {
+        for child in children.iter() {
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGTERM);
+            }
         }
+        // Brief grace period, then force-kill any survivors in the group — a
+        // descendant that ignores SIGTERM would keep holding the port.
+        if !children.is_empty() {
+            std::thread::sleep(Duration::from_millis(500));
+            for child in children.iter() {
+                unsafe {
+                    libc::kill(-(child.id() as i32), libc::SIGKILL);
+                }
+            }
+        }
+    }
+    for child in children.iter_mut() {
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -583,20 +597,28 @@ pub fn run() {
             // A custom menu overrides the default Edit menu; without these
             // predefined items, Cmd+X/C/V/A don't work in webview text fields
             // (e.g. pasting the API key into the settings form).
-            let edit = Submenu::with_items(
-                app,
-                "Edit",
-                true,
-                &[
-                    &PredefinedMenuItem::undo(app, None)?,
-                    &PredefinedMenuItem::redo(app, None)?,
-                    &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::cut(app, None)?,
-                    &PredefinedMenuItem::copy(app, None)?,
-                    &PredefinedMenuItem::paste(app, None)?,
-                    &PredefinedMenuItem::select_all(app, None)?,
-                ],
-            )?;
+            let cut = PredefinedMenuItem::cut(app, None)?;
+            let copy = PredefinedMenuItem::copy(app, None)?;
+            let paste = PredefinedMenuItem::paste(app, None)?;
+            let select_all = PredefinedMenuItem::select_all(app, None)?;
+            // undo/redo are only supported on macOS in Tauri; on Windows/Linux
+            // they'd render as inert menu items, so include them (and their
+            // separator) only there.
+            #[cfg(target_os = "macos")]
+            let edit = {
+                let undo = PredefinedMenuItem::undo(app, None)?;
+                let redo = PredefinedMenuItem::redo(app, None)?;
+                let sep = PredefinedMenuItem::separator(app)?;
+                Submenu::with_items(
+                    app,
+                    "Edit",
+                    true,
+                    &[&undo, &redo, &sep, &cut, &copy, &paste, &select_all],
+                )?
+            };
+            #[cfg(not(target_os = "macos"))]
+            let edit =
+                Submenu::with_items(app, "Edit", true, &[&cut, &copy, &paste, &select_all])?;
             let menu = Menu::with_items(app, &[&submenu, &edit])?;
             app.set_menu(menu)?;
 

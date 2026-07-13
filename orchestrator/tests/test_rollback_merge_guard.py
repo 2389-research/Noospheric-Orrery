@@ -7,14 +7,12 @@ The invariant: only bring an entity back to the active graph if it still has
 at least one source.
 """
 
-import sqlite3
-from src.db import init_db
+from src.db import get_connection, init_db
 from src.pipeline.graph_repair import apply_merge, rollback_merge
 
 
 def _seed(db_path):
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection(db_path)
     conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('loser', 'gpt4', 'Product')")
     conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('surv', 'gpt-4', 'Product')")
     # loser sourced only by document d1; survivor by d2
