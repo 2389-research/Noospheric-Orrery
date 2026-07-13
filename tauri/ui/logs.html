@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Noospheric — Service Logs</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font: 13px/1.45 ui-monospace, "JetBrains Mono", monospace;
+    background: #05070f; color: #c6cede;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+    padding: 10px 14px; background: #10152a; border-bottom: 1px solid #232c4a;
+    font-family: system-ui, sans-serif; font-size: 13px;
+  }
+  header label { display: flex; gap: 5px; align-items: center; cursor: pointer; user-select: none; }
+  header .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  header .spacer { flex: 1; }
+  header button {
+    padding: 4px 10px; border-radius: 6px; border: 1px solid #2c3760;
+    background: transparent; color: #aab3cc; cursor: pointer; font-size: 12px;
+  }
+  #log { flex: 1; overflow-y: auto; padding: 10px 14px; }
+  .line { white-space: pre-wrap; word-break: break-all; }
+  .line .svc { font-weight: 700; margin-right: 8px; }
+  .orchestrator .svc { color: #7ea0ff; }
+  .worker       .svc { color: #6fd08c; }
+  .frontend     .svc { color: #e2b45a; }
+  .bootstrap    .svc { color: #b58ae6; }
+  .err { color: #ff9d9d; }
+  #paused {
+    position: fixed; bottom: 14px; right: 20px; padding: 5px 12px;
+    background: #2c3760; border-radius: 14px; font-family: system-ui, sans-serif;
+    font-size: 12px; display: none; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<header>
+  <strong style="letter-spacing:.03em">LOGS</strong>
+  <label for="svc-orchestrator"><span class="dot" style="background:#7ea0ff"></span><input id="svc-orchestrator" type="checkbox" data-svc="orchestrator" checked />orchestrator</label>
+  <label for="svc-worker"><span class="dot" style="background:#6fd08c"></span><input id="svc-worker" type="checkbox" data-svc="worker" checked />worker</label>
+  <label for="svc-frontend"><span class="dot" style="background:#e2b45a"></span><input id="svc-frontend" type="checkbox" data-svc="frontend" checked />frontend</label>
+  <label for="svc-bootstrap"><span class="dot" style="background:#b58ae6"></span><input id="svc-bootstrap" type="checkbox" data-svc="bootstrap" />bootstrap</label>
+  <span class="spacer"></span>
+  <button id="clear">Clear</button>
+</header>
+<div id="log"></div>
+<div id="paused">⏸ paused — click to resume</div>
+
+<script src="logs.js"></script>
+</body>
+</html>

@@ -119,6 +119,60 @@ class SQLiteDocumentRepository(DocumentRepository):
         return [Document(id=r["id"], title=r["title"], content=r["content"],
                          status=r["status"]) for r in rows]
 
+    def delete(self, doc_id):
+        """Delete a document and cascade to entity_sources, orphaned entities,
+        relationships, merge_map entries, document_domains, and chunks."""
+        conn = self._conn
+
+        affected_entity_ids = [
+            r["entity_id"] for r in conn.execute(
+                "SELECT DISTINCT entity_id FROM entity_sources WHERE document_id = ?", (doc_id,)
+            ).fetchall()
+        ]
+
+        conn.execute("DELETE FROM entity_sources WHERE document_id = ?", (doc_id,))
+
+        # Co-occurrence edges computed from this document's chunks are stale
+        # regardless of whether the entities they connect survive.
+        conn.execute(
+            "DELETE FROM relationships WHERE source_chunk IN "
+            "(SELECT id FROM chunks WHERE document_id = ?)",
+            (doc_id,),
+        )
+
+        entities_removed = []
+        for entity_id in affected_entity_ids:
+            remaining = conn.execute(
+                "SELECT COUNT(*) as c FROM entity_sources WHERE entity_id = ?", (entity_id,)
+            ).fetchone()["c"]
+            if remaining == 0:
+                conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
+                conn.execute("DELETE FROM entity_embeddings WHERE entity_id = ?", (entity_id,))
+                conn.execute("DELETE FROM merge_map WHERE to_entity_id = ?", (entity_id,))
+                conn.execute(
+                    "DELETE FROM relationships WHERE from_entity = ? OR to_entity = ?",
+                    (entity_id, entity_id),
+                )
+                entities_removed.append(entity_id)
+
+        affected_domains = [
+            r["domain_path"] for r in conn.execute(
+                "SELECT domain_path FROM document_domains WHERE document_id = ?", (doc_id,)
+            ).fetchall()
+        ]
+        conn.execute("DELETE FROM document_domains WHERE document_id = ?", (doc_id,))
+        for domain_path in affected_domains:
+            conn.execute(
+                "UPDATE domains SET document_count = MAX(document_count - 1, 0) WHERE path = ?",
+                (domain_path,),
+            )
+
+        conn.execute("DELETE FROM chunks WHERE document_id = ?", (doc_id,))
+        conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+        conn.commit()
+
+        return {"entities_removed": entities_removed}
+
 
 class SQLiteChunkRepository(ChunkRepository):
     def __init__(self, conn):

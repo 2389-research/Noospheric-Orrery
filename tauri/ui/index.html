@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Noospheric</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font: 15px/1.5 system-ui, sans-serif;
+    background: #0b0e1a; color: #dde3f0;
+    min-height: 100vh; display: grid; place-items: center;
+  }
+  main { width: min(560px, 92vw); }
+  h1 { font-size: 22px; letter-spacing: 0.04em; margin-bottom: 4px; }
+  p.sub { color: #8b94ad; margin-bottom: 24px; }
+  .card { background: #141a2e; border: 1px solid #232c4a; border-radius: 12px; padding: 20px; }
+  label { display: block; margin: 12px 0 4px; color: #aab3cc; font-size: 13px; }
+  input, select {
+    width: 100%; padding: 9px 10px; border-radius: 8px;
+    border: 1px solid #2c3760; background: #0b0e1a; color: #dde3f0;
+  }
+  button {
+    margin-top: 18px; padding: 10px 18px; border-radius: 8px; border: 0;
+    background: #5b6cff; color: white; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.ghost { background: transparent; border: 1px solid #2c3760; color: #aab3cc; }
+  #log {
+    margin-top: 16px; max-height: 260px; overflow-y: auto;
+    background: #05070f; border-radius: 8px; padding: 10px 12px;
+    font: 12px/1.5 ui-monospace, monospace; color: #7ea0c8; white-space: pre-wrap;
+  }
+  #error { color: #ff8484; margin-top: 12px; white-space: pre-wrap; font-size: 13px; }
+  .hidden { display: none; }
+  .spin { display: inline-block; animation: r 1s linear infinite; }
+  @keyframes r { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Noospheric Orrery</h1>
+  <p class="sub" id="subtitle">Starting up…</p>
+
+  <div class="card hidden" id="settings">
+    <label for="backend">LLM backend</label>
+    <select id="backend">
+      <option value="anthropic">Anthropic API (cloud)</option>
+      <option value="ollama">Ollama (fully local)</option>
+    </select>
+    <div id="anthropic-fields">
+      <label for="api_key">Anthropic API key</label>
+      <input id="api_key" type="password" placeholder="sk-ant-…" autocomplete="off" />
+      <label for="gateway_url">Gateway URL (optional — leave blank for api.anthropic.com)</label>
+      <input id="gateway_url" placeholder="https://api.anthropic.com" />
+    </div>
+    <div id="ollama-fields" class="hidden">
+      <label for="ollama_url">Ollama URL</label>
+      <input id="ollama_url" placeholder="http://localhost:11434" />
+      <label for="classification_model">Classification model</label>
+      <input id="classification_model" placeholder="gemma4:26b" />
+      <label for="extraction_model">Extraction model</label>
+      <input id="extraction_model" placeholder="gemma4:e4b" />
+    </div>
+    <button id="save">Save &amp; start</button>
+  </div>
+
+  <div class="card hidden" id="progress">
+    <div id="stage"><span class="spin">◐</span> <span id="stage-text">Preparing…</span></div>
+    <div id="log"></div>
+    <div id="error"></div>
+    <button id="retry" class="hidden">Retry</button>
+    <button id="reconfigure" class="ghost hidden">Change settings</button>
+  </div>
+</main>
+
+<script src="index.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "noospheric",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "tauri": "tauri",
+    "stage": "bash scripts/stage.sh"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
