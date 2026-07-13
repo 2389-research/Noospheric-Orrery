@@ -31,7 +31,7 @@ npm run tauri build  # produce installers (.deb / AppImage / etc.)
 
 ## Repo layout
 
-```
+```text
 ui/                  Supervisor UI (plain HTML/JS: bootstrap progress, settings)
 src-tauri/src/lib.rs Rust supervisor: provisioning, process spawn, health, shutdown
 scripts/stage.sh     Staging script (run before dev/build)
@@ -42,5 +42,4 @@ docs/superpowers/specs/  Design docs
 
 - macOS / Windows staging targets (stage.sh has the platform table; needs per-platform runs + signing)
 - App icon (still the Tauri default)
-- In-app "change settings" entry point after launch (workaround: quit, delete `<app-data>/settings.json`, relaunch — or edit the file)
 - Migration helper for existing docker-compose data (copy `Noospheric-Orrery/data/*` into `<app-data>/orrery-data/`)

@@ -41,77 +41,16 @@
 <body>
 <header>
   <strong style="letter-spacing:.03em">LOGS</strong>
-  <label><span class="dot" style="background:#7ea0ff"></span><input type="checkbox" data-svc="orchestrator" checked />orchestrator</label>
-  <label><span class="dot" style="background:#6fd08c"></span><input type="checkbox" data-svc="worker" checked />worker</label>
-  <label><span class="dot" style="background:#e2b45a"></span><input type="checkbox" data-svc="frontend" checked />frontend</label>
-  <label><span class="dot" style="background:#b58ae6"></span><input type="checkbox" data-svc="bootstrap" />bootstrap</label>
+  <label for="svc-orchestrator"><span class="dot" style="background:#7ea0ff"></span><input id="svc-orchestrator" type="checkbox" data-svc="orchestrator" checked />orchestrator</label>
+  <label for="svc-worker"><span class="dot" style="background:#6fd08c"></span><input id="svc-worker" type="checkbox" data-svc="worker" checked />worker</label>
+  <label for="svc-frontend"><span class="dot" style="background:#e2b45a"></span><input id="svc-frontend" type="checkbox" data-svc="frontend" checked />frontend</label>
+  <label for="svc-bootstrap"><span class="dot" style="background:#b58ae6"></span><input id="svc-bootstrap" type="checkbox" data-svc="bootstrap" />bootstrap</label>
   <span class="spacer"></span>
   <button id="clear">Clear</button>
 </header>
 <div id="log"></div>
 <div id="paused">⏸ paused — click to resume</div>
 
-<script>
-const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
-
-const logEl = document.getElementById("log");
-const pausedEl = document.getElementById("paused");
-const MAX_DOM_LINES = 4000;
-const enabled = { orchestrator: true, worker: true, frontend: true, bootstrap: false };
-let autoscroll = true;
-
-const ERR_RE = /error|traceback|exception|failed|fatal/i;
-
-function addLine(service, line) {
-  if (!(service in enabled)) enabled[service] = true;
-  const div = document.createElement("div");
-  div.className = "line " + service + (ERR_RE.test(line) ? " err" : "");
-  const svc = document.createElement("span");
-  svc.className = "svc";
-  svc.textContent = service.padEnd(12);
-  div.appendChild(svc);
-  div.appendChild(document.createTextNode(line));
-  div.style.display = enabled[service] ? "" : "none";
-  logEl.appendChild(div);
-  while (logEl.childElementCount > MAX_DOM_LINES) logEl.firstElementChild.remove();
-  if (autoscroll) logEl.scrollTop = logEl.scrollHeight;
-}
-
-// Pause autoscroll when the user scrolls up; resume at bottom or via chip.
-logEl.addEventListener("scroll", () => {
-  const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 30;
-  autoscroll = atBottom;
-  pausedEl.style.display = atBottom ? "none" : "block";
-});
-pausedEl.addEventListener("click", () => {
-  autoscroll = true;
-  logEl.scrollTop = logEl.scrollHeight;
-  pausedEl.style.display = "none";
-});
-
-document.querySelectorAll("input[data-svc]").forEach((cb) => {
-  enabled[cb.dataset.svc] = cb.checked;
-  cb.addEventListener("change", () => {
-    enabled[cb.dataset.svc] = cb.checked;
-    document.querySelectorAll(".line." + cb.dataset.svc).forEach((el) => {
-      el.style.display = cb.checked ? "" : "none";
-    });
-    if (autoscroll) logEl.scrollTop = logEl.scrollHeight;
-  });
-});
-
-document.getElementById("clear").addEventListener("click", () => {
-  logEl.textContent = "";
-});
-
-(async function init() {
-  const history = await invoke("get_log_buffer");
-  for (const [service, lines] of Object.entries(history)) {
-    for (const line of lines) addLine(service, line);
-  }
-  await listen("service-log", (e) => addLine(e.payload.service, e.payload.line));
-})();
-</script>
+<script src="logs.js"></script>
 </body>
 </html>

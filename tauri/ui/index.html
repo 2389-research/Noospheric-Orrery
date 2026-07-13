@@ -43,23 +43,23 @@
   <p class="sub" id="subtitle">Starting up…</p>
 
   <div class="card hidden" id="settings">
-    <label>LLM backend</label>
+    <label for="backend">LLM backend</label>
     <select id="backend">
       <option value="anthropic">Anthropic API (cloud)</option>
       <option value="ollama">Ollama (fully local)</option>
     </select>
     <div id="anthropic-fields">
-      <label>Anthropic API key</label>
-      <input id="api_key" type="password" placeholder="sk-ant-…" />
-      <label>Gateway URL (optional — leave blank for api.anthropic.com)</label>
+      <label for="api_key">Anthropic API key</label>
+      <input id="api_key" type="password" placeholder="sk-ant-…" autocomplete="off" />
+      <label for="gateway_url">Gateway URL (optional — leave blank for api.anthropic.com)</label>
       <input id="gateway_url" placeholder="https://api.anthropic.com" />
     </div>
     <div id="ollama-fields" class="hidden">
-      <label>Ollama URL</label>
+      <label for="ollama_url">Ollama URL</label>
       <input id="ollama_url" placeholder="http://localhost:11434" />
-      <label>Classification model</label>
+      <label for="classification_model">Classification model</label>
       <input id="classification_model" placeholder="gemma4:26b" />
-      <label>Extraction model</label>
+      <label for="extraction_model">Extraction model</label>
       <input id="extraction_model" placeholder="gemma4:e4b" />
     </div>
     <button id="save">Save &amp; start</button>
@@ -74,105 +74,6 @@
   </div>
 </main>
 
-<script>
-const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
-
-const $ = (id) => document.getElementById(id);
-const show = (id, on = true) => $(id).classList.toggle("hidden", !on);
-
-let logEl = $("log");
-listen("bootstrap-log", (e) => {
-  logEl.textContent += e.payload + "\n";
-  logEl.scrollTop = logEl.scrollHeight;
-});
-
-$("backend").addEventListener("change", () => {
-  const ollama = $("backend").value === "ollama";
-  show("anthropic-fields", !ollama);
-  show("ollama-fields", ollama);
-});
-
-function showSettings(prefill) {
-  show("settings", true);
-  show("progress", false);
-  $("subtitle").textContent = "Configure your LLM backend to get started.";
-  if (prefill) {
-    $("backend").value = prefill.backend || "anthropic";
-    $("api_key").value = prefill.api_key || "";
-    $("gateway_url").value = prefill.gateway_url || "";
-    $("ollama_url").value = prefill.ollama_url || "";
-    $("classification_model").value = prefill.classification_model || "";
-    $("extraction_model").value = prefill.extraction_model || "";
-    $("backend").dispatchEvent(new Event("change"));
-  }
-}
-
-function fail(msg) {
-  $("stage-text").textContent = "Something went wrong";
-  $("error").textContent = String(msg);
-  show("retry", true);
-  show("reconfigure", true);
-}
-
-async function start() {
-  show("settings", false);
-  show("progress", true);
-  $("error").textContent = "";
-  show("retry", false);
-  show("reconfigure", false);
-  try {
-    const status = await invoke("get_status");
-    if (!status.provisioned) {
-      $("subtitle").textContent = "First run — setting up the local pipeline.";
-      $("stage-text").textContent = "Installing Python runtime and dependencies (one-time, ~500 MB)…";
-      await invoke("bootstrap");
-    }
-    $("subtitle").textContent = "Launching services…";
-    $("stage-text").textContent = "Starting orchestrator, worker, and frontend…";
-    const url = await invoke("launch");
-    $("stage-text").textContent = "Ready — opening Orrery…";
-    window.location.replace(url);
-  } catch (e) {
-    fail(e);
-  }
-}
-
-$("save").addEventListener("click", async () => {
-  const settings = {
-    backend: $("backend").value,
-    api_key: $("api_key").value.trim(),
-    gateway_url: $("gateway_url").value.trim(),
-    ollama_url: $("ollama_url").value.trim(),
-    classification_model: $("classification_model").value.trim(),
-    extraction_model: $("extraction_model").value.trim(),
-  };
-  if (settings.backend === "anthropic" && !settings.api_key && !settings.gateway_url) {
-    alert("Enter an Anthropic API key (or choose Ollama).");
-    return;
-  }
-  await invoke("save_settings", { settings });
-  start();
-});
-
-$("retry").addEventListener("click", start);
-$("reconfigure").addEventListener("click", async () => {
-  const prefill = await invoke("get_settings").catch(() => null);
-  showSettings(prefill);
-});
-
-(async function init() {
-  const forceSettings = new URLSearchParams(window.location.search).get("settings") === "1";
-  const status = await invoke("get_status");
-  if (!status.has_settings || forceSettings) {
-    const prefill = forceSettings
-      ? await invoke("get_settings").catch(() => null)
-      : null;
-    showSettings(prefill);
-  } else {
-    start();
-  }
-})();
-</script>
+<script src="index.js"></script>
 </body>
 </html>

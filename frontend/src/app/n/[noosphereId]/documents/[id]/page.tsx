@@ -21,6 +21,10 @@ export default function DocumentDetailPage() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
+    setDoc(null);
+    setFileText(null);
+    setFileError(false);
+    setError(null);
     api.getDocument(id).then(setDoc).catch((e) => setError(e.message || "Failed to load document"));
   }, [id]);
 
@@ -45,7 +49,7 @@ export default function DocumentDetailPage() {
     }
   };
 
-  if (error) return <div className="p-6 text-red-400 text-sm">Document not found</div>;
+  if (error) return <div className="p-6 text-red-400 text-sm">{error}</div>;
   if (!doc) return <div className="p-6 text-muted-foreground/80 text-xs animate-pulse">Loading...</div>;
 
   return (

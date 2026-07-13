@@ -33,7 +33,7 @@ or a dev toolchain. First target: Linux. macOS/Windows later via the same mechan
 
 ## Architecture
 
-```
+```text
 Tauri app (Rust supervisor + tiny static supervisor UI)
 │
 ├─ resources/ (bundled at package time by scripts/stage.sh)
@@ -49,9 +49,13 @@ Tauri app (Rust supervisor + tiny static supervisor UI)
     ├─ runtime/python/               uv-managed CPython 3.12
     ├─ runtime/venvs/{orchestrator,worker}/
     ├─ orrery-data/                  SQLite DB, documents, specs (ORRERY_DATA_DIR)
-    ├─ settings.json                 backend choice, API key, Ollama config
+    ├─ settings.json                 backend choice, Ollama config (no API key)
     └─ logs/{orchestrator,worker,frontend}.log
 ```
+
+The Anthropic API key is never written to `settings.json`; it's stored in the OS
+keychain (`keyring` crate — libsecret on Linux, Keychain on macOS, Credential
+Manager on Windows) and rehydrated into the child process env at launch.
 
 ### Runtime flow
 
@@ -66,8 +70,9 @@ Tauri app (Rust supervisor + tiny static supervisor UI)
    - worker: `<venv>/bin/python -m src.main`
    - frontend: `node server.js` (standalone) with `PORT=3100`,
      `BACKEND_URL=http://127.0.0.1:8100`, `HOSTNAME=127.0.0.1`
-5. Poll `http://127.0.0.1:8100/stats` and `:3100` until healthy, then navigate the
-   window to `http://127.0.0.1:3100`.
+5. Wait for `:8100` and `:3100` to accept TCP connections (implementation note:
+   `wait_for_port` in `lib.rs` does a plain TCP dial, not an HTTP `/stats` health
+   check), then navigate the window to `http://127.0.0.1:3100`.
 6. On window close / app exit: kill all children (process-group kill so uvicorn
    workers die too). A `tray`-less v1: closing the window quits the app.
 7. Settings reachable later via a `noospheric://settings` — v1: keyboard-free

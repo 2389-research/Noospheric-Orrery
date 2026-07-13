@@ -16,6 +16,26 @@ use tauri::{Emitter, Manager, State};
 const ORCH_PORT: u16 = 8100;
 const FRONT_PORT: u16 = 3100;
 const LOG_BUFFER_LINES: usize = 1000;
+const KEYRING_SERVICE: &str = "ai.2389.noospheric";
+const KEYRING_USER: &str = "anthropic-api-key";
+
+/// Fetch the Anthropic API key from the OS keychain (libsecret on Linux,
+/// Keychain on macOS, Credential Manager on Windows). `None` if unset or the
+/// keychain backend is unavailable.
+fn keyring_get_api_key() -> Option<String> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
+        .ok()?
+        .get_password()
+        .ok()
+}
+
+/// Store the Anthropic API key in the OS keychain.
+fn keyring_set_api_key(value: &str) -> Result<(), String> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
+        .map_err(|e| e.to_string())?
+        .set_password(value)
+        .map_err(|e| e.to_string())
+}
 
 #[derive(Default)]
 struct Supervisor {
@@ -77,6 +97,18 @@ struct Settings {
     #[serde(default)]
     classification_model: String,
     #[serde(default)]
+    extraction_model: String,
+}
+
+/// What the webview is allowed to see: everything except the raw API key,
+/// which stays in the OS keychain and Rust-side memory only.
+#[derive(Serialize)]
+struct SettingsView {
+    backend: String,
+    has_api_key: bool,
+    gateway_url: String,
+    ollama_url: String,
+    classification_model: String,
     extraction_model: String,
 }
 
@@ -218,15 +250,30 @@ fn get_status(app: tauri::AppHandle) -> Result<Status, String> {
 }
 
 #[tauri::command]
-fn get_settings(app: tauri::AppHandle) -> Result<Settings, String> {
+fn get_settings(app: tauri::AppHandle) -> Result<SettingsView, String> {
     let paths = Paths::resolve(&app)?;
     let raw = fs::read_to_string(paths.settings_file()).map_err(|e| e.to_string())?;
-    serde_json::from_str(&raw).map_err(|e| e.to_string())
+    let settings: Settings = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    Ok(SettingsView {
+        backend: settings.backend,
+        has_api_key: keyring_get_api_key().is_some_and(|k| !k.is_empty()),
+        gateway_url: settings.gateway_url,
+        ollama_url: settings.ollama_url,
+        classification_model: settings.classification_model,
+        extraction_model: settings.extraction_model,
+    })
 }
 
 #[tauri::command]
-fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), String> {
+fn save_settings(app: tauri::AppHandle, mut settings: Settings) -> Result<(), String> {
     let paths = Paths::resolve(&app)?;
+    // A non-empty incoming key replaces the stored one; an empty one means
+    // "leave whatever's in the keychain alone" (the frontend never prefills
+    // this field, so empty here means the user didn't touch it).
+    if !settings.api_key.is_empty() {
+        keyring_set_api_key(&settings.api_key)?;
+    }
+    settings.api_key.clear();
     let raw = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     fs::write(paths.settings_file(), raw).map_err(|e| e.to_string())
 }
@@ -372,11 +419,12 @@ fn launch_impl(app: tauri::AppHandle) -> Result<String, String> {
     // tracked yet.
     kill_children_and_clear_logs(&state);
     let paths = Paths::resolve(&app)?;
-    let settings: Settings = {
+    let mut settings: Settings = {
         let raw = fs::read_to_string(paths.settings_file())
             .map_err(|_| "settings not configured".to_string())?;
         serde_json::from_str(&raw).map_err(|e| e.to_string())?
     };
+    settings.api_key = keyring_get_api_key().unwrap_or_default();
 
     for (port, what) in [(ORCH_PORT, "orchestrator"), (FRONT_PORT, "frontend")] {
         if port_open(port) {
@@ -424,7 +472,10 @@ fn launch_impl(app: tauri::AppHandle) -> Result<String, String> {
 
     wait_for_port(ORCH_PORT, Duration::from_secs(90), "orchestrator", &paths)?;
     wait_for_port(FRONT_PORT, Duration::from_secs(60), "frontend", &paths)?;
-    Ok(format!("http://127.0.0.1:{FRONT_PORT}"))
+    let url = format!("http://127.0.0.1:{FRONT_PORT}");
+    println!("✅ Services ready — {url}");
+    let _ = app.emit("bootstrap-log", format!("Ready at {url}"));
+    Ok(url)
 }
 
 #[tauri::command]
@@ -499,6 +550,14 @@ pub fn run() {
             get_log_buffer
         ])
         .setup(|app| {
+            println!("\n┌─ Noospheric ─────────────────────────────────");
+            println!("│ Desktop window opened — complete setup there.");
+            println!("│ After launch:");
+            println!("│   Frontend  → http://127.0.0.1:{FRONT_PORT}");
+            println!("│   API       → http://127.0.0.1:{ORCH_PORT}");
+            println!("│   API docs  → http://127.0.0.1:{ORCH_PORT}/docs");
+            println!("└──────────────────────────────────────────────\n");
+
             use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
             let logs_item =
                 MenuItem::with_id(app, "view-logs", "Service Logs", true, Some("CmdOrCtrl+L"))?;
