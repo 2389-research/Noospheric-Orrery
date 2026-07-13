@@ -356,6 +356,14 @@ fn spawn_logged(
     mut cmd: Command,
 ) -> Result<Child, String> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Put each service in its own process group so the whole subtree (uvicorn /
+    // node and any grandchildren they spawn) can be reaped together — otherwise
+    // grandchildren orphan on quit, hold the ports, and block the next launch.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     let mut child = cmd.spawn().map_err(|e| format!("{service}: {e}"))?;
     let mut readers: Vec<Box<dyn BufRead + Send>> = Vec::new();
     if let Some(out) = child.stdout.take() {
@@ -522,6 +530,12 @@ fn reopen_settings(app: &tauri::AppHandle) {
 fn kill_children(state: &Supervisor) {
     let mut children = state.children.lock().unwrap();
     for child in children.iter_mut() {
+        // Signal the whole process group (negative pgid == child pid, since each
+        // service was spawned with process_group(0)) so grandchildren die too.
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(-(child.id() as i32), libc::SIGTERM);
+        }
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -566,7 +580,24 @@ pub fn run() {
             let quit = PredefinedMenuItem::quit(app, None)?;
             let submenu =
                 Submenu::with_items(app, "Noospheric", true, &[&logs_item, &settings_item, &quit])?;
-            let menu = Menu::with_items(app, &[&submenu])?;
+            // A custom menu overrides the default Edit menu; without these
+            // predefined items, Cmd+X/C/V/A don't work in webview text fields
+            // (e.g. pasting the API key into the settings form).
+            let edit = Submenu::with_items(
+                app,
+                "Edit",
+                true,
+                &[
+                    &PredefinedMenuItem::undo(app, None)?,
+                    &PredefinedMenuItem::redo(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::cut(app, None)?,
+                    &PredefinedMenuItem::copy(app, None)?,
+                    &PredefinedMenuItem::paste(app, None)?,
+                    &PredefinedMenuItem::select_all(app, None)?,
+                ],
+            )?;
+            let menu = Menu::with_items(app, &[&submenu, &edit])?;
             app.set_menu(menu)?;
 
             if let Some(main) = app.get_webview_window("main") {
