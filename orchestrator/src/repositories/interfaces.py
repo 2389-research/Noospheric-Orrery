@@ -169,6 +169,9 @@ class DocumentRepository(ABC):
     def get_by_hash(self, content_hash: str) -> Document | None: ...
 
     @abstractmethod
+    def title_exists(self, title: str) -> bool: ...
+
+    @abstractmethod
     def update_status(self, doc_id: str, status: str) -> None: ...
 
     @abstractmethod

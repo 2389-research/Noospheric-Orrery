@@ -76,6 +76,10 @@ class SQLiteDocumentRepository(DocumentRepository):
         row = self._conn.execute("SELECT id FROM documents WHERE content_hash = ?", (content_hash,)).fetchone()
         return Document(id=row["id"], title="") if row else None
 
+    def title_exists(self, title):
+        row = self._conn.execute("SELECT 1 FROM documents WHERE title = ? LIMIT 1", (title,)).fetchone()
+        return row is not None
+
     def update_status(self, doc_id, status):
         self._conn.execute("UPDATE documents SET status = ? WHERE id = ?", (status, doc_id))
         self._conn.commit()
