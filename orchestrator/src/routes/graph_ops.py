@@ -256,6 +256,7 @@ async def find_paths(
                    r.weight
             FROM relationships r
             WHERE (r.from_entity = ? OR r.to_entity = ?) AND r.type = 'co_occurs'
+              AND r.invalid_at IS NULL
         """, (current, current, current)).fetchall()
 
         for row in neighbors:

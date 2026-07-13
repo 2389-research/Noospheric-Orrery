@@ -487,9 +487,10 @@ class SQLiteRelationshipRepository(RelationshipRepository):
         return [{"source": r[0], "target": r[1], "weight": r[2]} for r in rows]
 
     def get_star_graph(self, entity_id, co_limit=30):
-        # Entity info
+        # Entity info — an invalidated (soft-deleted) entity has no star graph.
         entity = self._conn.execute(
-            "SELECT id, canonical_name, type FROM entities WHERE id = ?", (entity_id,)
+            "SELECT id, canonical_name, type FROM entities WHERE id = ? AND invalid_at IS NULL",
+            (entity_id,),
         ).fetchone()
         if not entity:
             return None
