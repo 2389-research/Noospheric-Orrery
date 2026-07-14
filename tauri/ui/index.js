@@ -21,12 +21,25 @@ $("backend").addEventListener("change", () => {
   show("ollama-fields", ollama);
 });
 
+// Show/hide toggle so a user can confirm the key they pasted.
+$("toggle_key").addEventListener("click", () => {
+  const field = $("api_key");
+  const reveal = field.type === "password";
+  field.type = reveal ? "text" : "password";
+  $("toggle_key").textContent = reveal ? "hide" : "show";
+  $("toggle_key").setAttribute("aria-label", reveal ? "Hide API key" : "Show API key");
+});
+
 function showSettings(prefill) {
   show("settings", true);
   show("progress", false);
   $("subtitle").textContent = "Configure your LLM backend to get started.";
   hasApiKey = Boolean(prefill && prefill.has_api_key);
   $("api_key").value = "";
+  // Re-mask on (re)open so a newly typed key isn't left exposed from a prior reveal.
+  $("api_key").type = "password";
+  $("toggle_key").textContent = "show";
+  $("toggle_key").setAttribute("aria-label", "Show API key");
   $("api_key").placeholder = hasApiKey
     ? "•••• saved, leave blank to keep"
     : "sk-ant-…";

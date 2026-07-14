@@ -76,6 +76,10 @@ class SQLiteDocumentRepository(DocumentRepository):
         row = self._conn.execute("SELECT id FROM documents WHERE content_hash = ?", (content_hash,)).fetchone()
         return Document(id=row["id"], title="") if row else None
 
+    def title_exists(self, title):
+        row = self._conn.execute("SELECT 1 FROM documents WHERE title = ? LIMIT 1", (title,)).fetchone()
+        return row is not None
+
     def update_status(self, doc_id, status):
         self._conn.execute("UPDATE documents SET status = ? WHERE id = ?", (status, doc_id))
         self._conn.commit()
@@ -472,10 +476,13 @@ class SQLiteRelationshipRepository(RelationshipRepository):
                           weight=r["total_weight"]) for r in rows]
 
     def get_trade_routes(self):
+        # es1 and es2 share the same entity_id, so one join to entities filters
+        # both sides: an invalidated (soft-deleted) entity contributes no routes.
         rows = self._conn.execute("""
             SELECT dd1.domain_path, dd2.domain_path, COUNT(*) as weight
             FROM entity_sources es1
             JOIN entity_sources es2 ON es1.entity_id = es2.entity_id AND es1.document_id != es2.document_id
+            JOIN entities e ON e.id = es1.entity_id AND e.invalid_at IS NULL
             JOIN document_domains dd1 ON es1.document_id = dd1.document_id
             JOIN document_domains dd2 ON es2.document_id = dd2.document_id
             WHERE dd1.domain_path < dd2.domain_path
@@ -484,9 +491,10 @@ class SQLiteRelationshipRepository(RelationshipRepository):
         return [{"source": r[0], "target": r[1], "weight": r[2]} for r in rows]
 
     def get_star_graph(self, entity_id, co_limit=30):
-        # Entity info
+        # Entity info — an invalidated (soft-deleted) entity has no star graph.
         entity = self._conn.execute(
-            "SELECT id, canonical_name, type FROM entities WHERE id = ?", (entity_id,)
+            "SELECT id, canonical_name, type FROM entities WHERE id = ? AND invalid_at IS NULL",
+            (entity_id,),
         ).fetchone()
         if not entity:
             return None

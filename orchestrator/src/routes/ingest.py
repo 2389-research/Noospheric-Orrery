@@ -40,6 +40,18 @@ GENERAL_TEXT_SPEC = _load_general_spec("general_text")
 GENERAL_IMAGE_SPEC = _load_general_spec("general_image")
 
 
+def _unique_title(store, title: str) -> str:
+    """Keep same-filename uploads distinguishable: if another document already
+    has this title, append an incrementing suffix (README.md -> README.md (2)).
+    Exact-content duplicates are handled separately by content-hash dedup."""
+    if not store.documents.title_exists(title):
+        return title
+    n = 2
+    while store.documents.title_exists(f"{title} ({n})"):
+        n += 1
+    return f"{title} ({n})"
+
+
 async def _ingest_document(store, title: str, content: str, source_path: str | None) -> dict:
     settings = get_settings()
     relay = Relay.from_settings(settings)
@@ -59,6 +71,7 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
         }
 
     doc_id = str(uuid.uuid4())
+    title = _unique_title(store, title)
 
     # 1. Store document
     store.documents.create(doc_id, title, content, content_hash, source_path)
@@ -234,6 +247,7 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
         description = f"Image: {title}"
 
     # Store document with description as content
+    title = _unique_title(store, title)
     store.documents.create(doc_id, title, description, content_hash, image_path, content_type="image")
 
     # Store a single chunk with the description

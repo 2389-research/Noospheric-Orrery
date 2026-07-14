@@ -356,6 +356,14 @@ fn spawn_logged(
     mut cmd: Command,
 ) -> Result<Child, String> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Put each service in its own process group so the whole subtree (uvicorn /
+    // node and any grandchildren they spawn) can be reaped together — otherwise
+    // grandchildren orphan on quit, hold the ports, and block the next launch.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     let mut child = cmd.spawn().map_err(|e| format!("{service}: {e}"))?;
     let mut readers: Vec<Box<dyn BufRead + Send>> = Vec::new();
     if let Some(out) = child.stdout.take() {
@@ -521,6 +529,26 @@ fn reopen_settings(app: &tauri::AppHandle) {
 
 fn kill_children(state: &Supervisor) {
     let mut children = state.children.lock().unwrap();
+    // Graceful first: SIGTERM the whole process group of each service (negative
+    // pgid == child pid, since each was spawned with process_group(0)).
+    #[cfg(unix)]
+    {
+        for child in children.iter() {
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGTERM);
+            }
+        }
+        // Brief grace period, then force-kill any survivors in the group — a
+        // descendant that ignores SIGTERM would keep holding the port.
+        if !children.is_empty() {
+            std::thread::sleep(Duration::from_millis(500));
+            for child in children.iter() {
+                unsafe {
+                    libc::kill(-(child.id() as i32), libc::SIGKILL);
+                }
+            }
+        }
+    }
     for child in children.iter_mut() {
         let _ = child.kill();
         let _ = child.wait();
@@ -566,7 +594,32 @@ pub fn run() {
             let quit = PredefinedMenuItem::quit(app, None)?;
             let submenu =
                 Submenu::with_items(app, "Noospheric", true, &[&logs_item, &settings_item, &quit])?;
-            let menu = Menu::with_items(app, &[&submenu])?;
+            // A custom menu overrides the default Edit menu; without these
+            // predefined items, Cmd+X/C/V/A don't work in webview text fields
+            // (e.g. pasting the API key into the settings form).
+            let cut = PredefinedMenuItem::cut(app, None)?;
+            let copy = PredefinedMenuItem::copy(app, None)?;
+            let paste = PredefinedMenuItem::paste(app, None)?;
+            let select_all = PredefinedMenuItem::select_all(app, None)?;
+            // undo/redo are only supported on macOS in Tauri; on Windows/Linux
+            // they'd render as inert menu items, so include them (and their
+            // separator) only there.
+            #[cfg(target_os = "macos")]
+            let edit = {
+                let undo = PredefinedMenuItem::undo(app, None)?;
+                let redo = PredefinedMenuItem::redo(app, None)?;
+                let sep = PredefinedMenuItem::separator(app)?;
+                Submenu::with_items(
+                    app,
+                    "Edit",
+                    true,
+                    &[&undo, &redo, &sep, &cut, &copy, &paste, &select_all],
+                )?
+            };
+            #[cfg(not(target_os = "macos"))]
+            let edit =
+                Submenu::with_items(app, "Edit", true, &[&cut, &copy, &paste, &select_all])?;
+            let menu = Menu::with_items(app, &[&submenu, &edit])?;
             app.set_menu(menu)?;
 
             if let Some(main) = app.get_webview_window("main") {

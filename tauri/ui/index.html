@@ -26,6 +26,9 @@
   }
   button:disabled { opacity: 0.5; cursor: default; }
   button.ghost { background: transparent; border: 1px solid #2c3760; color: #aab3cc; }
+  .key-row { display: flex; gap: 8px; align-items: stretch; }
+  .key-row input { flex: 1; }
+  .key-toggle { margin-top: 0; padding: 0 12px; font-size: 13px; font-weight: 500; }
   #log {
     margin-top: 16px; max-height: 260px; overflow-y: auto;
     background: #05070f; border-radius: 8px; padding: 10px 12px;
@@ -50,7 +53,10 @@
     </select>
     <div id="anthropic-fields">
       <label for="api_key">Anthropic API key</label>
-      <input id="api_key" type="password" placeholder="sk-ant-…" autocomplete="off" />
+      <div class="key-row">
+        <input id="api_key" type="password" placeholder="sk-ant-…" autocomplete="off" />
+        <button type="button" id="toggle_key" class="ghost key-toggle" aria-label="Show API key">show</button>
+      </div>
       <label for="gateway_url">Gateway URL (optional — leave blank for api.anthropic.com)</label>
       <input id="gateway_url" placeholder="https://api.anthropic.com" />
     </div>

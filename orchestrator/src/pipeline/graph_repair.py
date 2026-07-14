@@ -287,11 +287,20 @@ def rollback_merge(conn, loser_id, *, commit=True):
                      (loser_name, snap.get("prior_alias")))
     else:
         conn.execute("DELETE FROM merge_map WHERE from_name = ?", (loser_name,))
-    conn.execute("UPDATE entities SET invalid_at=NULL, invalid_reason=NULL WHERE id=?", (loser_id,))
+    # Only bring the loser back to the active graph if it still has at least one
+    # source. Document deletion (hard-delete of entity_sources) may have removed
+    # the rows this rollback re-targeted, leaving the loser evidence-less;
+    # un-invalidating it then would create an orphan phantom node.
+    src_count = conn.execute(
+        "SELECT COUNT(*) FROM entity_sources WHERE entity_id = ?", (loser_id,)
+    ).fetchone()[0]
+    restored = src_count > 0
+    if restored:
+        conn.execute("UPDATE entities SET invalid_at=NULL, invalid_reason=NULL WHERE id=?", (loser_id,))
     _log(conn, action="rollback_merge", from_entity_id=loser_id, from_name=snap["loser"]["canonical_name"])
     if commit:
         conn.commit()
-    return {"restored": loser_id}
+    return {"restored": loser_id if restored else None, "sourceless": not restored}
 
 
 def resolve_correction(conn, issue_id, action, *, reviewer="human"):
