@@ -36,6 +36,10 @@ function showSettings(prefill) {
   $("subtitle").textContent = "Configure your LLM backend to get started.";
   hasApiKey = Boolean(prefill && prefill.has_api_key);
   $("api_key").value = "";
+  // Re-mask on (re)open so a newly typed key isn't left exposed from a prior reveal.
+  $("api_key").type = "password";
+  $("toggle_key").textContent = "show";
+  $("toggle_key").setAttribute("aria-label", "Show API key");
   $("api_key").placeholder = hasApiKey
     ? "•••• saved, leave blank to keep"
     : "sk-ant-…";
