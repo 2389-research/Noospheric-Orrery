@@ -21,6 +21,15 @@ $("backend").addEventListener("change", () => {
   show("ollama-fields", ollama);
 });
 
+// Show/hide toggle so a user can confirm the key they pasted.
+$("toggle_key").addEventListener("click", () => {
+  const field = $("api_key");
+  const reveal = field.type === "password";
+  field.type = reveal ? "text" : "password";
+  $("toggle_key").textContent = reveal ? "hide" : "show";
+  $("toggle_key").setAttribute("aria-label", reveal ? "Hide API key" : "Show API key");
+});
+
 function showSettings(prefill) {
   show("settings", true);
   show("progress", false);
