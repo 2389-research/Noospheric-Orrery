@@ -246,6 +246,7 @@ async def test_research_paper_domain_uses_section_specs(tmp_path):
         return []
 
     async def fake_chunk_by_sections(relay, text, model, chunk_size=2000, overlap=200):
+        assert overlap == 200
         return [{
             "id": "c1", "chunk_index": 0, "offset": 0, "length": len(text),
             "text": text, "section": "introduction",
@@ -266,5 +267,13 @@ async def test_research_paper_domain_uses_section_specs(tmp_path):
     assert len(calls) >= 1
     assert "introduction" in calls[0]
     assert "default" in calls[0]
+
+    # The sectioned chunks must be persisted (Finding 1 fix) with the correct
+    # section tag, not left as orphaned UUIDs referenced only by entity_sources/relationships.
+    stored_chunks = store.chunks.get_for_document(result["document_id"])
+    sectioned = [c for c in stored_chunks if c.section == "introduction"]
+    assert len(sectioned) == 1
+    assert sectioned[0].id  # persisted with a real (freshly-assigned) id
+
     set_test_store(None)
     store.close()

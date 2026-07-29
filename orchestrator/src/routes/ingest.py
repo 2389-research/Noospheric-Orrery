@@ -50,12 +50,15 @@ def _load_research_paper_specs() -> dict[str, str]:
     for path in _RESEARCH_PAPER_SPECS_DIR.glob("*.md"):
         if path.stem == "shared":
             continue
-        key = "default" if path.stem == "default" else path.stem
-        specs[key] = shared + "\n\n---\n\n" + path.read_text()
+        specs[path.stem] = shared + "\n\n---\n\n" + path.read_text()
     return specs
 
 
 RESEARCH_PAPER_SPECS = _load_research_paper_specs()
+
+# Domain path that triggers the built-in section-stratified spec directory
+# (used when no simmered spec override exists yet for research_paper or its ancestors).
+RESEARCH_PAPER_DOMAIN = "research_paper"
 
 
 def _unique_title(store, title: str) -> str:
@@ -185,14 +188,32 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
                     if chunk_id:
                         chunk_entities.setdefault(chunk_id, []).append(entity_id)
                 domain_entity_count += len(d_entities)
-            elif not domain_spec and ancestor == "research_paper" and "research_paper" not in seen_specs:
-                seen_specs.add("research_paper")
+            elif not domain_spec and ancestor == RESEARCH_PAPER_DOMAIN and RESEARCH_PAPER_DOMAIN not in seen_specs:
+                seen_specs.add(RESEARCH_PAPER_DOMAIN)
                 sectioned_chunks = await chunk_by_sections(
                     relay=relay, text=content, model=settings.extraction_model,
                     chunk_size=settings.chunk_size,
+                    overlap=200,  # matches chunk_document's default; update together if that changes
                 )
                 for c in sectioned_chunks:
                     c["id"] = str(uuid.uuid4())
+                # Persist sectioned chunks so relationships.source_chunk and
+                # entity_sources.chunk_id reference real rows (not orphaned UUIDs).
+                # chunk_index is offset past the general pass's chunks to stay unique
+                # per document across both passes.
+                sectioned_chunk_objs = [
+                    Chunk(
+                        id=c["id"],
+                        document_id=doc_id,
+                        chunk_index=len(chunks) + c["chunk_index"],
+                        text=c["text"],
+                        offset=c["offset"],
+                        length=c["length"],
+                        section=c["section"],
+                    )
+                    for c in sectioned_chunks
+                ]
+                store.chunks.create_batch(sectioned_chunk_objs)
                 d_entities = await extract_document_sectioned(
                     relay=relay, chunks=sectioned_chunks,
                     section_specs=RESEARCH_PAPER_SPECS, model=settings.extraction_model,
@@ -204,6 +225,10 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
                         document_id=doc_id,
                         chunk_id=entity.get("chunk_id"),
                         extraction_pass="domain-specific",
+                        # 0 here means "no simmered spec exists yet — built-in
+                        # section-stratified spec directory used instead" (distinct
+                        # from the general-pass's spec_version=0, which means "no
+                        # simmered general spec — built-in GENERAL_TEXT_SPEC used").
                         spec_version=0,
                     )
                     chunk_id = entity.get("chunk_id")

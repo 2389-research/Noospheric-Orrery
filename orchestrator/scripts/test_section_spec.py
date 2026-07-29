@@ -71,6 +71,9 @@ def main() -> None:
     if not args.section and not args.all_sections:
         parser.error("Pass --section <name> or --all-sections")
 
+    # When --all-sections is passed, args.section is None, and run()'s loop treats a
+    # falsy target_section as "process every section" (see the `if target_section and ...`
+    # check below) — no separate branch needed for --all-sections.
     asyncio.run(run(args.paper, args.section))
 
 
