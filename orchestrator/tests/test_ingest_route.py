@@ -221,3 +221,50 @@ def test_ingest_blank_pdf_returns_422(test_client, tmp_path):
         )
     assert response.status_code == 422
     assert "no extractable text" in response.json()["detail"]
+
+
+RESEARCH_PAPER_CLASSIFICATION = {
+    "primary_domain": "research_paper",
+    "secondary_domains": [],
+    "new_domains": [],
+    "confidence": 0.9,
+}
+
+
+@pytest.mark.asyncio
+async def test_research_paper_domain_uses_section_specs(tmp_path):
+    """When a document classifies into the research_paper domain and no simmered
+    spec exists yet, extraction should use the built-in per-section spec directory
+    rather than a single flat spec string."""
+    store = make_test_store(tmp_path)
+    settings = make_test_settings(tmp_path)
+
+    calls = []
+
+    async def fake_extract_document_sectioned(relay, chunks, section_specs, model):
+        calls.append(section_specs)
+        return []
+
+    async def fake_chunk_by_sections(relay, text, model, chunk_size=2000, overlap=200):
+        return [{
+            "id": "c1", "chunk_index": 0, "offset": 0, "length": len(text),
+            "text": text, "section": "introduction",
+        }]
+
+    with patch("src.routes.ingest.get_settings", return_value=settings), \
+         patch("src.routes.ingest.classify_document", new_callable=AsyncMock, return_value=RESEARCH_PAPER_CLASSIFICATION), \
+         patch("src.routes.ingest.extract_document", new_callable=AsyncMock, return_value=[]), \
+         patch("src.routes.ingest.extract_document_sectioned", new=fake_extract_document_sectioned), \
+         patch("src.routes.ingest.chunk_by_sections", new=fake_chunk_by_sections), \
+         patch("src.routes.ingest.Relay"):
+        from src.routes.ingest import _ingest_document
+        result = await _ingest_document(
+            store, "Paper", "## Introduction\nWe propose X.\n", None,
+        )
+
+    assert result["document_id"]
+    assert len(calls) >= 1
+    assert "introduction" in calls[0]
+    assert "default" in calls[0]
+    set_test_store(None)
+    store.close()

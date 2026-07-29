@@ -12,11 +12,11 @@ from orrery_relay import Relay
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
 from ..models import IngestResult, DirectoryIngestRequest
-from ..pipeline.chunker import chunk_document
+from ..pipeline.chunker import chunk_document, chunk_by_sections
 from ..pipeline.excerpt import build_classification_excerpt
 from ..pipeline.classifier import classify_document
 from ..pipeline.domain_normalizer import assign_document_domains
-from ..pipeline.extractor import extract_document
+from ..pipeline.extractor import extract_document, extract_document_sectioned
 from ..pipeline.normalizer import normalize_entity
 from ..pipeline.cooccurrence import compute_cooccurrence_edges
 from ..pipeline.image_prep import is_image_file
@@ -38,6 +38,24 @@ def _load_general_spec(name: str) -> str:
 
 GENERAL_TEXT_SPEC = _load_general_spec("general_text")
 GENERAL_IMAGE_SPEC = _load_general_spec("general_image")
+
+_RESEARCH_PAPER_SPECS_DIR = _SPECS_DIR / "research_paper"
+
+
+def _load_research_paper_specs() -> dict[str, str]:
+    """Compose shared.md + <section>.md for every research_paper section spec,
+    plus a "default" key from shared.md + default.md."""
+    shared = (_RESEARCH_PAPER_SPECS_DIR / "shared.md").read_text()
+    specs = {}
+    for path in _RESEARCH_PAPER_SPECS_DIR.glob("*.md"):
+        if path.stem == "shared":
+            continue
+        key = "default" if path.stem == "default" else path.stem
+        specs[key] = shared + "\n\n---\n\n" + path.read_text()
+    return specs
+
+
+RESEARCH_PAPER_SPECS = _load_research_paper_specs()
 
 
 def _unique_title(store, title: str) -> str:
@@ -162,6 +180,31 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
                         chunk_id=entity.get("chunk_id"),
                         extraction_pass="domain-specific",
                         spec_version=domain_spec.version,
+                    )
+                    chunk_id = entity.get("chunk_id")
+                    if chunk_id:
+                        chunk_entities.setdefault(chunk_id, []).append(entity_id)
+                domain_entity_count += len(d_entities)
+            elif not domain_spec and ancestor == "research_paper" and "research_paper" not in seen_specs:
+                seen_specs.add("research_paper")
+                sectioned_chunks = await chunk_by_sections(
+                    relay=relay, text=content, model=settings.extraction_model,
+                    chunk_size=settings.chunk_size,
+                )
+                for c in sectioned_chunks:
+                    c["id"] = str(uuid.uuid4())
+                d_entities = await extract_document_sectioned(
+                    relay=relay, chunks=sectioned_chunks,
+                    section_specs=RESEARCH_PAPER_SPECS, model=settings.extraction_model,
+                )
+                for entity in d_entities:
+                    entity_id = normalize_entity(store, entity["name"], entity["type"])
+                    store.entity_sources.create(
+                        entity_id=entity_id,
+                        document_id=doc_id,
+                        chunk_id=entity.get("chunk_id"),
+                        extraction_pass="domain-specific",
+                        spec_version=0,
                     )
                     chunk_id = entity.get("chunk_id")
                     if chunk_id:
