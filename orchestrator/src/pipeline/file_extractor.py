@@ -37,6 +37,59 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
     return result
 
 
+def extract_text_with_font_runs(file_bytes: bytes) -> tuple[str, list[dict]]:
+    """Like extract_text_from_pdf, but also returns text runs whose font is
+    notably larger than the page's typical body-text font size — candidate
+    section headings, since plain-text extraction alone discards this signal."""
+    from io import BytesIO
+    import pypdf
+
+    _check_magic(file_bytes, b"%PDF", "PDF")
+    reader = pypdf.PdfReader(BytesIO(file_bytes))
+
+    pages = []
+    for page in reader.pages:
+        page_runs = []
+
+        def visitor(text, cm, tm, font_dict, font_size, _runs=page_runs):
+            if text.strip():
+                _runs.append((text, font_size))
+
+        page_text = page.extract_text(visitor_text=visitor)
+        if page_text:
+            pages.append((page_text, page_runs))
+
+    result = "\n\n".join(p[0] for p in pages)
+    if not result.strip():
+        raise ValueError("PDF contains no extractable text (scanned or image-only PDF)")
+
+    large_font_runs = []
+    cursor = 0
+    for page_text, page_runs in pages:
+        sizes = sorted(size for _, size in page_runs if size)
+        median_size = sizes[len(sizes) // 2] if sizes else 0
+        search_from = 0
+        for text, font_size in page_runs:
+            stripped = text.strip()
+            if not stripped:
+                continue
+            idx = page_text.find(stripped, search_from)
+            if idx == -1:
+                idx = page_text.find(stripped)
+            if idx != -1:
+                if font_size and median_size and font_size > median_size * 1.15:
+                    large_font_runs.append({
+                        "start": cursor + idx,
+                        "end": cursor + idx + len(stripped),
+                        "text": stripped,
+                        "font_size": font_size,
+                    })
+                search_from = idx + len(stripped)
+        cursor += len(page_text) + 2  # matches the "\n\n".join separator above
+
+    return result, large_font_runs
+
+
 _DOCX_UNZIP_LIMIT = 50 * 1024 * 1024  # 50 MB uncompressed
 
 

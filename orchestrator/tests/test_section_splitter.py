@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock
-from src.pipeline.section_splitter import find_headings, KNOWN_SECTIONS, label_sections
+from src.pipeline.section_splitter import find_headings, find_font_headings, KNOWN_SECTIONS, label_sections
 
 
 def test_finds_markdown_style_headings():
@@ -68,6 +68,30 @@ async def test_label_sections_splits_on_headings_no_llm_call_needed():
     for prev, nxt in zip(spans, spans[1:]):
         assert prev["end"] == nxt["start"]
     mock_relay.complete_structured.assert_not_called()
+
+
+def test_find_font_headings_matches_flagged_runs_against_keywords():
+    font_runs = [
+        {"start": 50, "end": 65, "text": "1 Introduction", "font_size": 12.0},
+        {"start": 200, "end": 206, "text": "closed", "font_size": 10.0},  # not a section keyword
+    ]
+    headings = find_font_headings(font_runs)
+    assert headings == [{"section": "introduction", "start": 50}]
+
+
+@pytest.mark.asyncio
+async def test_label_sections_merges_font_headings_not_caught_by_regex():
+    # No blank-line-isolated heading here (regex alone finds nothing), but the
+    # PDF's font metadata flags "1 Introduction" as a large-font run mid-text.
+    text = "preamble text 1 Introduction body text continues here"
+    font_runs = [{"start": 14, "end": 28, "text": "1 Introduction", "font_size": 12.0}]
+    mock_relay = AsyncMock()
+    mock_relay.complete_structured = AsyncMock(return_value={"section": "abstract"})
+    spans = await label_sections(mock_relay, text, model="claude-haiku-4-5", font_runs=font_runs)
+    sections = [s["section"] for s in spans]
+    assert "introduction" in sections
+    assert spans[0]["start"] == 0
+    assert spans[-1]["end"] == len(text)
 
 
 @pytest.mark.asyncio
