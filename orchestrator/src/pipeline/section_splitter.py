@@ -42,3 +42,63 @@ def find_headings(text: str) -> list[dict]:
             break
     headings.sort(key=lambda h: h["start"])
     return headings
+
+
+_CLASSIFY_PROMPT = """Which section of a research paper does the following text most likely belong to?
+
+Choose exactly one: abstract, introduction, related_work, method, experiments, conclusion, other
+
+TEXT:
+{excerpt}"""
+
+_CLASSIFY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "section": {
+            "type": "string",
+            "enum": KNOWN_SECTIONS + ["other"],
+        },
+    },
+    "required": ["section"],
+}
+
+
+async def _classify_span(relay, text: str, model: str) -> str:
+    excerpt = text[:1500]
+    result = await relay.complete_structured(
+        model=model, max_tokens=64,
+        messages=[{"role": "user", "content": _CLASSIFY_PROMPT.format(excerpt=excerpt)}],
+        schema=_CLASSIFY_SCHEMA,
+        tool_name="classify_section",
+        tool_description="Classify which research paper section a text excerpt belongs to",
+    )
+    section = result.get("section", "other")
+    return section if section in KNOWN_SECTIONS else "unclassified"
+
+
+async def label_sections(relay, text: str, model: str) -> list[dict]:
+    headings = find_headings(text)
+    doc_len = len(text)
+
+    # Build raw spans between consecutive headings (and before the first / there are none)
+    boundaries = [h["start"] for h in headings] + [doc_len]
+    raw_spans = []
+    if not headings:
+        raw_spans.append({"section": None, "start": 0, "end": doc_len})
+    else:
+        if headings[0]["start"] > 0:
+            raw_spans.append({"section": None, "start": 0, "end": headings[0]["start"]})
+        for i, heading in enumerate(headings):
+            raw_spans.append({
+                "section": heading["section"],
+                "start": heading["start"],
+                "end": boundaries[i + 1],
+            })
+
+    spans = []
+    for span in raw_spans:
+        if span["section"] is None:
+            span_text = text[span["start"]:span["end"]]
+            span["section"] = await _classify_span(relay, span_text, model) if span_text.strip() else "unclassified"
+        spans.append(span)
+    return spans

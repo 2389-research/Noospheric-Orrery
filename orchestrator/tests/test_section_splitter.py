@@ -1,4 +1,6 @@
-from src.pipeline.section_splitter import find_headings, KNOWN_SECTIONS
+import pytest
+from unittest.mock import AsyncMock
+from src.pipeline.section_splitter import find_headings, KNOWN_SECTIONS, label_sections
 
 
 def test_finds_markdown_style_headings():
@@ -38,3 +40,43 @@ def test_known_sections_list_is_stable():
         "abstract", "introduction", "related_work", "method",
         "experiments", "conclusion",
     ]
+
+
+@pytest.mark.asyncio
+async def test_label_sections_covers_whole_document_no_headings():
+    text = "word " * 50
+    mock_relay = AsyncMock()
+    mock_relay.complete_structured = AsyncMock(return_value={"section": "introduction"})
+    spans = await label_sections(mock_relay, text, model="claude-haiku-4-5")
+    assert spans[0]["start"] == 0
+    assert spans[-1]["end"] == len(text)
+    assert spans[0]["section"] == "introduction"
+    mock_relay.complete_structured.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_label_sections_splits_on_headings_no_llm_call_needed():
+    text = "## Introduction\nWe propose X.\n\n## Method\nOur approach.\n"
+    mock_relay = AsyncMock()
+    mock_relay.complete_structured = AsyncMock()
+    spans = await label_sections(mock_relay, text, model="claude-haiku-4-5")
+    sections = [s["section"] for s in spans]
+    assert sections == ["introduction", "method"]
+    assert spans[0]["start"] == 0
+    assert spans[-1]["end"] == len(text)
+    # Consecutive spans are contiguous, no gaps/overlaps
+    for prev, nxt in zip(spans, spans[1:]):
+        assert prev["end"] == nxt["start"]
+    mock_relay.complete_structured.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_label_sections_llm_fallback_for_text_before_first_heading():
+    text = "Some preamble that has no heading.\n\n## Method\nOur approach.\n"
+    mock_relay = AsyncMock()
+    mock_relay.complete_structured = AsyncMock(return_value={"section": "abstract"})
+    spans = await label_sections(mock_relay, text, model="claude-haiku-4-5")
+    assert spans[0]["section"] == "abstract"
+    assert spans[0]["start"] == 0
+    assert spans[1]["section"] == "method"
+    mock_relay.complete_structured.assert_called_once()
