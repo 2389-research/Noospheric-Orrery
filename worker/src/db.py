@@ -202,6 +202,8 @@ def init_db(db_path: str) -> None:
     chunk_cols = {r[1] for r in conn.execute("PRAGMA table_info(chunks)").fetchall()}
     if "image_embedding" not in chunk_cols:
         conn.execute("ALTER TABLE chunks ADD COLUMN image_embedding BLOB")
+    if "section" not in chunk_cols:
+        conn.execute("ALTER TABLE chunks ADD COLUMN section TEXT")
     # Backfill: tag legacy image rows by file extension
     conn.execute("""
         UPDATE documents SET content_type = 'image'
