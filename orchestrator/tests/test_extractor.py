@@ -72,3 +72,22 @@ async def test_extract_document_sectioned_falls_back_to_default_for_unknown_sect
 
     call_kwargs = mock_relay.complete_structured.call_args.kwargs
     assert "DEFAULT-MARKER" in call_kwargs["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_extract_document_sectioned_skips_references_chunks_entirely():
+    mock_relay = AsyncMock()
+    mock_relay.complete_structured = AsyncMock(return_value={"entities": [{"name": "cited model", "type": "model"}]})
+    chunks = [
+        {"id": "c1", "text": "[1] Some citation. [2] Another citation.", "section": "references"},
+        {"id": "c2", "text": "We propose the hero model.", "section": "introduction"},
+    ]
+    section_specs = {"introduction": "intro spec", "default": "default spec"}
+
+    entities = await extract_document_sectioned(
+        relay=mock_relay, chunks=chunks, section_specs=section_specs, model="claude-haiku-4-5",
+    )
+
+    # Only the introduction chunk was ever sent to the LLM — references never extracted
+    mock_relay.complete_structured.assert_called_once()
+    assert all(e["chunk_id"] != "c1" for e in entities)

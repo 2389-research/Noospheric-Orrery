@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock
-from src.pipeline.section_splitter import find_headings, find_font_headings, KNOWN_SECTIONS, label_sections
+from src.pipeline.section_splitter import find_headings, find_font_headings, KNOWN_SECTIONS, SKIP_SECTIONS, label_sections
 
 
 def test_finds_markdown_style_headings():
@@ -38,8 +38,19 @@ def test_headings_are_ascending_by_start_offset():
 def test_known_sections_list_is_stable():
     assert KNOWN_SECTIONS == [
         "abstract", "introduction", "related_work", "method",
-        "experiments", "conclusion",
+        "experiments", "conclusion", "references",
     ]
+
+
+def test_finds_references_heading():
+    text = "## Conclusion\nWe conclude.\n\n## References\n[1] Some citation.\n"
+    headings = find_headings(text)
+    assert [h["section"] for h in headings] == ["conclusion", "references"]
+
+
+def test_references_is_a_skip_section():
+    assert "references" in SKIP_SECTIONS
+    assert "conclusion" not in SKIP_SECTIONS
 
 
 @pytest.mark.asyncio

@@ -17,7 +17,7 @@ from src.config import get_settings
 from src.pipeline.chunker import chunk_document
 from src.pipeline.extractor import extract_entities_from_chunk
 from src.pipeline.file_extractor import extract_text_with_font_runs
-from src.pipeline.section_splitter import label_sections
+from src.pipeline.section_splitter import label_sections, SKIP_SECTIONS
 from orrery_relay import Relay
 
 _SPECS_DIR = Path(__file__).resolve().parent.parent / "specs" / "research_paper"
@@ -46,6 +46,9 @@ async def run(paper_path: str, target_section: str | None) -> None:
 
     for span in spans:
         if target_section and span["section"] != target_section:
+            continue
+        if span["section"] in SKIP_SECTIONS:
+            print(f"=== Section: {span['section']} — skipped (never extracted) ===\n")
             continue
         span_text = text[span["start"]:span["end"]]
         spec = _load_section_spec(span["section"])

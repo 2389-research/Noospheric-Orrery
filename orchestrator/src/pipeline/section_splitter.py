@@ -3,7 +3,7 @@
 
 import re
 
-KNOWN_SECTIONS = ["abstract", "introduction", "related_work", "method", "experiments", "conclusion"]
+KNOWN_SECTIONS = ["abstract", "introduction", "related_work", "method", "experiments", "conclusion", "references"]
 
 _SECTION_KEYWORDS = {
     "abstract": ["abstract"],
@@ -12,7 +12,13 @@ _SECTION_KEYWORDS = {
     "method": ["method", "methods", "methodology", "approach"],
     "experiments": ["experiments", "experiment", "results", "evaluation"],
     "conclusion": ["conclusion", "conclusions", "discussion", "limitations"],
+    "references": ["references", "bibliography"],
 }
+
+# Sections never worth extracting entities from — citation lists are noise, not
+# paper content. Callers should skip these spans entirely rather than run
+# extraction against them (see extractor.extract_document_sectioned).
+SKIP_SECTIONS = {"references"}
 
 # Matches a whole line that is *only* a heading: optional markdown hashes, optional
 # numbering (arabic "1." or roman "IV."), then the keyword phrase, nothing else after it.
@@ -94,7 +100,7 @@ def find_font_headings(font_runs: list[dict]) -> list[dict]:
 
 _CLASSIFY_PROMPT = """Which section of a research paper does the following text most likely belong to?
 
-Choose exactly one: abstract, introduction, related_work, method, experiments, conclusion, other
+Choose exactly one: abstract, introduction, related_work, method, experiments, conclusion, references, other
 
 TEXT:
 {excerpt}"""
