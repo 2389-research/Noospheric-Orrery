@@ -96,16 +96,22 @@ model/task/metric density.
 ### 5. Testing script — `orchestrator/scripts/test_section_spec.py`
 
 Standalone CLI script, no server/DB dependency, calls `Relay` directly against
-`settings.extraction_model` (the actual weak model in use):
+`settings.extraction_model` (the actual weak model in use). Test fixtures come from the raw PDFs
+in `pi0/papers/` (andersonVLN2018.pdf, kimOpenVLA2024.pdf, linVILA2024.pdf, wangCLASH2026.pdf,
+etc.) — real, un-pre-processed papers, not the already-plain-text `pi0/*.txt` files — run through
+the repo's existing `extract_text_from_pdf` (`orchestrator/src/pipeline/file_extractor.py`) so the
+test path matches what a real PDF upload actually produces (page-break artifacts, column-merge
+noise, etc. included):
 
 ```bash
-python -m scripts.test_section_spec --paper pi0/p0_5.txt --section introduction
-python -m scripts.test_section_spec --paper pi0/p0_5.txt --all-sections
+python -m scripts.test_section_spec --paper pi0/papers/kimOpenVLA2024.pdf --section introduction
+python -m scripts.test_section_spec --paper pi0/papers/wangCLASH2026.pdf --all-sections
 ```
 
 Behavior:
-1. Read the paper file.
-2. Run `section_splitter` to get section spans.
+1. Read the PDF file's bytes and run them through `extract_text_from_pdf` to get raw text (same
+   function the real ingest path uses — no separately-maintained .txt fixtures to go stale).
+2. Run `section_splitter` on that extracted text to get section spans.
 3. For the requested section (or all sections), extract just that span's text, chunk it with
    `chunk_document`, and run `extract_entities_from_chunk` against `shared.md + <section>.md`.
 4. Print a raw entity dump grouped by chunk index (entity name + type), plus the section
@@ -129,5 +135,6 @@ into simmer is future work, not this design).
   coverage has no gaps/overlaps, fallback classification triggers when no headings exist.
 - Existing `chunker.py` tests unaffected — its core function signature/behavior doesn't change,
   only how it's invoked (per-span vs whole-document).
-- `test_section_spec.py` is validated manually against the `pi0/` corpus (p0.txt, p0_5.txt,
-  p0_6.txt, p0_7.txt) as part of building it — that's the whole point of the tool.
+- `test_section_spec.py` is validated manually against the PDFs in `pi0/papers/` (real,
+  unprocessed papers run through `extract_text_from_pdf`) as part of building it — that's the
+  whole point of the tool.
