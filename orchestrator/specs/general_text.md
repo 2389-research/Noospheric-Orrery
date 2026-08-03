@@ -69,6 +69,18 @@ An entity qualifies when **at least one** condition is true:
 
 5. **Common English words lacking domain specificity.** "Painting" alone is not an entity. "Oil painting" qualifies only if it meets condition 2 or 3. When in doubt and a condition is met, extract as `topic` or `concept`.
 
+6. **Names that are part of a citation, wherever they appear.** Chunking can split a References
+   section from its heading, so don't rely on seeing "References"/"Bibliography" — test each name
+   directly instead: if a name (or name list) is followed, within the same sentence or the next
+   ~15 words, by any of: a bracketed/numbered citation marker (`[23]`, `(2023)`), a work title, or a
+   publication-venue marker ("arXiv", "In Proceedings of...", "Conference on...", a journal name,
+   "et al."), it is a citation — skip every name in that citation, not just the first. This applies
+   equally to a single citation encountered mid-chunk and to a dense list of them (a references
+   section). Test: "Fu, Zhao, and Finn. Mobile ALOHA. CoRL, 2024" → citation, skip all three names,
+   even in a chunk with no visible "References" heading.
+
+7. **Non-lead names in a multi-author byline.** When a document opens with a list of authors (e.g. under the title, before an abstract or affiliation line) and that list has 3 or more names, extract only the **first-listed** author as `person`. Do not extract the remaining co-authors — a long byline is not a set of individually graph-worthy entities. (A byline with 1-2 names is short enough that all named authors qualify normally.)
+
 ---
 
 ## Entity Boundary Guidance

@@ -1,6 +1,7 @@
 """Stage 1: Parallel retrieval — FAISS semantic + exact match."""
 
 import sqlite3
+import threading
 import numpy as np
 from .models import ScoredEntity, ScoredChunk
 from .config import SearchConfig
@@ -11,6 +12,14 @@ _entity_index = None
 _chunk_index = None
 _entity_ids: list[str] = []
 _chunk_ids: list[str] = []
+
+# torch (sentence-transformers) and faiss each bring their own native
+# threading/OpenMP runtime. Invoking them concurrently from multiple requests
+# in the same process (e.g. a search request racing an ingest's inline
+# embedding step) can crash the process natively (SIGBUS/SIGILL) — the
+# concurrent-hit failure mode already noted in docker-compose.yml. Serialize
+# all model/FAISS access process-wide so two calls never execute at once.
+_native_lock = threading.Lock()
 
 
 def _get_model():
@@ -23,15 +32,23 @@ def _get_model():
 
 def embed_text(text: str | list[str]) -> np.ndarray:
     """Embed text(s) with all-MiniLM-L6-v2."""
-    model = _get_model()
-    if isinstance(text, str):
-        text = [text]
-    return model.encode(text, normalize_embeddings=True).astype(np.float32)
+    with _native_lock:
+        model = _get_model()
+        if isinstance(text, str):
+            text = [text]
+        return model.encode(text, normalize_embeddings=True).astype(np.float32)
 
 
 def build_indexes(conn: sqlite3.Connection) -> dict:
     """Build FAISS indexes from stored embeddings, or embed if missing. SQLite only."""
     import faiss
+    global _entity_index, _chunk_index, _entity_ids, _chunk_ids
+
+    with _native_lock:
+        return _build_indexes_locked(conn, faiss)
+
+
+def _build_indexes_locked(conn: sqlite3.Connection, faiss) -> dict:
     global _entity_index, _chunk_index, _entity_ids, _chunk_ids
 
     model = _get_model()
@@ -101,30 +118,32 @@ def build_indexes(conn: sqlite3.Connection) -> dict:
 
 def embed_new_entities(conn: sqlite3.Connection):
     """Embed entities that don't have embeddings yet."""
-    model = _get_model()
-    rows = conn.execute("SELECT id, canonical_name FROM entities WHERE embedding IS NULL").fetchall()
-    if not rows:
-        return 0
-    names = [r[1] for r in rows]
-    embeds = model.encode(names, normalize_embeddings=True).astype(np.float32)
-    for i, row in enumerate(rows):
-        conn.execute("UPDATE entities SET embedding = ? WHERE id = ?", (embeds[i].tobytes(), row[0]))
-    conn.commit()
-    return len(rows)
+    with _native_lock:
+        model = _get_model()
+        rows = conn.execute("SELECT id, canonical_name FROM entities WHERE embedding IS NULL").fetchall()
+        if not rows:
+            return 0
+        names = [r[1] for r in rows]
+        embeds = model.encode(names, normalize_embeddings=True).astype(np.float32)
+        for i, row in enumerate(rows):
+            conn.execute("UPDATE entities SET embedding = ? WHERE id = ?", (embeds[i].tobytes(), row[0]))
+        conn.commit()
+        return len(rows)
 
 
 def embed_new_chunks(conn: sqlite3.Connection):
     """Embed chunks that don't have embeddings yet."""
-    model = _get_model()
-    rows = conn.execute("SELECT id, text FROM chunks WHERE embedding IS NULL").fetchall()
-    if not rows:
-        return 0
-    texts = [r[1][:512] for r in rows]
-    embeds = model.encode(texts, normalize_embeddings=True, batch_size=64).astype(np.float32)
-    for i, row in enumerate(rows):
-        conn.execute("UPDATE chunks SET embedding = ? WHERE id = ?", (embeds[i].tobytes(), row[0]))
-    conn.commit()
-    return len(rows)
+    with _native_lock:
+        model = _get_model()
+        rows = conn.execute("SELECT id, text FROM chunks WHERE embedding IS NULL").fetchall()
+        if not rows:
+            return 0
+        texts = [r[1][:512] for r in rows]
+        embeds = model.encode(texts, normalize_embeddings=True, batch_size=64).astype(np.float32)
+        for i, row in enumerate(rows):
+            conn.execute("UPDATE chunks SET embedding = ? WHERE id = ?", (embeds[i].tobytes(), row[0]))
+        conn.commit()
+        return len(rows)
 
 
 def search_entities_semantic(query_embedding: np.ndarray, top_k: int = 20) -> list[ScoredEntity]:
@@ -132,7 +151,8 @@ def search_entities_semantic(query_embedding: np.ndarray, top_k: int = 20) -> li
     if _entity_index is None or _entity_index.ntotal == 0:
         return []
     k = min(top_k, _entity_index.ntotal)
-    scores, indices = _entity_index.search(query_embedding.reshape(1, -1), k)
+    with _native_lock:
+        scores, indices = _entity_index.search(query_embedding.reshape(1, -1), k)
     results = []
     for rank, (score, idx) in enumerate(zip(scores[0], indices[0])):
         if idx < 0 or idx >= len(_entity_ids):
@@ -149,7 +169,8 @@ def search_chunks_semantic(query_embedding: np.ndarray, top_k: int = 20) -> list
     if _chunk_index is None or _chunk_index.ntotal == 0:
         return []
     k = min(top_k, _chunk_index.ntotal)
-    scores, indices = _chunk_index.search(query_embedding.reshape(1, -1), k)
+    with _native_lock:
+        scores, indices = _chunk_index.search(query_embedding.reshape(1, -1), k)
     results = []
     for rank, (score, idx) in enumerate(zip(scores[0], indices[0])):
         if idx < 0 or idx >= len(_chunk_ids):

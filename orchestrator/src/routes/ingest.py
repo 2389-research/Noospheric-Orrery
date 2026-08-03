@@ -192,14 +192,14 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
                 store.jobs.create(job_id, "simmer_domain", domain_path, {"domain": domain_path})
                 jobs_queued.append(job_id)
 
-    # Rebuild search index inline after extraction
+    # Queue search-index embedding — runs in the worker process, not inline here.
+    # Running sentence-transformers/FAISS calls inline raced the orchestrator's own
+    # concurrent requests (native SIGBUS crashes); the worker has its own process/
+    # address space so it can't collide with them.
     if entity_count > 0:
-        try:
-            from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
-            embed_new_entities(store.conn)
-            embed_new_chunks(store.conn)
-        except Exception as e:
-            print(f"Search index update after ingest: {e}")
+        existing_job = store.jobs.get_existing("embed_index", "default", ["queued", "running"])
+        if not existing_job:
+            store.jobs.create(str(uuid.uuid4()), "embed_index", "default")
 
     return {
         "document_id": doc_id,
@@ -300,13 +300,12 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
     entity_count = len(entities)
     store.documents.update_status(doc_id, "extracted")
 
-    # Rebuild search index — text (sentence-transformers) for compatibility
-    try:
-        from ..pipeline.search.retrieval import embed_new_entities, embed_new_chunks
-        embed_new_entities(store.conn)
-        embed_new_chunks(store.conn)
-    except Exception as e:
-        print(f"Search index update after image ingest: {e}")
+    # Queue search-index embedding — see the text-ingest path above for why this
+    # runs in the worker process instead of inline (avoids racing the
+    # orchestrator's own concurrent requests and the SIGBUS crashes that caused).
+    existing_job = store.jobs.get_existing("embed_index", "default", ["queued", "running"])
+    if not existing_job:
+        store.jobs.create(str(uuid.uuid4()), "embed_index", "default")
 
     # SigLIP embedding — populates chunks.image_embedding for cross-modal search.
     # Prefers pixel embedding; falls back to description text in the same SigLIP latent space.

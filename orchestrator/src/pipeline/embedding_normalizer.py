@@ -30,9 +30,12 @@ def embed_entities(names: list[str]) -> np.ndarray:
         pass
 
     try:
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-        return model.encode(names, normalize_embeddings=True)
+        # Shared model + lock in pipeline.search.retrieval — instantiating a
+        # separate SentenceTransformer here let this run concurrently with
+        # other embedding calls (e.g. an in-flight ingest), and torch/FAISS's
+        # native runtimes colliding across threads crashed the process.
+        from .search.retrieval import embed_text
+        return embed_text(names)
     except ImportError:
         return None
 

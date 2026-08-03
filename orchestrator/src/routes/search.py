@@ -90,9 +90,8 @@ def _search_images(conn, query: str, top_k: int = 10) -> list[dict]:
 
     # Stage 2: sentence-transformers on description text
     try:
-        from ..pipeline.search.retrieval import _get_model
-        model = _get_model()
-        query_emb = model.encode([query], normalize_embeddings=True)[0]
+        from ..pipeline.search.retrieval import embed_text
+        query_emb = embed_text(query)[0]
 
         rows = conn.execute("""
             SELECT c.id, c.text, c.embedding, d.id as doc_id, d.title, d.source_path

@@ -39,6 +39,9 @@ async def handle_job(job: dict, db_path: str) -> None:
     elif job["type"] == "judge_corrections":
         from .jobs.graph_repair import run_judge_corrections
         await run_judge_corrections(job, db_path)
+    elif job["type"] == "embed_index":
+        from .jobs.embed_index import run_embed_index
+        await run_embed_index(job, db_path)
     else:
         raise ValueError(f"Unknown job type: {job['type']}")
 

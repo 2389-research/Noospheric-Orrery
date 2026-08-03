@@ -253,14 +253,16 @@ def _layout_domains_umap(domains: list[dict], conn) -> dict[str, dict]:
     Each domain is embedded as: domain_path + top doc titles + top entity names.
     UMAP reduces to 2D. Domains that share content cluster together.
     """
-    from sentence_transformers import SentenceTransformer
     import umap
+    # Shared model + lock in pipeline.search.retrieval — a separate
+    # SentenceTransformer instance here could run concurrently with other
+    # embedding calls (e.g. an in-flight ingest) and crash the process when
+    # torch/FAISS's native runtimes collided across threads.
+    from ..pipeline.search.retrieval import embed_text
 
     if len(domains) < 3:
         # UMAP needs at least 3 points; fall back to circular
         return _layout_domains(domains)
-
-    model = SentenceTransformer("all-MiniLM-L6-v2")
 
     # Build embedding input for each domain
     texts = []
@@ -292,7 +294,7 @@ def _layout_domains_umap(domains: list[dict], conn) -> dict[str, dict]:
         texts.append(text)
 
     # Embed
-    embeddings = model.encode(texts, normalize_embeddings=True)
+    embeddings = embed_text(texts)
 
     # UMAP to 2D
     n_neighbors = min(15, len(domains) - 1)

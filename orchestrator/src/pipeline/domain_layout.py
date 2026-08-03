@@ -33,14 +33,18 @@ def _get_anchor_domains() -> list[str]:
 
 
 def _embed_texts(texts: list[str]) -> np.ndarray | None:
-    """Embed texts using sentence-transformers.
+    """Embed texts using the shared sentence-transformers model.
 
-    Returns None if sentence-transformers is not available.
+    Routes through pipeline.search.retrieval so every embedding call in the
+    process shares one model instance and one native-call lock — instantiating
+    separate SentenceTransformer objects per module let concurrent requests
+    hit torch/FAISS's native runtimes at the same time, which crashed the
+    process (SIGBUS) and corrupted the SQLite file. Returns None if
+    sentence-transformers is not available.
     """
     try:
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-        return model.encode(texts, normalize_embeddings=True)
+        from .search.retrieval import embed_text
+        return embed_text(texts)
     except ImportError:
         return None
 
