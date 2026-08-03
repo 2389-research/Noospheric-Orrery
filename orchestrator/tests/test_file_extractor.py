@@ -5,6 +5,7 @@ import pytest
 from src.pipeline.file_extractor import (
     extract_text,
     extract_text_from_notebook,
+    _sanitize_surrogates,
     ALL_SUPPORTED_EXTENSIONS,
     TEXT_EXTENSIONS,
     IMAGE_EXTENSIONS,
@@ -165,6 +166,22 @@ def test_extract_text_pdf_corrupt_raises():
     pytest.importorskip("pypdf")
     with pytest.raises(Exception):
         extract_text("corrupt.pdf", b"%PDF-1.4 \x00garbage\xff\xfe")
+
+
+# --- surrogate sanitization: some PDFs' font encodings decode to lone UTF-16
+# surrogate codepoints, which crash UTF-8 encoding downstream (e.g. the
+# Anthropic SDK's JSON request body) unless stripped first ---
+
+def test_sanitize_surrogates_replaces_lone_surrogate():
+    bad = "hello " + chr(0xD835) + " world"
+    fixed = _sanitize_surrogates(bad)
+    fixed.encode("utf-8")  # must not raise
+    assert len(fixed) == len(bad)  # offsets computed against this text stay valid
+
+
+def test_sanitize_surrogates_leaves_normal_text_unchanged():
+    normal = "Regular ASCII and unicode: café, π0.5"
+    assert _sanitize_surrogates(normal) == normal
 
 def test_extract_text_docx_smoke():
     docx = pytest.importorskip("docx")

@@ -11,12 +11,12 @@ from orrery_relay import Relay
 
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
-from ..models import IngestResult, DirectoryIngestRequest
-from ..pipeline.chunker import chunk_document
+from ..models import IngestResult, DirectoryIngestRequest, RepoIngestRequest
+from ..pipeline.chunker import chunk_document, chunk_by_sections
 from ..pipeline.excerpt import build_classification_excerpt
 from ..pipeline.classifier import classify_document
 from ..pipeline.domain_normalizer import assign_document_domains
-from ..pipeline.extractor import extract_document
+from ..pipeline.extractor import extract_document, extract_document_sectioned
 from ..pipeline.normalizer import normalize_entity
 from ..pipeline.cooccurrence import compute_cooccurrence_edges
 from ..pipeline.image_prep import is_image_file
@@ -38,6 +38,28 @@ def _load_general_spec(name: str) -> str:
 
 GENERAL_TEXT_SPEC = _load_general_spec("general_text")
 GENERAL_IMAGE_SPEC = _load_general_spec("general_image")
+GENERAL_CODE_SPEC = _load_general_spec("general_code")
+
+_RESEARCH_PAPER_SPECS_DIR = _SPECS_DIR / "research_paper"
+
+
+def _load_research_paper_specs() -> dict[str, str]:
+    """Compose shared.md + <section>.md for every research_paper section spec,
+    plus a "default" key from shared.md + default.md."""
+    shared = (_RESEARCH_PAPER_SPECS_DIR / "shared.md").read_text()
+    specs = {}
+    for path in _RESEARCH_PAPER_SPECS_DIR.glob("*.md"):
+        if path.stem == "shared":
+            continue
+        specs[path.stem] = shared + "\n\n---\n\n" + path.read_text()
+    return specs
+
+
+RESEARCH_PAPER_SPECS = _load_research_paper_specs()
+
+# Domain path that triggers the built-in section-stratified spec directory
+# (used when no simmered spec override exists yet for research_paper or its ancestors).
+RESEARCH_PAPER_DOMAIN = "research_paper"
 
 
 def _unique_title(store, title: str) -> str:
@@ -162,6 +184,53 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
                         chunk_id=entity.get("chunk_id"),
                         extraction_pass="domain-specific",
                         spec_version=domain_spec.version,
+                    )
+                    chunk_id = entity.get("chunk_id")
+                    if chunk_id:
+                        chunk_entities.setdefault(chunk_id, []).append(entity_id)
+                domain_entity_count += len(d_entities)
+            elif not domain_spec and ancestor == RESEARCH_PAPER_DOMAIN and RESEARCH_PAPER_DOMAIN not in seen_specs:
+                seen_specs.add(RESEARCH_PAPER_DOMAIN)
+                sectioned_chunks = await chunk_by_sections(
+                    relay=relay, text=content, model=settings.extraction_model,
+                    chunk_size=settings.chunk_size,
+                    overlap=200,  # matches chunk_document's default; update together if that changes
+                )
+                for c in sectioned_chunks:
+                    c["id"] = str(uuid.uuid4())
+                # Persist sectioned chunks so relationships.source_chunk and
+                # entity_sources.chunk_id reference real rows (not orphaned UUIDs).
+                # chunk_index is offset past the general pass's chunks to stay unique
+                # per document across both passes.
+                sectioned_chunk_objs = [
+                    Chunk(
+                        id=c["id"],
+                        document_id=doc_id,
+                        chunk_index=len(chunks) + c["chunk_index"],
+                        text=c["text"],
+                        offset=c["offset"],
+                        length=c["length"],
+                        section=c["section"],
+                    )
+                    for c in sectioned_chunks
+                ]
+                store.chunks.create_batch(sectioned_chunk_objs)
+                d_entities = await extract_document_sectioned(
+                    relay=relay, chunks=sectioned_chunks,
+                    section_specs=RESEARCH_PAPER_SPECS, model=settings.extraction_model,
+                )
+                for entity in d_entities:
+                    entity_id = normalize_entity(store, entity["name"], entity["type"])
+                    store.entity_sources.create(
+                        entity_id=entity_id,
+                        document_id=doc_id,
+                        chunk_id=entity.get("chunk_id"),
+                        extraction_pass="domain-specific",
+                        # 0 here means "no simmered spec exists yet — built-in
+                        # section-stratified spec directory used instead" (distinct
+                        # from the general-pass's spec_version=0, which means "no
+                        # simmered general spec — built-in GENERAL_TEXT_SPEC used").
+                        spec_version=0,
                     )
                     chunk_id = entity.get("chunk_id")
                     if chunk_id:
@@ -408,3 +477,47 @@ async def ingest_directory(request: DirectoryIngestRequest, auth: AuthStore = De
         store.close()
 
     return {"documents": results, "total": len(results)}
+
+
+@router.post("/ingest/repo", status_code=status.HTTP_202_ACCEPTED)
+async def ingest_repo(request: RepoIngestRequest, auth: AuthStore = Depends(get_auth_store)):
+    dir_path = Path(request.path)
+    if not dir_path.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {request.path}")
+
+    store = auth.store
+    try:
+        # 1. Seed the general_code spec — reuse the existing general spec row if
+        # one exists, otherwise seed it from the built-in general_code.md.
+        spec = store.specs.get_general()
+        if spec:
+            spec_id = spec.id
+        else:
+            spec_id = str(uuid.uuid4())
+            store.specs.create(spec_id, None, 1, GENERAL_CODE_SPEC)
+
+        # 2. Create the repo row directly — there is no RepoRepository abstraction
+        # yet, so this uses store.conn (the same raw-SQL escape hatch used
+        # elsewhere in this file, e.g. the SigLIP embedding update above).
+        repo_id = str(uuid.uuid4())
+        store.conn.execute(
+            "INSERT INTO repos (id, name, path, root_path) VALUES (?, ?, ?, ?)",
+            (repo_id, request.name, request.name, request.path),
+        )
+        store.conn.commit()
+
+        # 3. Enqueue the Phase-1 (summarize + classify) worker job. Classification
+        # is deferred to the worker so it runs on the grounded repo-level summary
+        # (read the code, then decide) rather than a README excerpt — see
+        # worker/src/jobs/ingest_repo.py.
+        job_id = str(uuid.uuid4())
+        store.jobs.create(job_id, "ingest_repo", repo_id, {
+            "root_path": request.path,
+            "repo_id": repo_id,
+            "repo_name": request.name,
+            "spec_id": spec_id,
+        })
+    finally:
+        store.close()
+
+    return {"job_id": job_id, "repo_id": repo_id}

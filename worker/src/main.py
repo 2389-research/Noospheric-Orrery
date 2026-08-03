@@ -30,6 +30,9 @@ async def handle_job(job: dict, db_path: str) -> None:
     elif job["type"] == "simmer_domain_image":
         from .jobs.simmer_domain_image import run_simmer_domain_image
         await run_simmer_domain_image(job, db_path)
+    elif job["type"] == "ingest_repo":
+        from .jobs.ingest_repo import run_ingest_repo
+        await run_ingest_repo(job, db_path)
     elif job["type"] == "extract_batch":
         from .jobs.extract_batch import run_extract_batch
         await run_extract_batch(job, db_path)

@@ -2,6 +2,7 @@
 # ABOUTME: Uses tool use for guaranteed valid JSON. Takes a Relay instance.
 
 from orrery_relay import Relay
+from .section_splitter import SKIP_SECTIONS
 
 EXTRACTION_PROMPT = """You are an entity extraction system. Follow the extraction spec below exactly.
 
@@ -47,6 +48,25 @@ async def extract_document(relay: Relay, chunks: list[dict], spec: str, model: s
     all_entities = []
     seen = set()
     for chunk in chunks:
+        entities = await extract_entities_from_chunk(relay=relay, chunk_text=chunk["text"], spec=spec, model=model)
+        for entity in entities:
+            key = (entity["name"].lower().strip(), entity["type"])
+            if key not in seen:
+                seen.add(key)
+                entity["chunk_id"] = chunk.get("id")
+                all_entities.append(entity)
+    return all_entities
+
+
+async def extract_document_sectioned(
+    relay: Relay, chunks: list[dict], section_specs: dict[str, str], model: str,
+) -> list[dict]:
+    all_entities = []
+    seen = set()
+    for chunk in chunks:
+        if chunk.get("section") in SKIP_SECTIONS:
+            continue
+        spec = section_specs.get(chunk.get("section"), section_specs["default"])
         entities = await extract_entities_from_chunk(relay=relay, chunk_text=chunk["text"], spec=spec, model=model)
         for entity in entities:
             key = (entity["name"].lower().strip(), entity["type"])

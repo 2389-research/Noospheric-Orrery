@@ -79,6 +79,39 @@ def test_chunk_image_embedding_column(tmp_path):
     conn.close()
 
 
+def test_chunks_table_has_section_column(tmp_path):
+    from src.db import init_db
+    import sqlite3
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+    assert "section" in cols
+    conn.close()
+
+
+def test_chunk_repository_round_trips_section(tmp_path):
+    from src.db import init_db, get_connection
+    from src.repositories.sqlite_store import SQLiteChunkRepository, SQLiteDocumentRepository
+    from src.repositories.interfaces import Chunk
+    import uuid
+
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    conn = get_connection(db_path)
+    doc_repo = SQLiteDocumentRepository(conn)
+    doc_id = str(uuid.uuid4())
+    doc_repo.create(doc_id, "Test Doc", "some content", "hash123", None)
+
+    chunk_repo = SQLiteChunkRepository(conn)
+    chunk_id = str(uuid.uuid4())
+    chunk_repo.create_batch([Chunk(id=chunk_id, document_id=doc_id, chunk_index=0,
+                                    text="intro text", offset=0, length=10, section="introduction")])
+
+    chunks = chunk_repo.get_for_document(doc_id)
+    assert chunks[0].section == "introduction"
+
+
 def test_spec_media_type_column(tmp_path):
     """Specs table has media_type for separating text vs image spec lineage."""
     db_path = str(tmp_path / "test.db")

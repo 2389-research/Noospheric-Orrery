@@ -36,6 +36,7 @@ class Chunk:
     offset: int = 0
     length: int = 0
     embedding: bytes | None = None
+    section: str | None = None
 
 
 @dataclass

@@ -17,6 +17,7 @@ services:
       - "8100:8000"
     volumes:
       - ./data:/data
+      - /home/yi/Projects:/home/yi/Projects:ro
     env_file: .env
     environment:
       - DB_PATH=/data/orrery.db
@@ -37,6 +38,7 @@ services:
       dockerfile: worker/Dockerfile
     volumes:
       - ./data:/data
+      - /home/yi/Projects:/home/yi/Projects:ro
     env_file: .env
     environment:
       - DB_PATH=/data/orrery.db

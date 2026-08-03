@@ -185,8 +185,8 @@ class SQLiteChunkRepository(ChunkRepository):
     def create_batch(self, chunks):
         for c in chunks:
             self._conn.execute(
-                "INSERT INTO chunks (id, document_id, chunk_index, offset, length, text) VALUES (?, ?, ?, ?, ?, ?)",
-                (c.id, c.document_id, c.chunk_index, c.offset, c.length, c.text),
+                "INSERT INTO chunks (id, document_id, chunk_index, offset, length, text, section) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (c.id, c.document_id, c.chunk_index, c.offset, c.length, c.text, c.section),
             )
         self._conn.commit()
 
@@ -196,7 +196,7 @@ class SQLiteChunkRepository(ChunkRepository):
         ).fetchall()
         return [Chunk(id=r["id"], document_id=r["document_id"], chunk_index=r["chunk_index"],
                        text=r["text"], offset=r["offset"], length=r["length"],
-                       embedding=r["embedding"]) for r in rows]
+                       embedding=r["embedding"], section=r["section"]) for r in rows]
 
     def get_all_with_embeddings(self):
         rows = self._conn.execute("SELECT id, document_id, chunk_index, text, embedding FROM chunks").fetchall()
