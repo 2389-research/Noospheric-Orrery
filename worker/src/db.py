@@ -50,6 +50,33 @@ CREATE TABLE IF NOT EXISTS document_domains (
     PRIMARY KEY (document_id, domain_path)
 );
 
+CREATE TABLE IF NOT EXISTS repos (
+    id TEXT PRIMARY KEY,
+    name TEXT,
+    path TEXT UNIQUE,
+    root_path TEXT,
+    parent_path TEXT,
+    document_count INTEGER DEFAULT 0,
+    remote_url TEXT,
+    commit_sha TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS document_repos (
+    document_id TEXT REFERENCES documents(id),
+    repo_id TEXT REFERENCES repos(id),
+    level TEXT,
+    parent_path TEXT,
+    PRIMARY KEY (document_id, repo_id)
+);
+CREATE INDEX IF NOT EXISTS idx_document_repos_repo ON document_repos(repo_id);
+CREATE TABLE IF NOT EXISTS repo_edges (
+    from_repo TEXT REFERENCES repos(id),
+    to_repo TEXT REFERENCES repos(id),
+    type TEXT,
+    weight REAL DEFAULT 1.0,
+    PRIMARY KEY (from_repo, to_repo, type)
+);
+
 CREATE TABLE IF NOT EXISTS entities (
     id TEXT PRIMARY KEY,
     canonical_name TEXT,

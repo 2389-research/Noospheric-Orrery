@@ -11,7 +11,7 @@ from orrery_relay import Relay
 
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
-from ..models import IngestResult, DirectoryIngestRequest
+from ..models import IngestResult, DirectoryIngestRequest, RepoIngestRequest
 from ..pipeline.chunker import chunk_document, chunk_by_sections
 from ..pipeline.excerpt import build_classification_excerpt
 from ..pipeline.classifier import classify_document
@@ -38,6 +38,7 @@ def _load_general_spec(name: str) -> str:
 
 GENERAL_TEXT_SPEC = _load_general_spec("general_text")
 GENERAL_IMAGE_SPEC = _load_general_spec("general_image")
+GENERAL_CODE_SPEC = _load_general_spec("general_code")
 
 _RESEARCH_PAPER_SPECS_DIR = _SPECS_DIR / "research_paper"
 
@@ -477,3 +478,47 @@ async def ingest_directory(request: DirectoryIngestRequest, auth: AuthStore = De
         store.close()
 
     return {"documents": results, "total": len(results)}
+
+
+@router.post("/ingest/repo", status_code=status.HTTP_202_ACCEPTED)
+async def ingest_repo(request: RepoIngestRequest, auth: AuthStore = Depends(get_auth_store)):
+    dir_path = Path(request.path)
+    if not dir_path.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {request.path}")
+
+    store = auth.store
+    try:
+        # 1. Seed the general_code spec — reuse the existing general spec row if
+        # one exists, otherwise seed it from the built-in general_code.md.
+        spec = store.specs.get_general()
+        if spec:
+            spec_id = spec.id
+        else:
+            spec_id = str(uuid.uuid4())
+            store.specs.create(spec_id, None, 1, GENERAL_CODE_SPEC)
+
+        # 2. Create the repo row directly — there is no RepoRepository abstraction
+        # yet, so this uses store.conn (the same raw-SQL escape hatch used
+        # elsewhere in this file, e.g. the SigLIP embedding update above).
+        repo_id = str(uuid.uuid4())
+        store.conn.execute(
+            "INSERT INTO repos (id, name, path, root_path) VALUES (?, ?, ?, ?)",
+            (repo_id, request.name, request.name, request.path),
+        )
+        store.conn.commit()
+
+        # 3. Enqueue the Phase-1 (summarize + classify) worker job. Classification
+        # is deferred to the worker so it runs on the grounded repo-level summary
+        # (read the code, then decide) rather than a README excerpt — see
+        # worker/src/jobs/ingest_repo.py.
+        job_id = str(uuid.uuid4())
+        store.jobs.create(job_id, "ingest_repo", repo_id, {
+            "root_path": request.path,
+            "repo_id": repo_id,
+            "repo_name": request.name,
+            "spec_id": spec_id,
+        })
+    finally:
+        store.close()
+
+    return {"job_id": job_id, "repo_id": repo_id}

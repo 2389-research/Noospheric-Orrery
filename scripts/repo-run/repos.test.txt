@@ -1,0 +1,6 @@
+# Smoke-test config: one small local dir to validate the harness end-to-end
+# (HTTP ingest path + job polling + log capture) cheaply before the full run.
+# orrery-codesum is a subdir of THIS repo (not its own git repo) — prepare.sh
+# plain-copies it into ./data/repos/orrery-codesum.
+
+orrery-codesum  packages/orrery-codesum

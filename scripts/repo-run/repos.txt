@@ -1,0 +1,17 @@
+# Repos to ingest into the Noospheric Orrery — PORTABLE TEMPLATE (committed).
+#
+# Do NOT put machine-specific absolute paths here. Instead copy this to
+#   scripts/repo-run/repos.local.txt   (gitignored)
+# and set your real paths there. prepare.sh and ingest.py prefer repos.local.txt
+# when it exists, and fall back to this template otherwise.
+#
+# Format: <name>  <local-git-path>   (a plain dir works too; # and blank lines ignored)
+# <name> must be a single safe path segment ([A-Za-z0-9._-]) — it's used in the
+# container ingest path and in destructive rm -rf paths.
+#
+# Example (edit for your machine, use absolute paths):
+#   mux-rs        /abs/path/to/mux-rs
+#   dippin-lang   /abs/path/to/dippin-lang
+#   tracker       /abs/path/to/tracker
+#   barnstormer   /abs/path/to/barnstormer
+#   pipelines     /abs/path/to/pipelines

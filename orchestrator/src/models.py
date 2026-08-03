@@ -69,3 +69,7 @@ class IngestResult(BaseModel):
 
 class DirectoryIngestRequest(BaseModel):
     path: str
+
+class RepoIngestRequest(BaseModel):
+    path: str
+    name: str
