@@ -46,6 +46,10 @@ fi
 if ! grep -Eq 'APPLE_SIGNING_IDENTITY=.*GITHUB_ENV' <<<"$import_block"; then
   record_failure "certificate import does not export its resolved signing identity via GITHUB_ENV"
 fi
+if ! grep -Fq "security list-keychains -d user > \"\$original_keychains_temp\"" <<<"$import_block" \
+  || ! grep -Fq "mv \"\$original_keychains_temp\" \"\$original_keychains_path\"" <<<"$import_block"; then
+  record_failure "certificate import does not publish the original keychain list atomically"
+fi
 umask_line="$(grep -n -m1 -E '^[[:space:]]+umask[[:space:]]+077' <<<"$import_block" | cut -d: -f1 || true)"
 certificate_path_line="$(grep -n -m1 -F "certificate_path=\"\$RUNNER_TEMP/certificate.p12\"" <<<"$import_block" | cut -d: -f1 || true)"
 certificate_write_line="$(grep -n -m1 -F "base64 --decode > \"\$certificate_path\"" <<<"$import_block" | cut -d: -f1 || true)"
@@ -63,7 +67,8 @@ fi
 for import_command in \
   "security create-keychain" \
   "security import" \
-  "security set-key-partition-list"; do
+  "security set-key-partition-list" \
+  "security list-keychains -d user -s"; do
   if ! grep -Fq "$import_command" <<<"$import_block"; then
     record_failure "certificate import is missing: $import_command"
   fi
@@ -80,8 +85,14 @@ fi
 if ! grep -Fq 'security delete-keychain' <<<"$cleanup_block"; then
   record_failure "nested-signing cleanup does not delete the ephemeral keychain"
 fi
-if ! grep -Fq "rm -f \"\$RUNNER_TEMP/certificate.p12\"" <<<"$cleanup_block"; then
+if ! grep -Fq 'security list-keychains -d user -s' <<<"$cleanup_block"; then
+  record_failure "nested-signing cleanup does not restore the user keychain search list"
+fi
+if ! grep -Fq "\"\$RUNNER_TEMP/certificate.p12\"" <<<"$cleanup_block"; then
   record_failure "nested-signing cleanup does not remove certificate.p12"
+fi
+if ! grep -Fq "\"\$original_keychains_temp\"" <<<"$cleanup_block"; then
+  record_failure "nested-signing cleanup does not remove an incomplete keychain-list snapshot"
 fi
 
 if ((FAILURE_COUNT > 0)); then
@@ -145,6 +156,7 @@ TRAVERSAL_RESOURCE_DIR="$FIXTURE_ROOT/traversal-resources"
 UNREADABLE_DIRECTORY="$TRAVERSAL_RESOURCE_DIR/unreadable"
 DASH_RESOURCE_DIR="$FIXTURE_ROOT/-resources"
 DASH_FIXTURE="$DASH_RESOURCE_DIR/dash-tool"
+TEST_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
 
 cleanup() {
   chmod 0700 "$UNREADABLE_DIRECTORY" 2>/dev/null || true
@@ -188,7 +200,7 @@ if is_macho "$TEXT_FIXTURE"; then
   record_failure "plain-text executable detected as Mach-O: $TEXT_FIXTURE"
 fi
 
-if ! APPLE_SIGNING_IDENTITY=- bash "$SIGN_SCRIPT" "$RESOURCE_DIR"; then
+if ! APPLE_SIGNING_IDENTITY="$TEST_SIGNING_IDENTITY" bash "$SIGN_SCRIPT" "$RESOURCE_DIR"; then
   record_failure "signing valid resource fixtures failed"
 fi
 

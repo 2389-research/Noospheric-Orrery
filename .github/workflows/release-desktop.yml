@@ -71,6 +71,10 @@ jobs:
           umask 077
           certificate_path="$RUNNER_TEMP/certificate.p12"
           keychain_path="$RUNNER_TEMP/build.keychain-db"
+          original_keychains_path="$RUNNER_TEMP/original-keychains.txt"
+          original_keychains_temp="$RUNNER_TEMP/original-keychains.tmp"
+          security list-keychains -d user > "$original_keychains_temp"
+          mv "$original_keychains_temp" "$original_keychains_path"
           printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
@@ -84,6 +88,16 @@ jobs:
             -s \
             -k "$KEYCHAIN_PASSWORD" \
             "$keychain_path"
+          keychains=("$keychain_path")
+          while IFS= read -r existing_keychain; do
+            existing_keychain="${existing_keychain#"${existing_keychain%%[![:space:]]*}"}"
+            existing_keychain="${existing_keychain#\"}"
+            existing_keychain="${existing_keychain%\"}"
+            if [[ -n "$existing_keychain" ]]; then
+              keychains+=("$existing_keychain")
+            fi
+          done < "$original_keychains_path"
+          security list-keychains -d user -s "${keychains[@]}"
           identity_output="$(security find-identity -v -p codesigning "$keychain_path")"
           printf '%s\n' "$identity_output"
           signing_identity="$(awk 'length($2) == 40 && $2 ~ /^[[:xdigit:]]+$/ { print $2; exit }' <<< "$identity_output")"
@@ -105,10 +119,31 @@ jobs:
         run: |
           cleanup_status=0
           keychain_path="${APPLE_KEYCHAIN_PATH:-$RUNNER_TEMP/build.keychain-db}"
+          original_keychains_path="$RUNNER_TEMP/original-keychains.txt"
+          original_keychains_temp="$RUNNER_TEMP/original-keychains.tmp"
+          if [[ -f "$original_keychains_path" ]]; then
+            keychains=()
+            while IFS= read -r existing_keychain; do
+              existing_keychain="${existing_keychain#"${existing_keychain%%[![:space:]]*}"}"
+              existing_keychain="${existing_keychain#\"}"
+              existing_keychain="${existing_keychain%\"}"
+              if [[ -n "$existing_keychain" ]]; then
+                keychains+=("$existing_keychain")
+              fi
+            done < "$original_keychains_path"
+            if ((${#keychains[@]} > 0)); then
+              security list-keychains -d user -s "${keychains[@]}" || cleanup_status=$?
+            else
+              security list-keychains -d user -s || cleanup_status=$?
+            fi
+          fi
           if [[ -f "$keychain_path" ]]; then
             security delete-keychain "$keychain_path" || cleanup_status=$?
           fi
-          rm -f "$RUNNER_TEMP/certificate.p12" || cleanup_status=$?
+          rm -f \
+            "$RUNNER_TEMP/certificate.p12" \
+            "$original_keychains_path" \
+            "$original_keychains_temp" || cleanup_status=$?
           exit "$cleanup_status"
 
       - name: Build, sign, notarize (and draft release on tags)
