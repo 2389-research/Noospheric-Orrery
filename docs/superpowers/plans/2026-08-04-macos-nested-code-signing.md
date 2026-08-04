@@ -12,7 +12,7 @@
 
 ---
 
-### Task 1: Regression test and signing script
+## Task 1: Regression test and signing script
 
 **Files:**
 - Create: `tauri/scripts/test-sign-macos-resources.sh`
@@ -51,6 +51,8 @@ The script must:
   order silently ignores the hardened-runtime option);
 - pass `--keychain "$APPLE_KEYCHAIN_PATH"` when that variable is set;
 - run `codesign --verify --strict --verbose=2` for each signed file;
+- inspect each signature and require the configured Developer ID authority, a
+  secure timestamp, and the hardened-runtime flag;
 - fail if no Mach-O code was found.
 
 **Step 4: Run the test to verify it passes**
@@ -58,6 +60,8 @@ The script must:
 Run: `bash tauri/scripts/test-sign-macos-resources.sh`
 
 Expected: PASS with three signed fixtures and no signature on the text file.
+When CI provides the real identity, the test also verifies its authority and
+secure timestamp.
 
 **Step 5: Lint the scripts**
 
@@ -74,7 +78,7 @@ git commit -m "fix(tauri): sign nested macOS resource binaries"
 
 ---
 
-### Task 2: Release workflow integration
+## Task 2: Release workflow integration
 
 **Files:**
 - Modify: `.github/workflows/release-desktop.yml`
@@ -104,6 +108,8 @@ After generating `KEYCHAIN_PASSWORD`, add workflow steps that:
 - create and unlock `$RUNNER_TEMP/build.keychain-db`;
 - import the certificate with access for `/usr/bin/codesign`;
 - set the key partition list;
+- select exactly one imported identity whose subject matches the configured
+  Developer ID Application identity;
 - export `APPLE_KEYCHAIN_PATH` through `GITHUB_ENV`;
 - run the real shell test;
 - run `sign-macos-resources.sh tauri/src-tauri/resources` with the signing
@@ -135,7 +141,7 @@ git commit -m "fix(ci): sign native resources before notarization"
 
 ---
 
-### Task 3: Real release-pipeline verification
+## Task 3: Real release-pipeline verification
 
 **Files:** none.
 
@@ -179,11 +185,18 @@ stapler validates the ticket.
 Update this plan's execution status with the run ID and Gatekeeper result,
 then commit the update.
 
+**Step 6: Verify the first real tagged release**
+
+Do not create a release tag only for this check. On the next planned release,
+confirm that the workflow replaces Tauri's earlier draft DMG with the stapled
+DMG and publishes the release only after that replacement succeeds.
+
 ---
 
 ## Execution status — 2026-08-04
 
-Complete on branch `fix/macos-nested-code-signing`.
+Implementation and dry-run verification are complete on branch
+`fix/macos-nested-code-signing`.
 
 - Runs `30944030029` and `30944413940` exposed that an imported identity's
   keychain must also be on the user's keychain search list. The workflow now
@@ -200,5 +213,5 @@ Complete on branch `fix/macos-nested-code-signing`.
   app staple validation, and strict Developer ID/timestamp/hardened-runtime
   checks for uv, Sharp, and libvips. Both Gatekeeper checks reported
   `source=Notarized Developer ID`.
-- Tagged runs replace Tauri's pre-DMG-notarization draft asset with the final
-  stapled DMG before publishing the release.
+- The tag-only draft-asset replacement and publication steps have static
+  regression coverage but remain unverified until the next real tagged release.

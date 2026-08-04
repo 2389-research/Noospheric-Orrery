@@ -27,7 +27,9 @@ before the Tauri build. After `stage.sh` populates `src-tauri/resources`, run a
 repository script that finds Mach-O code among executable files and native
 module extensions (`.node`, `.dylib`, and `.so`). Sign each match with the
 configured identity, secure timestamp, and hardened runtime, then verify the
-signature. Tauri can then copy the signed resources and seal the outer app.
+signature. Verification requires the configured Developer ID authority, a
+secure timestamp, and the hardened-runtime flag. Tauri can then copy the signed
+resources and seal the outer app.
 
 The script scans by file type rather than naming today's three failures. This
 keeps the signing contract intact when a future frontend or runtime update
@@ -37,7 +39,8 @@ recommends signing each nested code item before its container.
 ## Components
 
 - `tauri/scripts/sign-macos-resources.sh`: find, sign, and verify staged Mach-O
-  files. It requires `APPLE_SIGNING_IDENTITY` and accepts an optional
+  files. It requires `APPLE_SIGNING_IDENTITY`, requires
+  `APPLE_SIGNING_AUTHORITY` for Developer ID signing, and accepts an optional
   `APPLE_KEYCHAIN_PATH`.
 - `tauri/scripts/test-sign-macos-resources.sh`: exercise discovery and signing
   with real Mach-O files and an ad-hoc test identity on macOS. No mocks.
@@ -49,8 +52,18 @@ recommends signing each nested code item before its container.
 ## Failure handling
 
 The signing script fails when the resource directory is missing, no Mach-O
-code is found, `codesign` fails, or strict verification fails. This stops the
-workflow before the slower Rust build and notarization submission.
+code is found, `codesign` fails, strict verification fails, or a signature has
+the wrong authority, no secure timestamp, or no hardened runtime. This stops
+the workflow before the slower Rust build and notarization submission.
+
+## Follow-up security work
+
+`stage.sh` pins uv and Node versions, but simmer-sdk follows an unchecked local
+or remote HEAD, and the staged inputs lack provenance verification. Resource
+provenance validation predates this signing change and needs a separate
+security design covering manifests, update policy, and source availability.
+This change enforces signing properties on detected Mach-O code and fails when
+signing or verification fails; it does not establish provenance.
 
 ## Verification
 

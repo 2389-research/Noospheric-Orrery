@@ -9,9 +9,38 @@ is_macho() {
   file -b -- "$candidate" | grep -q 'Mach-O'
 }
 
+verify_signature() {
+  local candidate="$1"
+  local identity="$2"
+  local authority="$3"
+  local signature_details
+
+  codesign --verify --strict --verbose=2 "$candidate" || return 1
+  signature_details="$(codesign --display --verbose=4 "$candidate" 2>&1)" || return 1
+  if ! grep -Eq '^CodeDirectory .*flags=.*runtime' <<<"$signature_details"; then
+    echo "missing hardened runtime: $candidate" >&2
+    return 1
+  fi
+  if [[ "$identity" != "-" ]]; then
+    if [[ -z "$authority" ]]; then
+      echo "APPLE_SIGNING_AUTHORITY is required for Developer ID signing" >&2
+      return 1
+    fi
+    if ! grep -Fxq "Authority=$authority" <<<"$signature_details"; then
+      echo "unexpected signing authority: $candidate" >&2
+      return 1
+    fi
+    if ! grep -Eq '^Timestamp=' <<<"$signature_details"; then
+      echo "missing secure timestamp: $candidate" >&2
+      return 1
+    fi
+  fi
+}
+
 sign_macos_resources() {
   local resource_dir="$1"
   local identity="$2"
+  local authority="$3"
   local candidate
   local candidate_list
   local signing_failed=0
@@ -50,7 +79,7 @@ sign_macos_resources() {
       signing_failed=1
       break
     fi
-    if ! codesign --verify --strict --verbose=2 "$candidate"; then
+    if ! verify_signature "$candidate" "$identity" "$authority"; then
       signing_failed=1
       break
     fi
@@ -91,7 +120,10 @@ main() {
     return 2
   fi
 
-  sign_macos_resources "$resource_dir" "$APPLE_SIGNING_IDENTITY"
+  sign_macos_resources \
+    "$resource_dir" \
+    "$APPLE_SIGNING_IDENTITY" \
+    "${APPLE_SIGNING_AUTHORITY:-}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

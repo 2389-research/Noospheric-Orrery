@@ -35,6 +35,7 @@ publish_release_line="$(grep -n -m1 -- '- name: Publish release' "$WORKFLOW_FILE
 api_key_cleanup_line="$(grep -n -m1 -- '- name: Remove notarization API key' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
 api_key_block="$(workflow_step_block "Write App Store Connect API key")"
 import_block="$(workflow_step_block "Import Developer ID certificate")"
+test_block="$(workflow_step_block "Test native resource signing")"
 sign_block="$(workflow_step_block "Sign staged native resources")"
 cleanup_block="$(workflow_step_block "Remove nested-signing credentials")"
 notarize_dmg_block="$(workflow_step_block "Notarize and staple disk image")"
@@ -66,7 +67,7 @@ if [[ -n "$tauri_action_line" && -n "$notarize_dmg_line" && -n "$api_key_cleanup
   record_failure "release workflow must notarize the DMG before uploading or publishing it"
 fi
 api_key_umask_line="$(grep -n -m1 -E '^[[:space:]]+umask[[:space:]]+077' <<<"$api_key_block" | cut -d: -f1 || true)"
-api_key_write_line="$(grep -n -m1 -F 'AuthKey.p8' <<<"$api_key_block" | tail -n 1 | cut -d: -f1 || true)"
+api_key_write_line="$(grep -n -m1 -F "printf '%s\\n' \"\$APPLE_API_KEY_CONTENT\" > \"\$RUNNER_TEMP/AuthKey.p8\"" <<<"$api_key_block" | cut -d: -f1 || true)"
 if [[ -z "$api_key_umask_line" || -z "$api_key_write_line" ]] \
   || ! ((api_key_umask_line < api_key_write_line)); then
   record_failure "App Store Connect API key is not written with restricted permissions"
@@ -76,6 +77,10 @@ if ! grep -Eq 'APPLE_KEYCHAIN_PATH=.*GITHUB_ENV' <<<"$import_block"; then
 fi
 if ! grep -Eq 'APPLE_SIGNING_IDENTITY=.*GITHUB_ENV' <<<"$import_block"; then
   record_failure "certificate import does not export its resolved signing identity via GITHUB_ENV"
+fi
+if ! grep -Fq "EXPECTED_SIGNING_AUTHORITY: \${{ secrets.APPLE_SIGNING_IDENTITY }}" <<<"$import_block" \
+  || ! grep -Fq 'identity_count=' <<<"$import_block"; then
+  record_failure "certificate import does not select exactly one configured signing authority"
 fi
 if ! grep -Fq "security list-keychains -d user > \"\$original_keychains_temp\"" <<<"$import_block" \
   || ! grep -Fq "mv \"\$original_keychains_temp\" \"\$original_keychains_path\"" <<<"$import_block"; then
@@ -107,7 +112,12 @@ done
 if ! grep -Fq 'bash tauri/scripts/sign-macos-resources.sh tauri/src-tauri/resources' <<<"$sign_block"; then
   record_failure "native resource signing step does not invoke the signing script"
 fi
-if grep -Fq 'secrets.APPLE_SIGNING_IDENTITY' <<<"$sign_block"; then
+for signing_block in "$test_block" "$sign_block"; do
+  if ! grep -Fq "APPLE_SIGNING_AUTHORITY: \${{ secrets.APPLE_SIGNING_IDENTITY }}" <<<"$signing_block"; then
+    record_failure "native signing does not receive the configured Developer ID authority"
+  fi
+done
+if grep -Fq "APPLE_SIGNING_IDENTITY: \${{ secrets.APPLE_SIGNING_IDENTITY }}" <<<"$sign_block"; then
   record_failure "native resource signing step overrides the identity resolved from its keychain"
 fi
 if ! grep -Eq '^[[:space:]]+if:[[:space:]]+always\(\)' <<<"$cleanup_block"; then
@@ -180,7 +190,7 @@ assert_macho() {
   fi
 }
 
-assert_runtime_signature() {
+assert_signature_properties() {
   local candidate="$1"
   local signature_details
 
@@ -194,6 +204,14 @@ assert_runtime_signature() {
   fi
   if ! grep -Eq '^CodeDirectory .*flags=.*runtime' <<<"$signature_details"; then
     record_failure "missing hardened-runtime flag: $candidate"
+  fi
+  if [[ -n "$TEST_SIGNING_AUTHORITY" ]]; then
+    if ! grep -Fxq "Authority=$TEST_SIGNING_AUTHORITY" <<<"$signature_details"; then
+      record_failure "unexpected signing authority: $candidate"
+    fi
+    if ! grep -Eq '^Timestamp=' <<<"$signature_details"; then
+      record_failure "missing secure timestamp: $candidate"
+    fi
   fi
 }
 
@@ -222,6 +240,7 @@ UNREADABLE_DIRECTORY="$TRAVERSAL_RESOURCE_DIR/unreadable"
 DASH_RESOURCE_DIR="$FIXTURE_ROOT/-resources"
 DASH_FIXTURE="$DASH_RESOURCE_DIR/dash-tool"
 TEST_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
+TEST_SIGNING_AUTHORITY="${APPLE_SIGNING_AUTHORITY:-}"
 
 cleanup() {
   chmod 0700 "$UNREADABLE_DIRECTORY" 2>/dev/null || true
@@ -265,14 +284,23 @@ if is_macho "$TEXT_FIXTURE"; then
   record_failure "plain-text executable detected as Mach-O: $TEXT_FIXTURE"
 fi
 
-if ! APPLE_SIGNING_IDENTITY="$TEST_SIGNING_IDENTITY" bash "$SIGN_SCRIPT" "$RESOURCE_DIR"; then
+if ! APPLE_SIGNING_IDENTITY="$TEST_SIGNING_IDENTITY" \
+  APPLE_SIGNING_AUTHORITY="$TEST_SIGNING_AUTHORITY" \
+  bash "$SIGN_SCRIPT" "$RESOURCE_DIR"; then
   record_failure "signing valid resource fixtures failed"
 fi
 
-assert_runtime_signature "$EXECUTABLE_FIXTURE"
-assert_runtime_signature "$NODE_FIXTURE"
-assert_runtime_signature "$DYLIB_FIXTURE"
-assert_runtime_signature "$SO_FIXTURE"
+assert_signature_properties "$EXECUTABLE_FIXTURE"
+assert_signature_properties "$NODE_FIXTURE"
+assert_signature_properties "$DYLIB_FIXTURE"
+assert_signature_properties "$SO_FIXTURE"
+if [[ -n "$TEST_SIGNING_AUTHORITY" ]] \
+  && verify_signature \
+    "$EXECUTABLE_FIXTURE" \
+    "$TEST_SIGNING_IDENTITY" \
+    "${TEST_SIGNING_AUTHORITY%?}"; then
+  record_failure "truncated signing authority passed production verification"
+fi
 if codesign --verify --strict "$TEXT_FIXTURE" >/dev/null 2>&1; then
   record_failure "plain-text executable was signed: $TEXT_FIXTURE"
 fi
@@ -286,14 +314,18 @@ assert_command_fails \
 assert_command_fails \
   "missing resource directory did not fail" \
   env APPLE_SIGNING_IDENTITY=- bash "$SIGN_SCRIPT" "$FIXTURE_ROOT/missing"
-assert_command_fails \
-  "resource traversal failure did not fail closed" \
-  env APPLE_SIGNING_IDENTITY=- bash "$SIGN_SCRIPT" "$TRAVERSAL_RESOURCE_DIR"
+if [[ "$(id -u)" != 0 ]]; then
+  assert_command_fails \
+    "resource traversal failure did not fail closed" \
+    env APPLE_SIGNING_IDENTITY=- bash "$SIGN_SCRIPT" "$TRAVERSAL_RESOURCE_DIR"
+else
+  echo "SKIP: traversal failure fixture requires a non-root user"
+fi
 
 if ! run_dash_prefixed_resource; then
   record_failure "dash-prefixed valid resource directory failed"
 else
-  assert_runtime_signature "$DASH_FIXTURE"
+  assert_signature_properties "$DASH_FIXTURE"
 fi
 
 if ((FAILURE_COUNT > 0)); then
