@@ -63,6 +63,49 @@ jobs:
           echo "::add-mask::$pw"
           echo "KEYCHAIN_PASSWORD=$pw" >> "$GITHUB_ENV"
 
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          umask 077
+          certificate_path="$RUNNER_TEMP/certificate.p12"
+          keychain_path="$RUNNER_TEMP/build.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$keychain_path"
+          security find-identity -v -p codesigning "$keychain_path"
+          echo "APPLE_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
+
+      - name: Test native resource signing
+        run: bash tauri/scripts/test-sign-macos-resources.sh
+
+      - name: Sign staged native resources
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: bash tauri/scripts/sign-macos-resources.sh tauri/src-tauri/resources
+
+      - name: Remove nested-signing credentials
+        if: always()
+        run: |
+          cleanup_status=0
+          keychain_path="${APPLE_KEYCHAIN_PATH:-$RUNNER_TEMP/build.keychain-db}"
+          if [[ -f "$keychain_path" ]]; then
+            security delete-keychain "$keychain_path" || cleanup_status=$?
+          fi
+          rm -f "$RUNNER_TEMP/certificate.p12" || cleanup_status=$?
+          exit "$cleanup_status"
+
       - name: Build, sign, notarize (and draft release on tags)
         uses: tauri-apps/tauri-action@v0
         env:

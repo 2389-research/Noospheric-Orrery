@@ -1,18 +1,11 @@
 #!/usr/bin/env bash
-# ABOUTME: Exercises nested macOS resource signing with real Mach-O fixtures.
-# ABOUTME: Skips cleanly on non-macOS hosts where codesign is unavailable.
+# ABOUTME: Exercises nested macOS signing and release workflow ordering.
+# ABOUTME: Runs static checks everywhere; skips codesign fixtures outside macOS.
 set -euo pipefail
-
-if [[ "$(uname -s)" != "Darwin" ]]; then
-  echo "SKIP: macOS resource signing test requires macOS"
-  exit 0
-fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SIGN_SCRIPT="$SCRIPT_DIR/sign-macos-resources.sh"
-
-# shellcheck source=tauri/scripts/sign-macos-resources.sh
-source "$SIGN_SCRIPT"
+WORKFLOW_FILE="$SCRIPT_DIR/../../.github/workflows/release-desktop.yml"
 
 FAILURE_COUNT=0
 
@@ -20,6 +13,56 @@ record_failure() {
   echo "FAIL: $*" >&2
   ((FAILURE_COUNT += 1))
 }
+
+workflow_step_block() {
+  local step_name="$1"
+
+  awk -v step_name="$step_name" '
+    index($0, "- name: " step_name) { in_step = 1; print; next }
+    in_step && /^[[:space:]]+- (name:|uses:)/ { exit }
+    in_step { print }
+  ' "$WORKFLOW_FILE"
+}
+
+import_line="$(grep -n -m1 -- '- name: Import Developer ID certificate' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
+sign_line="$(grep -n -m1 -- '- name: Sign staged native resources' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
+tauri_action_line="$(grep -n -m1 -- 'uses: tauri-apps/tauri-action@v0' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
+
+[[ -n "$import_line" ]] || record_failure "release workflow is missing the certificate import step"
+[[ -n "$sign_line" ]] || record_failure "release workflow is missing the native resource signing step"
+[[ -n "$tauri_action_line" ]] || record_failure "release workflow is missing the Tauri action step"
+if [[ -n "$import_line" && -n "$sign_line" && -n "$tauri_action_line" ]] \
+  && ! ((import_line < sign_line && sign_line < tauri_action_line)); then
+  record_failure "release workflow must import the certificate, sign native resources, then run the Tauri action"
+fi
+if ! workflow_step_block "Import Developer ID certificate" \
+  | grep -Eq 'APPLE_KEYCHAIN_PATH=.*GITHUB_ENV'; then
+  record_failure "certificate import does not export APPLE_KEYCHAIN_PATH via GITHUB_ENV"
+fi
+if ! workflow_step_block "Import Developer ID certificate" \
+  | grep -Eq '^[[:space:]]+umask[[:space:]]+077'; then
+  record_failure "certificate import does not restrict credential file permissions"
+fi
+if ! workflow_step_block "Sign staged native resources" \
+  | grep -Fq 'bash tauri/scripts/sign-macos-resources.sh tauri/src-tauri/resources'; then
+  record_failure "native resource signing step does not invoke the signing script"
+fi
+if ! workflow_step_block "Sign staged native resources" \
+  | grep -Eq '^[[:space:]]+APPLE_SIGNING_IDENTITY:[[:space:]]+'; then
+  record_failure "native resource signing step does not receive APPLE_SIGNING_IDENTITY"
+fi
+
+if ((FAILURE_COUNT > 0)); then
+  exit 1
+fi
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "SKIP: macOS resource signing test requires macOS"
+  exit 0
+fi
+
+# shellcheck source=tauri/scripts/sign-macos-resources.sh
+source "$SIGN_SCRIPT"
 
 assert_macho() {
   local candidate="$1"
