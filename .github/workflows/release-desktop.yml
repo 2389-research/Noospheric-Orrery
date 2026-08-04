@@ -52,6 +52,7 @@ jobs:
 
       - name: Write App Store Connect API key
         run: |
+          umask 077
           printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/AuthKey.p8"
           echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
         env:
@@ -62,6 +63,103 @@ jobs:
           pw="$(openssl rand -hex 24)"
           echo "::add-mask::$pw"
           echo "KEYCHAIN_PASSWORD=$pw" >> "$GITHUB_ENV"
+
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          EXPECTED_SIGNING_AUTHORITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          umask 077
+          certificate_path="$RUNNER_TEMP/certificate.p12"
+          keychain_path="$RUNNER_TEMP/build.keychain-db"
+          original_keychains_path="$RUNNER_TEMP/original-keychains.txt"
+          original_keychains_temp="$RUNNER_TEMP/original-keychains.tmp"
+          security list-keychains -d user > "$original_keychains_temp"
+          mv "$original_keychains_temp" "$original_keychains_path"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$keychain_path"
+          keychains=("$keychain_path")
+          while IFS= read -r existing_keychain; do
+            existing_keychain="${existing_keychain#"${existing_keychain%%[![:space:]]*}"}"
+            existing_keychain="${existing_keychain#\"}"
+            existing_keychain="${existing_keychain%\"}"
+            if [[ -n "$existing_keychain" ]]; then
+              keychains+=("$existing_keychain")
+            fi
+          done < "$original_keychains_path"
+          security list-keychains -d user -s "${keychains[@]}"
+          identity_output="$(security find-identity -v -p codesigning "$keychain_path")"
+          printf '%s\n' "$identity_output"
+          matching_identities="$(awk -v expected="$EXPECTED_SIGNING_AUTHORITY" '
+            length($2) == 40 && $2 ~ /^[[:xdigit:]]+$/ {
+              subject = $0
+              sub(/^[^"]*"/, "", subject)
+              sub(/"[^"]*$/, "", subject)
+              if (subject == expected) print $2
+            }
+          ' <<< "$identity_output")"
+          identity_count="$(awk 'NF { count += 1 } END { print count + 0 }' <<< "$matching_identities")"
+          if [[ "$identity_count" != 1 ]]; then
+            echo "Expected one $EXPECTED_SIGNING_AUTHORITY identity in $keychain_path, found $identity_count" >&2
+            exit 1
+          fi
+          signing_identity="$matching_identities"
+          echo "APPLE_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
+          echo "APPLE_SIGNING_IDENTITY=$signing_identity" >> "$GITHUB_ENV"
+
+      - name: Test native resource signing
+        env:
+          APPLE_SIGNING_AUTHORITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: bash tauri/scripts/test-sign-macos-resources.sh
+
+      - name: Sign staged native resources
+        env:
+          APPLE_SIGNING_AUTHORITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: bash tauri/scripts/sign-macos-resources.sh tauri/src-tauri/resources
+
+      - name: Remove nested-signing credentials
+        if: always()
+        run: |
+          cleanup_status=0
+          keychain_path="${APPLE_KEYCHAIN_PATH:-$RUNNER_TEMP/build.keychain-db}"
+          original_keychains_path="$RUNNER_TEMP/original-keychains.txt"
+          original_keychains_temp="$RUNNER_TEMP/original-keychains.tmp"
+          if [[ -f "$original_keychains_path" ]]; then
+            keychains=()
+            while IFS= read -r existing_keychain; do
+              existing_keychain="${existing_keychain#"${existing_keychain%%[![:space:]]*}"}"
+              existing_keychain="${existing_keychain#\"}"
+              existing_keychain="${existing_keychain%\"}"
+              if [[ -n "$existing_keychain" ]]; then
+                keychains+=("$existing_keychain")
+              fi
+            done < "$original_keychains_path"
+            if ((${#keychains[@]} > 0)); then
+              security list-keychains -d user -s "${keychains[@]}" || cleanup_status=$?
+            else
+              security list-keychains -d user -s || cleanup_status=$?
+            fi
+          fi
+          if [[ -f "$keychain_path" ]]; then
+            security delete-keychain "$keychain_path" || cleanup_status=$?
+          fi
+          rm -f \
+            "$RUNNER_TEMP/certificate.p12" \
+            "$original_keychains_path" \
+            "$original_keychains_temp" || cleanup_status=$?
+          exit "$cleanup_status"
 
       - name: Build, sign, notarize (and draft release on tags)
         uses: tauri-apps/tauri-action@v0
@@ -81,6 +179,36 @@ jobs:
           prerelease: ${{ github.ref_type == 'tag' && contains(github.ref_name, '-') }}
           includeUpdaterJson: false
 
+      - name: Notarize and staple disk image
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          shopt -s nullglob
+          disk_images=(tauri/src-tauri/target/release/bundle/dmg/*.dmg)
+          if ((${#disk_images[@]} != 1)); then
+            echo "Expected one disk image, found ${#disk_images[@]}" >&2
+            exit 1
+          fi
+          dmg_path="${disk_images[0]}"
+          xcrun notarytool submit "$dmg_path" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$dmg_path"
+          xcrun stapler validate "$dmg_path"
+          hdiutil verify "$dmg_path"
+          codesign --verify --verbose=4 "$dmg_path"
+          spctl --assess --verbose=4 --type open \
+            --context context:primary-signature "$dmg_path"
+
+      - name: Remove notarization API key
+        if: always()
+        run: |
+          api_key_path="${APPLE_API_KEY_PATH:-$RUNNER_TEMP/AuthKey.p8}"
+          rm -f "$api_key_path"
+
       - name: Upload dry-run artifacts
         if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
@@ -88,6 +216,20 @@ jobs:
           name: noospheric-macos-dry-run
           path: tauri/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
+
+      - name: Replace release disk image
+        if: github.ref_type == 'tag'
+        run: |
+          shopt -s nullglob
+          disk_images=(tauri/src-tauri/target/release/bundle/dmg/*.dmg)
+          if ((${#disk_images[@]} != 1)); then
+            echo "Expected one disk image, found ${#disk_images[@]}" >&2
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" "${disk_images[0]}" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
 
       - name: Publish release
         if: github.ref_type == 'tag'
