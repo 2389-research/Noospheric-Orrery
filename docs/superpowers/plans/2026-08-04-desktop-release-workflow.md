@@ -10,6 +10,12 @@
 
 **Spec:** `tauri/docs/superpowers/specs/2026-08-04-desktop-release-workflow-design.md`
 
+**Execution status (2026-08-04):** Tasks 1–3 complete (workflow written +
+actionlint-clean, six secrets set, README updated). One deviation: tauri-action
+has no `uploadWorkflowArtifacts` input — dry-run artifacts upload via an
+explicit `actions/upload-artifact@v4` step. Task 4 (merge → dispatch → verify)
+in flight.
+
 ## Global Constraints
 
 - Platform: `macos-latest` (Apple silicon) only. No universal builds — `stage.sh` fetches arch-specific `uv`/`node`.
