@@ -26,30 +26,59 @@ workflow_step_block() {
 
 import_line="$(grep -n -m1 -- '- name: Import Developer ID certificate' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
 sign_line="$(grep -n -m1 -- '- name: Sign staged native resources' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
+cleanup_line="$(grep -n -m1 -- '- name: Remove nested-signing credentials' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
 tauri_action_line="$(grep -n -m1 -- 'uses: tauri-apps/tauri-action@v0' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
+import_block="$(workflow_step_block "Import Developer ID certificate")"
+sign_block="$(workflow_step_block "Sign staged native resources")"
+cleanup_block="$(workflow_step_block "Remove nested-signing credentials")"
 
 [[ -n "$import_line" ]] || record_failure "release workflow is missing the certificate import step"
 [[ -n "$sign_line" ]] || record_failure "release workflow is missing the native resource signing step"
+[[ -n "$cleanup_line" ]] || record_failure "release workflow is missing the nested-signing cleanup step"
 [[ -n "$tauri_action_line" ]] || record_failure "release workflow is missing the Tauri action step"
-if [[ -n "$import_line" && -n "$sign_line" && -n "$tauri_action_line" ]] \
-  && ! ((import_line < sign_line && sign_line < tauri_action_line)); then
-  record_failure "release workflow must import the certificate, sign native resources, then run the Tauri action"
+if [[ -n "$import_line" && -n "$sign_line" && -n "$cleanup_line" && -n "$tauri_action_line" ]] \
+  && ! ((import_line < sign_line && sign_line < cleanup_line && cleanup_line < tauri_action_line)); then
+  record_failure "release workflow must import the certificate, sign native resources, clean credentials, then run the Tauri action"
 fi
-if ! workflow_step_block "Import Developer ID certificate" \
-  | grep -Eq 'APPLE_KEYCHAIN_PATH=.*GITHUB_ENV'; then
+if ! grep -Eq 'APPLE_KEYCHAIN_PATH=.*GITHUB_ENV' <<<"$import_block"; then
   record_failure "certificate import does not export APPLE_KEYCHAIN_PATH via GITHUB_ENV"
 fi
-if ! workflow_step_block "Import Developer ID certificate" \
-  | grep -Eq '^[[:space:]]+umask[[:space:]]+077'; then
-  record_failure "certificate import does not restrict credential file permissions"
+umask_line="$(grep -n -m1 -E '^[[:space:]]+umask[[:space:]]+077' <<<"$import_block" | cut -d: -f1 || true)"
+certificate_path_line="$(grep -n -m1 -F "certificate_path=\"\$RUNNER_TEMP/certificate.p12\"" <<<"$import_block" | cut -d: -f1 || true)"
+certificate_write_line="$(grep -n -m1 -F "base64 --decode > \"\$certificate_path\"" <<<"$import_block" | cut -d: -f1 || true)"
+[[ -n "$umask_line" ]] || record_failure "certificate import does not restrict credential file permissions"
+[[ -n "$certificate_path_line" ]] || record_failure "certificate import does not target certificate.p12"
+[[ -n "$certificate_write_line" ]] || record_failure "certificate import does not decode certificate.p12"
+if [[ -n "$umask_line" && -n "$certificate_write_line" ]] \
+  && ! ((umask_line < certificate_write_line)); then
+  record_failure "certificate import restricts file permissions after writing certificate.p12"
 fi
-if ! workflow_step_block "Sign staged native resources" \
-  | grep -Fq 'bash tauri/scripts/sign-macos-resources.sh tauri/src-tauri/resources'; then
+if [[ -n "$certificate_path_line" && -n "$certificate_write_line" ]] \
+  && ! ((certificate_path_line < certificate_write_line)); then
+  record_failure "certificate import sets the certificate.p12 path after decoding"
+fi
+for import_command in \
+  "security create-keychain" \
+  "security import" \
+  "security set-key-partition-list"; do
+  if ! grep -Fq "$import_command" <<<"$import_block"; then
+    record_failure "certificate import is missing: $import_command"
+  fi
+done
+if ! grep -Fq 'bash tauri/scripts/sign-macos-resources.sh tauri/src-tauri/resources' <<<"$sign_block"; then
   record_failure "native resource signing step does not invoke the signing script"
 fi
-if ! workflow_step_block "Sign staged native resources" \
-  | grep -Eq '^[[:space:]]+APPLE_SIGNING_IDENTITY:[[:space:]]+'; then
+if ! grep -Eq '^[[:space:]]+APPLE_SIGNING_IDENTITY:[[:space:]]+' <<<"$sign_block"; then
   record_failure "native resource signing step does not receive APPLE_SIGNING_IDENTITY"
+fi
+if ! grep -Eq '^[[:space:]]+if:[[:space:]]+always\(\)' <<<"$cleanup_block"; then
+  record_failure "nested-signing cleanup does not run after failures"
+fi
+if ! grep -Fq 'security delete-keychain' <<<"$cleanup_block"; then
+  record_failure "nested-signing cleanup does not delete the ephemeral keychain"
+fi
+if ! grep -Fq "rm -f \"\$RUNNER_TEMP/certificate.p12\"" <<<"$cleanup_block"; then
+  record_failure "nested-signing cleanup does not remove certificate.p12"
 fi
 
 if ((FAILURE_COUNT > 0)); then
