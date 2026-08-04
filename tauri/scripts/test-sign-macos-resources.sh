@@ -250,7 +250,9 @@ trap cleanup EXIT
 
 run_dash_prefixed_resource() (
   cd "$FIXTURE_ROOT"
-  APPLE_SIGNING_IDENTITY=- bash "$SIGN_SCRIPT" -resources
+  APPLE_SIGNING_IDENTITY="$TEST_SIGNING_IDENTITY" \
+    APPLE_SIGNING_AUTHORITY="$TEST_SIGNING_AUTHORITY" \
+    bash "$SIGN_SCRIPT" -resources
 )
 
 mkdir -p \
