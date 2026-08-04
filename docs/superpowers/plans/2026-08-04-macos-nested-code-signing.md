@@ -46,7 +46,9 @@ The script must:
 - reject non-macOS hosts;
 - inspect executable files plus `*.node`, `*.dylib`, and `*.so` files;
 - use `file` to keep only Mach-O code;
-- run `codesign --force --timestamp --options runtime --sign` for each match;
+- run `codesign --force --sign IDENTITY --timestamp --options runtime` for
+  each match (`codesign(1)` requires `--sign` before `--options`; the reverse
+  order silently ignores the hardened-runtime option);
 - pass `--keychain "$APPLE_KEYCHAIN_PATH"` when that variable is set;
 - run `codesign --verify --strict --verbose=2` for each signed file;
 - fail if no Mach-O code was found.
