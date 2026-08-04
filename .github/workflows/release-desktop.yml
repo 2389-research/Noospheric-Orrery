@@ -1,0 +1,97 @@
+# ABOUTME: Build, sign, and notarize the Tauri desktop app on macOS, then
+# ABOUTME: publish a GitHub Release on v* tags (dry-run via workflow_dispatch).
+
+name: Release Desktop App
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Validate release tag format
+        if: github.ref_type == 'tag'
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag '$GITHUB_REF_NAME' is not vMAJOR.MINOR.PATCH[-prerelease]; refusing to build a release from it." >&2
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tauri/src-tauri
+
+      - name: Stage services, frontend, and runtimes
+        run: bash tauri/scripts/stage.sh
+
+      - name: Set app version from tag
+        if: github.ref_type == 'tag'
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          jq --arg v "$v" '.version = $v' tauri/src-tauri/tauri.conf.json > "$RUNNER_TEMP/tauri.conf.json"
+          mv "$RUNNER_TEMP/tauri.conf.json" tauri/src-tauri/tauri.conf.json
+          echo "Building version $v"
+
+      - name: Install Tauri CLI
+        run: npm ci
+        working-directory: tauri
+
+      - name: Write App Store Connect API key
+        run: |
+          printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/AuthKey.p8"
+          echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+
+      - name: Generate ephemeral keychain password
+        run: |
+          pw="$(openssl rand -hex 24)"
+          echo "::add-mask::$pw"
+          echo "KEYCHAIN_PASSWORD=$pw" >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize (and draft release on tags)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          # APPLE_API_KEY_PATH and KEYCHAIN_PASSWORD arrive via GITHUB_ENV above
+        with:
+          projectPath: tauri
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('Noospheric {0}', github.ref_name) || '' }}
+          releaseDraft: true
+          prerelease: ${{ github.ref_type == 'tag' && contains(github.ref_name, '-') }}
+          includeUpdaterJson: false
+
+      - name: Upload dry-run artifacts
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: noospheric-macos-dry-run
+          path: tauri/src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}

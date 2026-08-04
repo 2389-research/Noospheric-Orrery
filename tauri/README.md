@@ -29,6 +29,21 @@ npm run tauri build  # produce installers (.deb / AppImage / etc.)
 
 `scripts/stage.sh` builds the frontend with `NEXT_OUTPUT=standalone` (a small env-gated switch in Orrery's `next.config.ts`), downloads pinned `uv`/`node` binaries for the current platform, and copies service sources. Re-run it whenever Orrery changes. Flags: `--skip-frontend`, `--skip-runtimes`.
 
+## Releasing
+
+Push a semver tag — `vMAJOR.MINOR.PATCH` with an optional `-prerelease`
+suffix (e.g. `v0.5.0`, `v0.5.0-rc1`) — and the `release-desktop.yml` workflow builds
+the app on macOS CI, signs it with the 2389 Developer ID certificate,
+notarizes it with Apple, and publishes a GitHub Release with the `.dmg`.
+The app version comes from the tag; don't bump `tauri.conf.json` manually.
+
+To test the pipeline without cutting a release, run the workflow manually
+(`gh workflow run release-desktop.yml`) — it builds, signs, and notarizes,
+then uploads the `.dmg` as a workflow artifact instead of a release.
+
+See `docs/superpowers/specs/2026-08-04-desktop-release-workflow-design.md`
+for the design (secrets, draft-then-flip publish, known consequences).
+
 ## Repo layout
 
 ```text
@@ -40,6 +55,6 @@ docs/superpowers/specs/  Design docs
 
 ## Not yet done (v1 scope)
 
-- macOS / Windows staging targets (stage.sh has the platform table; needs per-platform runs + signing)
+- Windows and Intel-macOS staging targets (stage.sh has the platform table; needs per-platform runs + signing)
 - App icon (still the Tauri default)
 - Migration helper for existing docker-compose data (copy `Noospheric-Orrery/data/*` into `<app-data>/orrery-data/`)
