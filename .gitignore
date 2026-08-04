@@ -1,4 +1,5 @@
 .worktrees/
+.scratch/
 .DS_Store
 .env
 .env.local
