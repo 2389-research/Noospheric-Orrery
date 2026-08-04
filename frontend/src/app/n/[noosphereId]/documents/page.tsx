@@ -5,21 +5,28 @@ import { api } from "@/lib/api";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 import type { DocumentSummary } from "@/lib/types";
 
+const PAGE_SIZE = 50;
+
 export default function DocumentsPage() {
   const noosphereId = useNoosphereId();
   const router = useRouter();
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  const load = () => {
-    api.getDocuments().then(setDocuments).catch(console.error);
+  const load = (nextOffset: number) => {
+    api.getDocumentsPage(PAGE_SIZE, nextOffset).then(({ items, total }) => {
+      setDocuments(items);
+      setTotal(total);
+    }).catch(console.error);
   };
 
   useEffect(() => {
-    load();
+    load(offset);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [offset]);
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -29,6 +36,7 @@ export default function DocumentsPage() {
     try {
       await api.deleteDocument(id);
       setDocuments((prev) => prev.filter((d) => d.id !== id));
+      setTotal((prev) => Math.max(0, prev - 1));
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : "Failed to delete document");
     } finally {
@@ -36,11 +44,18 @@ export default function DocumentsPage() {
     }
   };
 
+  const pageStart = total === 0 ? 0 : offset + 1;
+  const pageEnd = Math.min(offset + PAGE_SIZE, total);
+  const canPrev = offset > 0;
+  const canNext = offset + PAGE_SIZE < total;
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-sm tracking-[4px] text-muted-foreground uppercase">Documents</h1>
-        <span className="text-xs text-muted-foreground/70">{documents.length} total</span>
+        <span className="text-xs text-muted-foreground/70">
+          {total === 0 ? "0 total" : `${pageStart}-${pageEnd} of ${total}`}
+        </span>
       </div>
 
       {deleteError && <div className="text-[10px] text-destructive/80">{deleteError}</div>}
@@ -102,6 +117,28 @@ export default function DocumentsPage() {
           </tbody>
         </table>
       </div>
+
+      {total > PAGE_SIZE && (
+        <div className="flex items-center justify-between text-xs">
+          <button
+            onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}
+            disabled={!canPrev}
+            className="px-3 py-1.5 rounded border border-border/30 text-muted-foreground/80 hover:text-foreground hover:bg-card/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            ← prev
+          </button>
+          <span className="text-muted-foreground/70">
+            page {Math.floor(offset / PAGE_SIZE) + 1} of {Math.ceil(total / PAGE_SIZE)}
+          </span>
+          <button
+            onClick={() => setOffset((o) => o + PAGE_SIZE)}
+            disabled={!canNext}
+            className="px-3 py-1.5 rounded border border-border/30 text-muted-foreground/80 hover:text-foreground hover:bg-card/50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            next →
+          </button>
+        </div>
+      )}
     </div>
   );
 }

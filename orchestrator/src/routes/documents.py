@@ -2,7 +2,7 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Response
 from fastapi.responses import FileResponse, PlainTextResponse
 from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
@@ -16,9 +16,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("/documents")
-def list_documents(limit: int = 50, offset: int = 0, auth: AuthStore = Depends(get_auth_store)):
+def list_documents(
+    response: Response, limit: int = 50, offset: int = 0,
+    auth: AuthStore = Depends(get_auth_store),
+):
     store = auth.store
     docs = store.documents.list(limit=limit, offset=offset)
+    total = store.documents.count()
     result = []
     for d in docs:
         entity_count = len(store.entities.get_for_document(d.id)) if d.id else 0
@@ -28,6 +32,9 @@ def list_documents(limit: int = 50, offset: int = 0, auth: AuthStore = Depends(g
             "content_type": d.content_type,
         })
     store.close()
+    # Exposed via a header (not the body) so existing callers that treat this
+    # endpoint's response as a plain array keep working unchanged.
+    response.headers["X-Total-Count"] = str(total)
     return result
 
 @router.get("/documents/{document_id}")

@@ -27,9 +27,18 @@ async function fetchAPIText(path: string, options?: RequestInit): Promise<string
   return res.text();
 }
 
+async function fetchAPIWithTotal<T>(path: string, options?: RequestInit): Promise<{ items: T; total: number }> {
+  const res = await fetch(`/api${path}`, { ...options, headers: buildHeaders(options) });
+  if (!res.ok) throw new Error(`API error: ${res.status} ${await res.text()}`);
+  const total = Number(res.headers.get("X-Total-Count") ?? "0");
+  return { items: await res.json(), total };
+}
+
 export const api = {
   getStats: () => fetchAPI<import("./types").Stats>("/stats"),
   getDocuments: () => fetchAPI<import("./types").DocumentSummary[]>("/documents"),
+  getDocumentsPage: (limit: number, offset: number) =>
+    fetchAPIWithTotal<import("./types").DocumentSummary[]>(`/documents?limit=${limit}&offset=${offset}`),
   getDocument: (id: string) => fetchAPI<import("./types").DocumentDetail>(`/documents/${id}`),
   getDocumentFile: (id: string) => fetchAPIText(`/documents/${id}/file`),
   deleteDocument: (id: string) => fetchAPI<{ deleted: boolean; entities_removed: string[] }>(`/documents/${id}`, { method: "DELETE" }),
