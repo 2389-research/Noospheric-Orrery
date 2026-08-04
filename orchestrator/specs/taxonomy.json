@@ -1,0 +1,434 @@
+{
+  "software": {
+    "_desc": "building and running software systems",
+    "frontend": [
+      "client-side UI people interact with",
+      [
+        "web-ui",
+        "design-systems",
+        "data-visualization",
+        "accessibility",
+        "state-management"
+      ]
+    ],
+    "backend": [
+      "server-side services & business logic",
+      [
+        "rest-api",
+        "graphql-api",
+        "microservices",
+        "authentication",
+        "background-jobs",
+        "real-time-messaging"
+      ]
+    ],
+    "mobile": [
+      "native & cross-platform apps",
+      [
+        "ios",
+        "android",
+        "cross-platform",
+        "mobile-backend"
+      ]
+    ],
+    "data-engineering": [
+      "moving & storing data at scale",
+      [
+        "data-pipelines",
+        "etl",
+        "stream-processing",
+        "data-warehousing",
+        "orchestration"
+      ]
+    ],
+    "databases": [
+      "storage engines & query layers",
+      [
+        "relational",
+        "nosql",
+        "vector-search",
+        "caching",
+        "query-optimization"
+      ]
+    ],
+    "machine-learning": [
+      "training & serving models",
+      [
+        "model-training",
+        "inference-serving",
+        "nlp",
+        "computer-vision",
+        "recommender-systems",
+        "mlops"
+      ]
+    ],
+    "ai-agents": [
+      "LLM-driven autonomous systems",
+      [
+        "llm-orchestration",
+        "tool-use",
+        "multi-agent-coordination",
+        "retrieval-augmented-generation",
+        "prompt-engineering"
+      ]
+    ],
+    "devops-infra": [
+      "build, deploy, run, keep alive",
+      [
+        "ci-cd",
+        "containerization",
+        "kubernetes",
+        "infrastructure-as-code",
+        "observability",
+        "site-reliability"
+      ]
+    ],
+    "cloud": [
+      "cloud-native platform work",
+      [
+        "serverless",
+        "cloud-storage",
+        "managed-services",
+        "cost-optimization"
+      ]
+    ],
+    "security": [
+      "protecting systems & data",
+      [
+        "authentication-authorization",
+        "cryptography",
+        "vulnerability-scanning",
+        "secrets-management",
+        "threat-detection"
+      ]
+    ],
+    "systems-programming": [
+      "low-level & performance",
+      [
+        "operating-systems",
+        "compilers",
+        "concurrency",
+        "memory-management",
+        "performance-optimization"
+      ]
+    ],
+    "networking": [
+      "communication & protocols",
+      [
+        "http",
+        "grpc",
+        "message-queues",
+        "service-mesh",
+        "load-balancing"
+      ]
+    ],
+    "architecture": [
+      "system design & patterns",
+      [
+        "distributed-systems",
+        "event-driven",
+        "api-design",
+        "scalability",
+        "design-patterns"
+      ]
+    ],
+    "embedded-iot": [
+      "firmware & connected devices",
+      [
+        "firmware",
+        "rtos",
+        "iot-protocols",
+        "robotics",
+        "hardware-drivers"
+      ]
+    ],
+    "gamedev": [
+      "games & interactive media",
+      [
+        "game-engines",
+        "gameplay",
+        "physics-simulation",
+        "graphics-rendering",
+        "ar-vr"
+      ]
+    ],
+    "blockchain-web3": [
+      "distributed ledgers",
+      [
+        "smart-contracts",
+        "defi",
+        "consensus",
+        "wallets"
+      ]
+    ],
+    "developer-tools": [
+      "tooling for engineers",
+      [
+        "cli-tools",
+        "build-systems",
+        "code-analysis",
+        "linters",
+        "package-managers",
+        "ide-extensions"
+      ]
+    ],
+    "testing-qa": [
+      "verifying correctness",
+      [
+        "unit-testing",
+        "integration-testing",
+        "end-to-end",
+        "test-automation",
+        "load-testing"
+      ]
+    ],
+    "scientific-computing": [
+      "numerical & research code",
+      [
+        "numerical-methods",
+        "simulation",
+        "bioinformatics",
+        "high-performance-computing"
+      ]
+    ],
+    "data-science": [
+      "analysis & insight",
+      [
+        "exploratory-analysis",
+        "statistical-modeling",
+        "dashboards",
+        "experimentation"
+      ]
+    ],
+    "documentation-knowledge": [
+      "docs & knowledge systems",
+      [
+        "technical-writing",
+        "api-docs",
+        "knowledge-graphs",
+        "search-indexing"
+      ]
+    ],
+    "dev-process": [
+      "how software gets made",
+      [
+        "version-control",
+        "code-review",
+        "project-management",
+        "release-management"
+      ]
+    ]
+  },
+  "business": {
+    "_desc": "running and growing the company",
+    "strategy": [
+      "direction & competitive positioning",
+      [
+        "vision-mission",
+        "competitive-analysis",
+        "market-positioning",
+        "business-model",
+        "okrs-goals"
+      ]
+    ],
+    "finance": [
+      "money in, money out, planning",
+      [
+        "financial-planning",
+        "budgeting",
+        "accounting",
+        "unit-economics",
+        "revenue-modeling"
+      ]
+    ],
+    "fundraising": [
+      "raising capital",
+      [
+        "venture-capital",
+        "pitch-decks",
+        "investor-relations",
+        "cap-table",
+        "due-diligence"
+      ]
+    ],
+    "sales": [
+      "winning & growing customers",
+      [
+        "pipeline",
+        "deal-management",
+        "account-management",
+        "pricing",
+        "customer-success"
+      ]
+    ],
+    "marketing": [
+      "demand & brand",
+      [
+        "brand-strategy",
+        "content-marketing",
+        "growth",
+        "positioning",
+        "campaigns",
+        "seo"
+      ]
+    ],
+    "partnerships": [
+      "external relationships",
+      [
+        "business-development",
+        "alliances",
+        "channel-partnerships",
+        "vendor-relations"
+      ]
+    ],
+    "legal-compliance": [
+      "contracts, risk, regulation",
+      [
+        "contracts",
+        "intellectual-property",
+        "privacy-compliance",
+        "corporate-governance"
+      ]
+    ]
+  },
+  "product": {
+    "_desc": "what to build and how it should work",
+    "product-management": [
+      "what to build & why",
+      [
+        "roadmap",
+        "requirements",
+        "prioritization",
+        "product-strategy",
+        "discovery"
+      ]
+    ],
+    "product-design": [
+      "how it looks & feels",
+      [
+        "ux-design",
+        "ui-design",
+        "interaction-design",
+        "user-flows",
+        "prototyping"
+      ]
+    ],
+    "user-research": [
+      "understanding users",
+      [
+        "user-interviews",
+        "usability-testing",
+        "personas",
+        "feedback-analysis"
+      ]
+    ],
+    "product-analytics": [
+      "measuring the product",
+      [
+        "product-metrics",
+        "experimentation",
+        "funnel-analysis",
+        "retention-analysis"
+      ]
+    ]
+  },
+  "operations": {
+    "_desc": "running the company day-to-day",
+    "internal-operations": [
+      "processes & tooling that run the org",
+      [
+        "processes-workflows",
+        "internal-tooling",
+        "knowledge-management",
+        "vendor-management"
+      ]
+    ],
+    "process-improvement": [
+      "making operations better",
+      [
+        "automation",
+        "efficiency",
+        "continuous-improvement",
+        "standard-operating-procedures"
+      ]
+    ],
+    "it-operations": [
+      "internal systems & support",
+      [
+        "it-support",
+        "saas-management",
+        "identity-access",
+        "internal-security"
+      ]
+    ],
+    "facilities": [
+      "physical space & equipment",
+      [
+        "office-management",
+        "equipment",
+        "logistics"
+      ]
+    ]
+  },
+  "people": {
+    "_desc": "the team and organization",
+    "hiring": [
+      "recruiting & talent",
+      [
+        "recruiting",
+        "interviewing",
+        "sourcing",
+        "employer-brand",
+        "onboarding"
+      ]
+    ],
+    "org-structure": [
+      "teams, roles & reporting",
+      [
+        "org-design",
+        "roles-responsibilities",
+        "team-structure"
+      ]
+    ],
+    "team-development": [
+      "growth, performance & culture",
+      [
+        "performance-management",
+        "coaching",
+        "career-development",
+        "training",
+        "culture"
+      ]
+    ]
+  },
+  "research": {
+    "_desc": "exploring ideas, markets, and technology",
+    "market-research": [
+      "understanding the market",
+      [
+        "industry-analysis",
+        "competitor-research",
+        "trends",
+        "customer-research"
+      ]
+    ],
+    "technical-research": [
+      "exploring technology",
+      [
+        "literature-review",
+        "feasibility-study",
+        "proof-of-concept",
+        "technical-evaluation"
+      ]
+    ],
+    "concepts": [
+      "ideas, frameworks & mental models",
+      [
+        "frameworks",
+        "mental-models",
+        "theory",
+        "reference-notes"
+      ]
+    ]
+  }
+}

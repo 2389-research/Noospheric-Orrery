@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from ..dependencies import get_auth_store, AuthStore
 from ..repositories.factory import get_store
+from ..db import mark_graph_dirty
 from ..pipeline.embedding_normalizer import (
     run_batch_normalization,
     get_normalization_summary,
@@ -16,6 +17,9 @@ def trigger_normalization(auth: AuthStore = Depends(get_auth_store)):
     store = auth.store
     try:
         results = run_batch_normalization(store)
+        # Merges may have changed the graph — flag the snapshot for rebuild.
+        mark_graph_dirty(store.conn)
+        store.conn.commit()
     finally:
         store.close()
     return results
@@ -46,6 +50,10 @@ def resolve_review_item(review_id: str, action: str = "merge", auth: AuthStore =
     store = auth.store
     try:
         resolve_review(store, review_id, action)
+        # A merge edits the active graph; keep_separate does not.
+        if action == "merge":
+            mark_graph_dirty(store.conn)
+            store.conn.commit()
     finally:
         store.close()
     return {"status": "resolved", "action": action}

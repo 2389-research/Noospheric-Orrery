@@ -22,6 +22,10 @@ class Settings:
     simmer_iterations: int = 3
     chunk_size: int = 2000
     worker_poll_interval: int = 5
+    # /graph snapshot: how many nodes the viz renders (positions are stored for
+    # all), and how often the background task checks the dirty bit to rebuild.
+    graph_render_max_nodes: int = 3000
+    graph_snapshot_rebuild_interval: int = 20
     db_path: str = "/data/orrery.db"
     documents_dir: str = "/data/documents"
     specs_dir: str = "/data/specs"

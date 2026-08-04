@@ -5,12 +5,14 @@ import uuid
 import os
 import json
 import hashlib
+import re
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Response, status
 from orrery_relay import Relay
 
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
+from ..db import mark_graph_dirty
 from ..models import IngestResult, DirectoryIngestRequest, RepoIngestRequest
 from ..pipeline.chunker import chunk_document, chunk_by_sections
 from ..pipeline.excerpt import build_classification_excerpt
@@ -60,6 +62,29 @@ RESEARCH_PAPER_SPECS = _load_research_paper_specs()
 # Domain path that triggers the built-in section-stratified spec directory
 # (used when no simmered spec override exists yet for research_paper or its ancestors).
 RESEARCH_PAPER_DOMAIN = "research_paper"
+
+# Structural signal that a document is a research paper, independent of whatever
+# topic domain the LLM classifier assigns it (e.g. "science/robotics/..."). The
+# classifier has no notion that "research_paper" is a special flat domain, so it
+# never proposes it on its own — detect the paper shape directly instead.
+_RESEARCH_PAPER_FILE_EXTENSIONS = PDF_EXTENSIONS | DOCX_EXTENSIONS
+_ABSTRACT_MARKER = re.compile(r"\babstract\b", re.IGNORECASE)
+_REFERENCES_MARKER = re.compile(r"^\s*(?:\d+\.?\s*)?(?:references|bibliography)\s*$", re.IGNORECASE | re.MULTILINE)
+_ABSTRACT_SEARCH_WINDOW = 3000
+
+
+def _looks_like_research_paper(title: str, source_path: str | None, content: str) -> bool:
+    """A PDF/DOCX upload with an "Abstract" marker near the top and a
+    References/Bibliography heading later on. Deliberately lenient substring/
+    line match rather than section_splitter's strict whole-line heading regex —
+    this is a cheap yes/no gate, not the actual section-boundary detection
+    (label_sections + its LLM fallback handle precision downstream). No LLM call."""
+    name = (source_path or title or "").lower()
+    if not name.endswith(tuple(_RESEARCH_PAPER_FILE_EXTENSIONS)):
+        return False
+    if not _ABSTRACT_MARKER.search(content[:_ABSTRACT_SEARCH_WINDOW]):
+        return False
+    return bool(_REFERENCES_MARKER.search(content))
 
 
 def _unique_title(store, title: str) -> str:
@@ -124,6 +149,16 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
     )
 
     domains = assign_document_domains(store, doc_id, classification)
+
+    # Force-assign the research_paper domain by structure, independent of what
+    # the classifier decided — see _looks_like_research_paper.
+    if RESEARCH_PAPER_DOMAIN not in domains and _looks_like_research_paper(title, source_path, content):
+        if not store.domains.get(RESEARCH_PAPER_DOMAIN):
+            store.domains.create(str(uuid.uuid4()), RESEARCH_PAPER_DOMAIN, None)
+        store.domains.assign_document(doc_id, RESEARCH_PAPER_DOMAIN, False, 1.0)
+        store.domains.increment_doc_count(RESEARCH_PAPER_DOMAIN)
+        domains.append(RESEARCH_PAPER_DOMAIN)
+
     store.documents.update_status(doc_id, "classified")
 
     # 3. Extract — use simmered general spec if available, otherwise built-in general spec
@@ -270,6 +305,10 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
         if not existing_job:
             store.jobs.create(str(uuid.uuid4()), "embed_index", "default")
 
+    # New document/entities/domains changed the graph — flag the snapshot for rebuild.
+    mark_graph_dirty(store.conn)
+    store.conn.commit()
+
     return {
         "document_id": doc_id,
         "title": title,
@@ -394,6 +433,10 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
             store.conn.commit()
     except Exception as e:
         print(f"SigLIP embedding after image ingest: {e}", flush=True)
+
+    # New document/entities/domains changed the graph — flag the snapshot for rebuild.
+    mark_graph_dirty(store.conn)
+    store.conn.commit()
 
     return {
         "document_id": doc_id, "title": title, "domains": domains,

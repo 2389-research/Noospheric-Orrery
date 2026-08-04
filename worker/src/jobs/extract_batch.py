@@ -5,7 +5,7 @@ import json
 import uuid
 from itertools import combinations
 from orrery_relay import Relay
-from ..db import get_connection
+from ..db import get_connection, mark_graph_dirty
 from ..config import get_settings
 
 async def run_extract_batch(job: dict, db_path: str) -> None:
@@ -29,6 +29,10 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
 
     if scope == "all_classified":
         docs = conn.execute("SELECT id FROM documents WHERE status = 'classified'").fetchall()
+    elif scope == "code_intent":
+        docs = conn.execute(
+            "SELECT id FROM documents WHERE content_type = 'code_intent' AND status = 'classified'"
+        ).fetchall()
     else:
         domain = config.get("domain")
         docs = conn.execute("""SELECT d.id FROM documents d
@@ -134,4 +138,8 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
     except Exception as e:
         print(f"Normalization failed: {e}", flush=True)
     finally:
+        # New entities + co-occurrence edges (and any merges) changed the
+        # graph — flag the snapshot for rebuild.
+        mark_graph_dirty(norm_conn)
+        norm_conn.commit()
         norm_conn.close()

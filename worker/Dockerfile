@@ -11,6 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && \
 COPY packages/orrery-relay/ /app/packages/orrery-relay/
 COPY packages/orrery-codesum/ /app/packages/orrery-codesum/
 
+# Bundle the canonical taxonomy (authored once at orchestrator/specs/taxonomy.json —
+# see worker/src/taxonomy.py) so the worker image has its own copy, since it doesn't
+# ship the orchestrator directory.
+COPY orchestrator/specs/taxonomy.json /app/worker/taxonomy.json
+
 WORKDIR /app/worker
 
 # Install dependencies from lockfile (deps only — project not yet copied)

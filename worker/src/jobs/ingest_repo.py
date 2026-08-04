@@ -13,7 +13,7 @@ from orrery_codesum import build_provides_map, make_summarize_fn, repo_import_ed
 from orrery_relay import Relay
 from ..classifier import classify_document
 from ..config import get_settings
-from ..db import get_connection
+from ..db import get_connection, mark_graph_dirty
 
 MANIFEST_FILENAMES = ("pyproject.toml", "setup.py", "package.json", "go.mod")
 
@@ -294,13 +294,13 @@ async def run_ingest_repo(job: dict, db_path: str) -> None:
                         (from_repo, to_repo),
                     )
 
-        # Enqueue Phase 2 (extract_batch over the new code_intent docs). This
-        # worktree's extract_batch job has no "code_intent"-specific scope (it
-        # predates that addition) — "all_classified" picks up any document with
-        # status='classified', which the code_intent docs above already have.
+        # Enqueue Phase 2 (extract_batch over the new code_intent docs), scoped to
+        # content_type='code_intent' — NOT "all_classified", which would also sweep
+        # up every unrelated classified document (e.g. stuck research papers) still
+        # sitting in the workspace.
         conn.execute(
             "INSERT INTO jobs (id, type, target, status, config) VALUES (?, 'extract_batch', ?, 'queued', ?)",
-            (str(uuid.uuid4()), repo_id, json.dumps({"spec_id": spec_id, "scope": "all_classified"})),
+            (str(uuid.uuid4()), repo_id, json.dumps({"spec_id": spec_id, "scope": "code_intent"})),
         )
 
         # Record the Phase-1 outcome on this job so it's queryable via GET /jobs.
@@ -317,6 +317,8 @@ async def run_ingest_repo(job: dict, db_path: str) -> None:
         conn.execute("UPDATE jobs SET result = ? WHERE id = ?", (json.dumps(result), job["id"]))
         print(f"[ingest_repo] {repo_name}: done in {result['elapsed_s']}s — enqueued extract_batch", flush=True)
 
+        # New docs/domains/repos changed the graph — flag the snapshot for rebuild.
+        mark_graph_dirty(conn)
         conn.commit()
     finally:
         conn.close()

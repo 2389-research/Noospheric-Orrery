@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -9,6 +10,75 @@ from .repositories.factory import _sqlite_workspace_db_path
 
 logger = logging.getLogger(__name__)
 
+
+def _active_workspace_ids() -> list[str]:
+    """The 'default' noosphere plus every non-archived one in the registry."""
+    ids = ["default"]
+    registry_path = os.path.join(
+        os.path.dirname(get_settings().db_path), "workspaces", "registry.json"
+    )
+    try:
+        import json
+        if os.path.exists(registry_path):
+            with open(registry_path) as f:
+                registry = json.load(f)
+        else:
+            registry = []
+    except Exception as e:
+        logger.warning("Noosphere registry unreadable (%s): %s", registry_path, e)
+        return ids
+    for ws in registry:
+        if ws.get("status") == "archived":
+            continue
+        ws_id = ws.get("id")
+        if ws_id and ws_id not in ids:
+            ids.append(ws_id)
+    return ids
+
+
+async def _rebuild_dirty_snapshots() -> None:
+    """One sweep: rebuild the graph snapshot for every workspace flagged dirty.
+
+    The CPU-bound build (embeddings/UMAP + aggregation) runs in a worker thread
+    so it never blocks the event loop. A burst of writes between sweeps
+    collapses into a single rebuild (debounce via the dirty bit).
+    """
+    from .pipeline.graph_snapshot import is_dirty, rebuild_snapshot
+    from .repositories.factory import get_store
+    settings = get_settings()
+
+    def _rebuild_one(ws_id: str):
+        store = get_store(workspace_id=ws_id)
+        try:
+            if not is_dirty(store):
+                return None
+            payload = rebuild_snapshot(
+                store, max_render_nodes=settings.graph_render_max_nodes
+            )
+            return payload.get("total_node_count", 0)
+        finally:
+            store.close()
+
+    for ws_id in _active_workspace_ids():
+        try:
+            n = await asyncio.to_thread(_rebuild_one, ws_id)
+            if n is not None:
+                logger.info("Graph snapshot rebuilt for %s (%d nodes)", ws_id, n)
+        except Exception:
+            logger.warning("Graph snapshot rebuild failed for %s", ws_id, exc_info=True)
+
+
+async def _snapshot_rebuild_loop(interval: int) -> None:
+    while True:
+        try:
+            await _rebuild_dirty_snapshots()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Snapshot rebuild loop iteration failed", exc_info=True)
+        await asyncio.sleep(interval)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Run schema + migrations for the default noosphere up front so the first
@@ -16,25 +86,7 @@ async def lifespan(app: FastAPI):
     init_db(_sqlite_workspace_db_path("default"))
     # Also init any noospheres already in the registry so their first request
     # is a fast read instead of a write-locked migration.
-    registry_path = os.path.join(
-        os.path.dirname(get_settings().db_path), "workspaces", "registry.json"
-    )
-    registry: list[dict] = []
-    try:
-        import json
-        if os.path.exists(registry_path):
-            with open(registry_path) as f:
-                registry = json.load(f)
-    except Exception as e:
-        # File missing or unparseable — skip warmup; lazy init still works.
-        logger.warning("Noosphere registry unreadable (%s): %s", registry_path, e)
-    for ws in registry:
-        if ws.get("status") == "archived":
-            continue
-        ws_id = ws.get("id")
-        if not ws_id:
-            logger.warning("Skipping registry entry without id: %r", ws)
-            continue
+    for ws_id in _active_workspace_ids():
         try:
             init_db(_sqlite_workspace_db_path(ws_id))
         except Exception:
@@ -46,7 +98,24 @@ async def lifespan(app: FastAPI):
         _embed_texts(["warmup"])
     except Exception:
         pass  # No embedding available — circular layout fallback
+
+    # Background task: rebuild dirty graph snapshots so /graph serves O(1) cache.
+    # Skipped under tests — a shared test store must not be rebuilt/closed from
+    # a background thread (tests drive /graph's inline build directly).
+    from .repositories import factory
+    snapshot_task = None
+    interval = get_settings().graph_snapshot_rebuild_interval
+    if interval > 0 and factory._test_store is None:
+        snapshot_task = asyncio.create_task(_snapshot_rebuild_loop(interval))
+
     yield
+
+    if snapshot_task is not None:
+        snapshot_task.cancel()
+        try:
+            await snapshot_task
+        except asyncio.CancelledError:
+            pass
 
 app = FastAPI(title="Noospheric Orrery", lifespan=lifespan)
 app.add_middleware(
@@ -54,6 +123,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Total-Count"],
 )
 
 from .routes.ingest import router as ingest_router

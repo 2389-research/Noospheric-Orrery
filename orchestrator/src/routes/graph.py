@@ -2,7 +2,6 @@
 
 import math
 import numpy as np
-from collections import defaultdict
 from fastapi import APIRouter, Depends
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
@@ -155,96 +154,19 @@ def _layout_domains(domains: list[dict]) -> dict[str, dict]:
 
 @router.get("/graph")
 def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
-    """Return graph data in cosmic_data_v4 format.
+    """Return graph data in cosmic_data_v4 format from the cached snapshot.
 
-    Computes domain positions via UMAP (or circular fallback).
+    The payload is materialized once and served cached (O(1)); writers flip
+    `graph_snapshot.dirty` and the orchestrator's background task rebuilds. Only
+    a completely-missing snapshot triggers an inline build here. See
+    `pipeline/graph_snapshot.py`.
     """
+    from ..pipeline.graph_snapshot import get_or_build
     store = auth.store
-
-    # Get all domains with docs
-    domain_objs = store.domains.list(min_doc_count=1)
-    domains = [{"id": d.id, "path": d.path, "parent_path": d.parent_path,
-                "doc_count": d.document_count, "spec_version": d.spec_version} for d in domain_objs]
-
-    # Domain positions via UMAP (ensure_layout handles fallback)
-    from ..pipeline.domain_layout import ensure_layout
-    domain_positions = ensure_layout(store)
-
-    domain_doc_counts = {d["path"]: d["doc_count"] for d in domains}
-    region_colors = _assign_domain_colors(domains)
-    for d in domains:
-        region = d["path"].split("/")[0]
-        if region not in region_colors:
-            region_colors[region] = region_colors.get(d["path"], "#81d4fa")
-
-    subdomains = [d["path"] for d in domains if d["path"].count("/") >= 2]
-
-    # Entities with domain weights — single batch query instead of N+1
-    all_entities = store.entities.list(limit=5000)
-    weight_rows = store.conn.execute("""
-        SELECT es.entity_id, dd.domain_path, COUNT(*) as weight
-        FROM entity_sources es
-        JOIN document_domains dd ON es.document_id = dd.document_id
-        GROUP BY es.entity_id, dd.domain_path
-    """).fetchall()
-
-    # Build per-entity raw weights
-    raw_weights: dict[str, dict[str, int]] = defaultdict(dict)
-    for r in weight_rows:
-        raw_weights[r[0]][r[1]] = r[2]
-
-    # Normalize to fractions
-    entity_domain_weights: dict[str, dict[str, float]] = {}
-    for eid, dw in raw_weights.items():
-        total = sum(dw.values())
-        if total > 0:
-            entity_domain_weights[eid] = {dp: round(w / total, 3) for dp, w in dw.items()}
-
-    entities = []
-    for e in all_entities:
-        dw = entity_domain_weights.get(e.id, {})
-        if not dw:
-            continue
-        entities.append({
-            "entityId": e.id, "name": e.canonical_name, "type": e.type,
-            "videoCount": e.source_count, "domainWeights": dw,
-        })
-
-    # Trade routes
-    trade_routes = store.relationships.get_trade_routes()
-
-    # Recent documents
-    recent_docs = store.documents.get_recent(limit=50)
-    videos = [{"id": d.id, "title": d.title, "domains": d.domains,
-               "primary": d.domains[0] if d.domains else None,
-               "content_type": getattr(d, "content_type", "text")} for d in recent_docs]
-
-    # Domain specs
-    domain_specs = {}
-    for d in domains:
-        if d["spec_version"]:
-            domain_specs[d["path"]] = {"spec_version": d["spec_version"]}
-        else:
-            domain_specs[d["path"]] = None
-
-    # Active simmers
-    running_jobs = store.jobs.list(status_filter="running")
-    active_simmers = [j.target for j in running_jobs if j.type.startswith("simmer_")]
-
-    store.close()
-
-    return {
-        "domain_positions": domain_positions,
-        "domain_video_counts": domain_doc_counts,
-        "domain_specs": domain_specs,
-        "active_simmers": active_simmers,
-        "region_colors": region_colors,
-        "subdomains": subdomains,
-        "videos": videos,
-        "entities": entities,
-        "v3_entities": [],
-        "trade_routes": trade_routes,
-    }
+    try:
+        return get_or_build(store)
+    finally:
+        store.close()
 
 
 def _layout_domains_umap(domains: list[dict], conn) -> dict[str, dict]:

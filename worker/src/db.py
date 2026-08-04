@@ -207,6 +207,19 @@ CREATE TABLE IF NOT EXISTS specs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     media_type TEXT DEFAULT 'text'
 );
+
+-- Materialized read-model of the /graph payload. One logical row (id='current').
+-- The graph only changes when a job writes to it, so we compute the payload once
+-- and serve it cached. Writers flip `dirty=1`; the orchestrator rebuilds in the
+-- background. See orchestrator/src/pipeline/graph_snapshot.py.
+CREATE TABLE IF NOT EXISTS graph_snapshot (
+    id TEXT PRIMARY KEY DEFAULT 'current',
+    payload TEXT,
+    built_at TIMESTAMP,
+    entity_count INTEGER DEFAULT 0,
+    edge_count INTEGER DEFAULT 0,
+    dirty INTEGER DEFAULT 1
+);
 """
 
 def init_db(db_path: str) -> None:
@@ -262,6 +275,16 @@ def init_db(db_path: str) -> None:
             conn.execute(f"ALTER TABLE normalization_log ADD COLUMN {col} {decl}")
     # Backfill: existing merge-log rows predate `action`
     conn.execute("UPDATE normalization_log SET action = 'merge' WHERE action IS NULL")
+    # entity_sources has no PK; without these indexes the graph build's
+    # per-entity source_count + the trade-route/repo self-joins scan the
+    # whole table (30s+ on a large graph). Also speeds entities.list.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_sources_entity ON entity_sources(entity_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_sources_document ON entity_sources(document_id)")
+    # Seed the single snapshot row (dirty, empty) so writers can flip the
+    # dirty bit with a plain UPDATE even before the first build.
+    conn.execute(
+        "INSERT OR IGNORE INTO graph_snapshot (id, dirty) VALUES ('current', 1)"
+    )
     conn.commit()
     conn.close()
 
@@ -271,3 +294,16 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     return conn
+
+
+def mark_graph_dirty(conn) -> None:
+    """Flag the cached /graph snapshot for rebuild.
+
+    Called after any write that changes the graph (extract, ingest_repo).
+    One idempotent DB write; the orchestrator's background task debounces
+    bursts into a single rebuild. The caller owns the commit.
+    """
+    conn.execute(
+        "INSERT INTO graph_snapshot (id, dirty) VALUES ('current', 1) "
+        "ON CONFLICT(id) DO UPDATE SET dirty = 1"
+    )
