@@ -178,3 +178,27 @@ stapler validates the ticket.
 
 Update this plan's execution status with the run ID and Gatekeeper result,
 then commit the update.
+
+---
+
+## Execution status — 2026-08-04
+
+Complete on branch `fix/macos-nested-code-signing`.
+
+- Runs `30944030029` and `30944413940` exposed that an imported identity's
+  keychain must also be on the user's keychain search list. The workflow now
+  saves that list, adds the ephemeral keychain, and restores the list before
+  deleting the keychain.
+- Run `30945047267` passed app notarization and exposed that Tauri notarized
+  the inner app before creating the signed DMG. The downloaded DMG failed
+  Gatekeeper with `source=Unnotarized Developer ID`.
+- Final run `30946361228` passed nested signing, app notarization, finished-DMG
+  notarization and stapling, credential cleanup, and dry-run artifact upload.
+  Apple accepted both submissions.
+- Independent verification of the downloaded final DMG passed `hdiutil
+  verify`, DMG and deep app `codesign --verify`, app and DMG Gatekeeper checks,
+  app staple validation, and strict Developer ID/timestamp/hardened-runtime
+  checks for uv, Sharp, and libvips. Both Gatekeeper checks reported
+  `source=Notarized Developer ID`.
+- Tagged runs replace Tauri's pre-DMG-notarization draft asset with the final
+  stapled DMG before publishing the release.
