@@ -31,7 +31,8 @@ npm run tauri build  # produce installers (.deb / AppImage / etc.)
 
 ## Releasing
 
-Push a `v*` tag (e.g. `v0.5.0`) — the `release-desktop.yml` workflow builds
+Push a semver tag — `vMAJOR.MINOR.PATCH` with an optional `-prerelease`
+suffix (e.g. `v0.5.0`, `v0.5.0-rc1`) — and the `release-desktop.yml` workflow builds
 the app on macOS CI, signs it with the 2389 Developer ID certificate,
 notarizes it with Apple, and publishes a GitHub Release with the `.dmg`.
 The app version comes from the tag; don't bump `tauri.conf.json` manually.
