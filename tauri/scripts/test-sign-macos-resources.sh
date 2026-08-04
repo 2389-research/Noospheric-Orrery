@@ -28,17 +28,48 @@ import_line="$(grep -n -m1 -- '- name: Import Developer ID certificate' "$WORKFL
 sign_line="$(grep -n -m1 -- '- name: Sign staged native resources' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
 cleanup_line="$(grep -n -m1 -- '- name: Remove nested-signing credentials' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
 tauri_action_line="$(grep -n -m1 -- 'uses: tauri-apps/tauri-action@v0' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
+notarize_dmg_line="$(grep -n -m1 -- '- name: Notarize and staple disk image' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
+upload_dry_run_line="$(grep -n -m1 -- '- name: Upload dry-run artifacts' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
+replace_release_dmg_line="$(grep -n -m1 -- '- name: Replace release disk image' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
+publish_release_line="$(grep -n -m1 -- '- name: Publish release' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
+api_key_cleanup_line="$(grep -n -m1 -- '- name: Remove notarization API key' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
+api_key_block="$(workflow_step_block "Write App Store Connect API key")"
 import_block="$(workflow_step_block "Import Developer ID certificate")"
 sign_block="$(workflow_step_block "Sign staged native resources")"
 cleanup_block="$(workflow_step_block "Remove nested-signing credentials")"
+notarize_dmg_block="$(workflow_step_block "Notarize and staple disk image")"
+upload_dry_run_block="$(workflow_step_block "Upload dry-run artifacts")"
+replace_release_dmg_block="$(workflow_step_block "Replace release disk image")"
+publish_release_block="$(workflow_step_block "Publish release")"
+api_key_cleanup_block="$(workflow_step_block "Remove notarization API key")"
 
 [[ -n "$import_line" ]] || record_failure "release workflow is missing the certificate import step"
 [[ -n "$sign_line" ]] || record_failure "release workflow is missing the native resource signing step"
 [[ -n "$cleanup_line" ]] || record_failure "release workflow is missing the nested-signing cleanup step"
 [[ -n "$tauri_action_line" ]] || record_failure "release workflow is missing the Tauri action step"
+[[ -n "$notarize_dmg_line" ]] || record_failure "release workflow is missing disk-image notarization"
+[[ -n "$upload_dry_run_line" ]] || record_failure "release workflow is missing dry-run artifact upload"
+[[ -n "$replace_release_dmg_line" ]] || record_failure "release workflow does not replace the draft release's pre-notarization disk image"
+[[ -n "$publish_release_line" ]] || record_failure "release workflow is missing release publication"
+[[ -n "$api_key_cleanup_line" ]] || record_failure "release workflow does not remove the notarization API key"
 if [[ -n "$import_line" && -n "$sign_line" && -n "$cleanup_line" && -n "$tauri_action_line" ]] \
   && ! ((import_line < sign_line && sign_line < cleanup_line && cleanup_line < tauri_action_line)); then
   record_failure "release workflow must import the certificate, sign native resources, clean credentials, then run the Tauri action"
+fi
+if [[ -n "$tauri_action_line" && -n "$notarize_dmg_line" && -n "$api_key_cleanup_line" && -n "$upload_dry_run_line" \
+  && -n "$replace_release_dmg_line" && -n "$publish_release_line" ]] \
+  && ! ((tauri_action_line < notarize_dmg_line \
+    && notarize_dmg_line < api_key_cleanup_line \
+    && api_key_cleanup_line < upload_dry_run_line \
+    && upload_dry_run_line < replace_release_dmg_line \
+    && replace_release_dmg_line < publish_release_line)); then
+  record_failure "release workflow must notarize the DMG before uploading or publishing it"
+fi
+api_key_umask_line="$(grep -n -m1 -E '^[[:space:]]+umask[[:space:]]+077' <<<"$api_key_block" | cut -d: -f1 || true)"
+api_key_write_line="$(grep -n -m1 -F 'AuthKey.p8' <<<"$api_key_block" | tail -n 1 | cut -d: -f1 || true)"
+if [[ -z "$api_key_umask_line" || -z "$api_key_write_line" ]] \
+  || ! ((api_key_umask_line < api_key_write_line)); then
+  record_failure "App Store Connect API key is not written with restricted permissions"
 fi
 if ! grep -Eq 'APPLE_KEYCHAIN_PATH=.*GITHUB_ENV' <<<"$import_block"; then
   record_failure "certificate import does not export APPLE_KEYCHAIN_PATH via GITHUB_ENV"
@@ -93,6 +124,40 @@ if ! grep -Fq "\"\$RUNNER_TEMP/certificate.p12\"" <<<"$cleanup_block"; then
 fi
 if ! grep -Fq "\"\$original_keychains_temp\"" <<<"$cleanup_block"; then
   record_failure "nested-signing cleanup does not remove an incomplete keychain-list snapshot"
+fi
+for notarize_command in \
+  'xcrun notarytool submit' \
+  "--key \"\$APPLE_API_KEY_PATH\"" \
+  "--key-id \"\$APPLE_API_KEY\"" \
+  "--issuer \"\$APPLE_API_ISSUER\"" \
+  '--wait' \
+  'xcrun stapler staple' \
+  'xcrun stapler validate' \
+  'hdiutil verify' \
+  'codesign --verify' \
+  'spctl --assess --verbose=4 --type open' \
+  '--context context:primary-signature'; do
+  if ! grep -Fq -- "$notarize_command" <<<"$notarize_dmg_block"; then
+    record_failure "disk-image notarization is missing: $notarize_command"
+  fi
+done
+if ! grep -Eq "^[[:space:]]+if:[[:space:]]+github.ref_type != 'tag'" <<<"$upload_dry_run_block"; then
+  record_failure "dry-run artifact upload does not exclude tags"
+fi
+if ! grep -Eq "^[[:space:]]+if:[[:space:]]+github.ref_type == 'tag'" <<<"$replace_release_dmg_block"; then
+  record_failure "release DMG replacement does not require a tag"
+fi
+if ! grep -Eq "^[[:space:]]+if:[[:space:]]+github.ref_type == 'tag'" <<<"$publish_release_block"; then
+  record_failure "release publication does not require a tag"
+fi
+if ! grep -Fq 'gh release upload' <<<"$replace_release_dmg_block" \
+  || ! grep -Fq -- '--clobber' <<<"$replace_release_dmg_block"; then
+  record_failure "tagged release does not replace Tauri's pre-notarization DMG asset"
+fi
+if ! grep -Eq '^[[:space:]]+if:[[:space:]]+always\(\)' <<<"$api_key_cleanup_block" \
+  || ! grep -Fq "api_key_path=\"\${APPLE_API_KEY_PATH:-\$RUNNER_TEMP/AuthKey.p8}\"" <<<"$api_key_cleanup_block" \
+  || ! grep -Fq "rm -f \"\$api_key_path\"" <<<"$api_key_cleanup_block"; then
+  record_failure "notarization API key cleanup is not unconditional"
 fi
 
 if ((FAILURE_COUNT > 0)); then

@@ -52,6 +52,7 @@ jobs:
 
       - name: Write App Store Connect API key
         run: |
+          umask 077
           printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/AuthKey.p8"
           echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
         env:
@@ -164,6 +165,36 @@ jobs:
           prerelease: ${{ github.ref_type == 'tag' && contains(github.ref_name, '-') }}
           includeUpdaterJson: false
 
+      - name: Notarize and staple disk image
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          shopt -s nullglob
+          disk_images=(tauri/src-tauri/target/release/bundle/dmg/*.dmg)
+          if ((${#disk_images[@]} != 1)); then
+            echo "Expected one disk image, found ${#disk_images[@]}" >&2
+            exit 1
+          fi
+          dmg_path="${disk_images[0]}"
+          xcrun notarytool submit "$dmg_path" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$dmg_path"
+          xcrun stapler validate "$dmg_path"
+          hdiutil verify "$dmg_path"
+          codesign --verify --verbose=4 "$dmg_path"
+          spctl --assess --verbose=4 --type open \
+            --context context:primary-signature "$dmg_path"
+
+      - name: Remove notarization API key
+        if: always()
+        run: |
+          api_key_path="${APPLE_API_KEY_PATH:-$RUNNER_TEMP/AuthKey.p8}"
+          rm -f "$api_key_path"
+
       - name: Upload dry-run artifacts
         if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
@@ -171,6 +202,20 @@ jobs:
           name: noospheric-macos-dry-run
           path: tauri/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
+
+      - name: Replace release disk image
+        if: github.ref_type == 'tag'
+        run: |
+          shopt -s nullglob
+          disk_images=(tauri/src-tauri/target/release/bundle/dmg/*.dmg)
+          if ((${#disk_images[@]} != 1)); then
+            echo "Expected one disk image, found ${#disk_images[@]}" >&2
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" "${disk_images[0]}" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
 
       - name: Publish release
         if: github.ref_type == 'tag'
