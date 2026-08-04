@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.get("/search")
-async def search_query(q: str, top_k: int = 20, expand: bool = True, include_images: bool = False, auth: AuthStore = Depends(get_auth_store)):
+async def search_query(q: str, top_k: int = 20, expand: bool = False, include_images: bool = False, auth: AuthStore = Depends(get_auth_store)):
     """Search the knowledge graph.
 
     Full 5-stage pipeline: expansion → retrieval → entity-boost → fusion → response.

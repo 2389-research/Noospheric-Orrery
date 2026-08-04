@@ -73,7 +73,7 @@ def _retrieve_for_subquery(conn: sqlite3.Connection, query: str) -> SubQueryResu
 async def search_knowledge_graph(
     conn: sqlite3.Connection,
     query: str,
-    expand: bool = True,
+    expand: bool = False,
     relay: "Relay | None" = None,
     top_k: int = 20,
 ) -> SearchResponse:

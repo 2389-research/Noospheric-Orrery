@@ -4,7 +4,7 @@ from dataclasses import dataclass
 @dataclass
 class SearchConfig:
     # Expansion
-    expansion_enabled: bool = True
+    expansion_enabled: bool = False
     expansion_max_sub_queries: int = 5
 
     # Retrieval
