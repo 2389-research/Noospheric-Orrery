@@ -205,9 +205,12 @@ Implementation and dry-run verification are complete on branch
 - Run `30945047267` passed app notarization and exposed that Tauri notarized
   the inner app before creating the signed DMG. The downloaded DMG failed
   Gatekeeper with `source=Unnotarized Developer ID`.
-- Final run `30946361228` passed nested signing, app notarization, finished-DMG
-  notarization and stapling, credential cleanup, and dry-run artifact upload.
-  Apple accepted both submissions.
+- Run `30946361228` passed the complete pipeline before review. Review then
+  tightened identity selection and made the production signer enforce the
+  exact authority, secure timestamp, and hardened-runtime flag.
+- Final reviewed run `30948778739` passed nested signing, app notarization,
+  finished-DMG notarization and stapling, credential cleanup, and dry-run
+  artifact upload. Apple accepted both submissions.
 - Independent verification of the downloaded final DMG passed `hdiutil
   verify`, DMG and deep app `codesign --verify`, app and DMG Gatekeeper checks,
   app staple validation, and strict Developer ID/timestamp/hardened-runtime
