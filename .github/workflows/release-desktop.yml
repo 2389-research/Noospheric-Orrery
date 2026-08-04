@@ -84,15 +84,20 @@ jobs:
             -s \
             -k "$KEYCHAIN_PASSWORD" \
             "$keychain_path"
-          security find-identity -v -p codesigning "$keychain_path"
+          identity_output="$(security find-identity -v -p codesigning "$keychain_path")"
+          printf '%s\n' "$identity_output"
+          signing_identity="$(awk 'length($2) == 40 && $2 ~ /^[[:xdigit:]]+$/ { print $2; exit }' <<< "$identity_output")"
+          if [[ -z "$signing_identity" ]]; then
+            echo "No code-signing identity found in $keychain_path" >&2
+            exit 1
+          fi
           echo "APPLE_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
+          echo "APPLE_SIGNING_IDENTITY=$signing_identity" >> "$GITHUB_ENV"
 
       - name: Test native resource signing
         run: bash tauri/scripts/test-sign-macos-resources.sh
 
       - name: Sign staged native resources
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: bash tauri/scripts/sign-macos-resources.sh tauri/src-tauri/resources
 
       - name: Remove nested-signing credentials

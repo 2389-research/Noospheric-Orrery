@@ -43,6 +43,9 @@ fi
 if ! grep -Eq 'APPLE_KEYCHAIN_PATH=.*GITHUB_ENV' <<<"$import_block"; then
   record_failure "certificate import does not export APPLE_KEYCHAIN_PATH via GITHUB_ENV"
 fi
+if ! grep -Eq 'APPLE_SIGNING_IDENTITY=.*GITHUB_ENV' <<<"$import_block"; then
+  record_failure "certificate import does not export its resolved signing identity via GITHUB_ENV"
+fi
 umask_line="$(grep -n -m1 -E '^[[:space:]]+umask[[:space:]]+077' <<<"$import_block" | cut -d: -f1 || true)"
 certificate_path_line="$(grep -n -m1 -F "certificate_path=\"\$RUNNER_TEMP/certificate.p12\"" <<<"$import_block" | cut -d: -f1 || true)"
 certificate_write_line="$(grep -n -m1 -F "base64 --decode > \"\$certificate_path\"" <<<"$import_block" | cut -d: -f1 || true)"
@@ -68,8 +71,8 @@ done
 if ! grep -Fq 'bash tauri/scripts/sign-macos-resources.sh tauri/src-tauri/resources' <<<"$sign_block"; then
   record_failure "native resource signing step does not invoke the signing script"
 fi
-if ! grep -Eq '^[[:space:]]+APPLE_SIGNING_IDENTITY:[[:space:]]+' <<<"$sign_block"; then
-  record_failure "native resource signing step does not receive APPLE_SIGNING_IDENTITY"
+if grep -Fq 'secrets.APPLE_SIGNING_IDENTITY' <<<"$sign_block"; then
+  record_failure "native resource signing step overrides the identity resolved from its keychain"
 fi
 if ! grep -Eq '^[[:space:]]+if:[[:space:]]+always\(\)' <<<"$cleanup_block"; then
   record_failure "nested-signing cleanup does not run after failures"
