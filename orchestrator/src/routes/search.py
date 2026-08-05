@@ -129,6 +129,22 @@ def _search_images(conn, query: str, top_k: int = 10) -> list[dict]:
     return [{"document_id": r[0], "title": r[1], "description": (r[2] or "")[:200], "score": 1.0} for r in rows]
 
 
+@router.get("/search/concepts")
+async def search_concepts(q: str, top_k: int = 20, auth: AuthStore = Depends(get_auth_store)):
+    """Explore concepts for a query: resolve entities, traverse cooccurrences, ground
+    in source excerpts, synthesize 3 gap/tension concepts. See docs/concept-explorer/README.md."""
+    settings = get_settings()
+    store = auth.store
+    relay = Relay.from_settings(settings)
+
+    from ..pipeline.concept_explorer import explore_concepts
+    result = await explore_concepts(
+        relay, settings.classification_model, store.conn, store, q, top_k=top_k,
+    )
+    store.close()
+    return result
+
+
 @router.post("/search/rebuild")
 def rebuild_search_index(auth: AuthStore = Depends(get_auth_store)):
     """Rebuild FAISS search indexes — re-embeds entities and chunks missing embeddings."""
