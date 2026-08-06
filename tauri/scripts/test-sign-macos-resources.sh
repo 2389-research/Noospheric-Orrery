@@ -28,6 +28,7 @@ import_line="$(grep -n -m1 -- '- name: Import Developer ID certificate' "$WORKFL
 sign_line="$(grep -n -m1 -- '- name: Sign staged native resources' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
 cleanup_line="$(grep -n -m1 -- '- name: Remove nested-signing credentials' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
 tauri_action_line="$(grep -n -m1 -- 'uses: tauri-apps/tauri-action@v0' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
+verify_node_line="$(grep -n -m1 -- '- name: Verify bundled node entitlements' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
 notarize_dmg_line="$(grep -n -m1 -- '- name: Notarize and staple disk image' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
 upload_dry_run_line="$(grep -n -m1 -- '- name: Upload dry-run artifacts' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
 replace_release_dmg_line="$(grep -n -m1 -- '- name: Replace release disk image' "$WORKFLOW_FILE" | cut -d: -f1 || true)"
@@ -38,6 +39,7 @@ import_block="$(workflow_step_block "Import Developer ID certificate")"
 test_block="$(workflow_step_block "Test native resource signing")"
 sign_block="$(workflow_step_block "Sign staged native resources")"
 cleanup_block="$(workflow_step_block "Remove nested-signing credentials")"
+verify_node_block="$(workflow_step_block "Verify bundled node entitlements")"
 notarize_dmg_block="$(workflow_step_block "Notarize and staple disk image")"
 upload_dry_run_block="$(workflow_step_block "Upload dry-run artifacts")"
 replace_release_dmg_block="$(workflow_step_block "Replace release disk image")"
@@ -48,6 +50,7 @@ api_key_cleanup_block="$(workflow_step_block "Remove notarization API key")"
 [[ -n "$sign_line" ]] || record_failure "release workflow is missing the native resource signing step"
 [[ -n "$cleanup_line" ]] || record_failure "release workflow is missing the nested-signing cleanup step"
 [[ -n "$tauri_action_line" ]] || record_failure "release workflow is missing the Tauri action step"
+[[ -n "$verify_node_line" ]] || record_failure "release workflow does not verify the bundled node entitlements"
 [[ -n "$notarize_dmg_line" ]] || record_failure "release workflow is missing disk-image notarization"
 [[ -n "$upload_dry_run_line" ]] || record_failure "release workflow is missing dry-run artifact upload"
 [[ -n "$replace_release_dmg_line" ]] || record_failure "release workflow does not replace the draft release's pre-notarization disk image"
@@ -66,6 +69,22 @@ if [[ -n "$tauri_action_line" && -n "$notarize_dmg_line" && -n "$api_key_cleanup
     && replace_release_dmg_line < publish_release_line)); then
   record_failure "release workflow must notarize the DMG before uploading or publishing it"
 fi
+# Guards the v0.5.0 regression at the finish line: if the app bundling step
+# ever re-signs nested resources, node must still carry allow-jit before the
+# artifact is notarized or shipped (issue #52).
+if [[ -n "$tauri_action_line" && -n "$verify_node_line" && -n "$notarize_dmg_line" ]] \
+  && ! ((tauri_action_line < verify_node_line && verify_node_line < notarize_dmg_line)); then
+  record_failure "bundled node entitlement verification must run between the Tauri action and notarization"
+fi
+for verify_node_command in \
+  'bundle/macos' \
+  'Contents/Resources/resources/bin/node' \
+  'codesign --display --entitlements' \
+  'com.apple.security.cs.allow-jit'; do
+  if ! grep -Fq -- "$verify_node_command" <<<"$verify_node_block"; then
+    record_failure "bundled node entitlement verification is missing: $verify_node_command"
+  fi
+done
 api_key_umask_line="$(grep -n -m1 -E '^[[:space:]]+umask[[:space:]]+077' <<<"$api_key_block" | cut -d: -f1 || true)"
 api_key_write_line="$(grep -n -m1 -F "printf '%s\\n' \"\$APPLE_API_KEY_CONTENT\" > \"\$RUNNER_TEMP/AuthKey.p8\"" <<<"$api_key_block" | cut -d: -f1 || true)"
 if [[ -z "$api_key_umask_line" || -z "$api_key_write_line" ]] \
@@ -227,9 +246,38 @@ assert_command_fails() {
   fi
 }
 
+# V8 JITs on real workloads; without allow-jit a hardened-runtime node
+# SIGTRAPs the moment it runs application code (issue #52).
+assert_jit_entitlement() {
+  local candidate="$1"
+  local entitlement_details
+
+  if ! entitlement_details="$(codesign --display --entitlements - "$candidate" 2>&1)"; then
+    record_failure "could not inspect entitlements: $candidate"
+    return
+  fi
+  if ! grep -Fq 'com.apple.security.cs.allow-jit' <<<"$entitlement_details"; then
+    record_failure "missing allow-jit entitlement: $candidate"
+  fi
+}
+
+assert_no_jit_entitlement() {
+  local candidate="$1"
+  local entitlement_details
+
+  if ! entitlement_details="$(codesign --display --entitlements - "$candidate" 2>&1)"; then
+    record_failure "could not inspect entitlements: $candidate"
+    return
+  fi
+  if grep -Fq 'com.apple.security.cs.allow-jit' <<<"$entitlement_details"; then
+    record_failure "unexpected allow-jit entitlement: $candidate"
+  fi
+}
+
 FIXTURE_ROOT="$(mktemp -d)"
 RESOURCE_DIR="$FIXTURE_ROOT/resources"
 EXECUTABLE_FIXTURE="$RESOURCE_DIR/bin/tool"
+NODE_RUNTIME_FIXTURE="$RESOURCE_DIR/bin/node"
 NODE_FIXTURE="$RESOURCE_DIR/node_modules/addon.node"
 DYLIB_FIXTURE="$RESOURCE_DIR/lib/libfixture.dylib"
 SO_FIXTURE="$RESOURCE_DIR/lib/libfixture.so"
@@ -263,10 +311,11 @@ mkdir -p \
   "$TRAVERSAL_RESOURCE_DIR" \
   "$DASH_RESOURCE_DIR"
 cp /usr/bin/true "$EXECUTABLE_FIXTURE"
+cp /usr/bin/true "$NODE_RUNTIME_FIXTURE"
 cp /usr/bin/true "$NODE_FIXTURE"
 cp /usr/bin/true "$DYLIB_FIXTURE"
 cp /usr/bin/true "$SO_FIXTURE"
-chmod 0755 "$EXECUTABLE_FIXTURE"
+chmod 0755 "$EXECUTABLE_FIXTURE" "$NODE_RUNTIME_FIXTURE"
 chmod 0644 "$NODE_FIXTURE" "$DYLIB_FIXTURE" "$SO_FIXTURE"
 printf '#!/usr/bin/env bash\necho "plain text fixture"\n' >"$TEXT_FIXTURE"
 chmod 0755 "$TEXT_FIXTURE"
@@ -293,9 +342,13 @@ if ! APPLE_SIGNING_IDENTITY="$TEST_SIGNING_IDENTITY" \
 fi
 
 assert_signature_properties "$EXECUTABLE_FIXTURE"
+assert_signature_properties "$NODE_RUNTIME_FIXTURE"
 assert_signature_properties "$NODE_FIXTURE"
 assert_signature_properties "$DYLIB_FIXTURE"
 assert_signature_properties "$SO_FIXTURE"
+assert_jit_entitlement "$NODE_RUNTIME_FIXTURE"
+assert_no_jit_entitlement "$EXECUTABLE_FIXTURE"
+assert_no_jit_entitlement "$NODE_FIXTURE"
 if [[ -n "$TEST_SIGNING_AUTHORITY" ]] \
   && verify_signature \
     "$EXECUTABLE_FIXTURE" \
@@ -305,6 +358,13 @@ if [[ -n "$TEST_SIGNING_AUTHORITY" ]] \
 fi
 if codesign --verify --strict "$TEXT_FIXTURE" >/dev/null 2>&1; then
   record_failure "plain-text executable was signed: $TEXT_FIXTURE"
+fi
+
+# The exact v0.5.0 regression: node signed with hardened runtime but no
+# entitlements must be rejected by production verification.
+codesign --force --sign - --options runtime "$NODE_RUNTIME_FIXTURE" 2>/dev/null
+if verify_signature "$NODE_RUNTIME_FIXTURE" "-" "" >/dev/null 2>&1; then
+  record_failure "node signed without JIT entitlements passed production verification"
 fi
 
 assert_command_fails \

@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # ABOUTME: Signs Mach-O code nested in Tauri bundle resources before app sealing.
-# ABOUTME: Verifies each signature and requires hardened runtime for notarization.
+# ABOUTME: Verifies hardened runtime everywhere and JIT entitlements on bundled node.
 set -euo pipefail
+
+# V8 allocates executable memory at runtime; under the hardened runtime the
+# bundled node needs allow-jit or it SIGTRAPs on any real workload (issue #52).
+NODE_JIT_ENTITLEMENTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/node-jit.entitlements.plist"
 
 is_macho() {
   local candidate="$1"
@@ -9,17 +13,34 @@ is_macho() {
   file -b -- "$candidate" | grep -q 'Mach-O'
 }
 
+is_bundled_node() {
+  local candidate="$1"
+
+  [[ "$candidate" == */bin/node ]]
+}
+
 verify_signature() {
   local candidate="$1"
   local identity="$2"
   local authority="$3"
   local signature_details
+  local entitlement_details
 
   codesign --verify --strict --verbose=2 "$candidate" || return 1
   signature_details="$(codesign --display --verbose=4 "$candidate" 2>&1)" || return 1
   if ! grep -Eq '^CodeDirectory .*flags=.*runtime' <<<"$signature_details"; then
     echo "missing hardened runtime: $candidate" >&2
     return 1
+  fi
+  if is_bundled_node "$candidate"; then
+    if ! entitlement_details="$(codesign --display --entitlements - "$candidate" 2>&1)"; then
+      echo "could not inspect entitlements: $candidate" >&2
+      return 1
+    fi
+    if ! grep -Fq 'com.apple.security.cs.allow-jit' <<<"$entitlement_details"; then
+      echo "missing allow-jit entitlement: $candidate" >&2
+      return 1
+    fi
   fi
   if [[ "$identity" != "-" ]]; then
     if [[ -z "$authority" ]]; then
@@ -72,8 +93,16 @@ sign_macos_resources() {
       --sign "$identity"
       --timestamp
       --options runtime
-      "$candidate"
     )
+    if is_bundled_node "$candidate"; then
+      if [[ ! -f "$NODE_JIT_ENTITLEMENTS" ]]; then
+        echo "node JIT entitlements file missing: $NODE_JIT_ENTITLEMENTS" >&2
+        signing_failed=1
+        break
+      fi
+      codesign_args+=(--entitlements "$NODE_JIT_ENTITLEMENTS")
+    fi
+    codesign_args+=("$candidate")
 
     if ! "${codesign_args[@]}"; then
       signing_failed=1
