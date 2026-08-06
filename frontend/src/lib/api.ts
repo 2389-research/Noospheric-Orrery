@@ -108,6 +108,11 @@ export const api = {
     fetchAPI<{ id: string; canonical_name: string; type: string; weight: number }[]>(
       `/entities/${entityId}/cooccurrences`
     ),
+  getConcepts: (q: string, topK: number = 20) =>
+    fetchAPI<{
+      query: string;
+      concepts: { name: string; evidence: string }[];
+    }>(`/search/concepts?q=${encodeURIComponent(q)}&top_k=${topK}`),
   getDocumentReader: (docId: string) =>
     fetchAPI<{
       document: { id: string; title: string; status: string; domains: string[] };

@@ -151,8 +151,24 @@ export function EntityPanelContent({
   const [coocError, setCoocError] = useState(false);
   const [snippetError, setSnippetError] = useState(false);
   const [sourceDocs, setSourceDocs] = useState<{id: string; title: string; mentions: number; content_type: string}[]>([]);
+  const [concepts, setConcepts] = useState<{ name: string; evidence: string }[] | null>(null);
+  const [loadingConcepts, setLoadingConcepts] = useState(false);
+  const [conceptsError, setConceptsError] = useState(false);
 
   const entityColor = getEntityColor(data.type);
+
+  const handleInspire = async () => {
+    setLoadingConcepts(true);
+    setConceptsError(false);
+    try {
+      const result = await api.getConcepts(data.name);
+      setConcepts(result.concepts);
+    } catch {
+      setConceptsError(true);
+    } finally {
+      setLoadingConcepts(false);
+    }
+  };
 
   // Fetch entity detail for merge history + source docs
   useEffect(() => {
@@ -182,6 +198,13 @@ export function EntityPanelContent({
         // merge history + source docs are optional
       }
     })();
+  }, [data.id]);
+
+  // Reset concept-explorer results when the selected entity changes
+  useEffect(() => {
+    setConcepts(null);
+    setLoadingConcepts(false);
+    setConceptsError(false);
   }, [data.id]);
 
   // Fetch co-occurrences
@@ -276,7 +299,66 @@ export function EntityPanelContent({
         <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)" }}>
           {data.source_count} docs across corpus
         </div>
+        <button
+          onClick={handleInspire}
+          disabled={loadingConcepts}
+          style={{
+            marginTop: 10,
+            padding: "6px 12px",
+            fontSize: 10,
+            fontFamily: "'Courier New', monospace",
+            textTransform: "uppercase",
+            letterSpacing: "0.06em",
+            background: "rgba(200,160,255,0.08)",
+            color: "rgba(200,160,255,0.85)",
+            border: "1px solid rgba(200,160,255,0.3)",
+            borderRadius: 4,
+            cursor: loadingConcepts ? "default" : "pointer",
+          }}
+        >
+          {loadingConcepts ? "inspiring…" : "✦ inspire"}
+        </button>
       </div>
+
+      {/* Concept Explorer results */}
+      {(loadingConcepts || conceptsError || concepts) && (
+        <div style={sectionStyle}>
+          <span style={sectionLabel}>Concepts Nearby</span>
+          {loadingConcepts ? (
+            <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)", fontStyle: "italic" }}>
+              exploring concept space…
+            </div>
+          ) : conceptsError ? (
+            <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)" }}>
+              couldn&apos;t reach concept explorer
+            </div>
+          ) : concepts && concepts.length === 0 ? (
+            <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)" }}>
+              no concepts surfaced
+            </div>
+          ) : (
+            concepts?.map((c, i) => (
+              <div
+                key={i}
+                style={{
+                  marginBottom: i < concepts.length - 1 ? 10 : 0,
+                  padding: "8px 10px",
+                  borderLeft: "2px solid rgba(200,160,255,0.5)",
+                  background: "rgba(200,160,255,0.04)",
+                  borderRadius: "0 3px 3px 0",
+                }}
+              >
+                <div style={{ fontSize: 12, color: "#e8eaf0", marginBottom: 4, fontWeight: 600 }}>
+                  {c.name}
+                </div>
+                <div style={{ fontSize: 11, color: "rgba(200,215,235,0.85)", lineHeight: 1.5 }}>
+                  {c.evidence}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
 
       {/* Domain Presence */}
       {domainEntries.length > 0 && (
