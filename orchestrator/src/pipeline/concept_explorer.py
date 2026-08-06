@@ -6,12 +6,16 @@ from orrery_relay import Relay
 
 MAX_ENTITIES = 5
 COOCCURRENCE_LIMIT = 15
+MIN_SHARED_DOCUMENTS = 2  # neighbors confined to 1 shared doc are same-paper coincidences, not cross-doc signal
 
 CONCEPT_PROMPT = """You are exploring a knowledge graph built from a codebase/document corpus. \
 A user searched for: "{query}"
 
 These are the top-matching entities, the domains their sources belong to, and their \
-1-hop neighbors in the graph (weight = co-occurrence strength):
+1-hop neighbors in the graph (weight = co-occurrence strength). Every neighbor listed \
+co-occurs with its entity across at least {min_shared_docs} distinct source documents — \
+same-document-only coincidences have already been filtered out, since those would just \
+restate one paper's content rather than surface a real cross-document gap:
 
 {entity_neighborhoods}
 
@@ -57,6 +61,19 @@ def _domains_for_entity(conn: sqlite3.Connection, entity_id: str) -> list[str]:
     return [r[0] for r in rows]
 
 
+def _shared_document_count(conn: sqlite3.Connection, entity_a: str, entity_b: str) -> int:
+    """How many distinct documents mention BOTH entities. A neighbor confined to a
+    single shared document is a same-paper coincidence, not a cross-document signal —
+    it can't ground a gap/tension (the whole point of concept exploration)."""
+    row = conn.execute(
+        """SELECT COUNT(DISTINCT esa.document_id) FROM entity_sources esa
+           JOIN entity_sources esb ON esb.document_id = esa.document_id
+           WHERE esa.entity_id = ? AND esb.entity_id = ?""",
+        (entity_a, entity_b),
+    ).fetchone()
+    return row[0] if row else 0
+
+
 async def explore_concepts(
     relay: Relay,
     model: str,
@@ -77,12 +94,16 @@ async def explore_concepts(
 
     neighborhood_lines = []
     for e in top_entities:
-        coentities = store.relationships.get_cooccurrences(e["id"], limit=COOCCURRENCE_LIMIT)
-        neighbors_str = ", ".join(f"{c.canonical_name} ({c.type}, w={c.weight})" for c in coentities)
+        coentities = store.relationships.get_cooccurrences(e["id"], limit=COOCCURRENCE_LIMIT * 3)
+        cross_doc_neighbors = [
+            c for c in coentities
+            if _shared_document_count(conn, e["id"], c.id) >= MIN_SHARED_DOCUMENTS
+        ][:COOCCURRENCE_LIMIT]
+        neighbors_str = ", ".join(f"{c.canonical_name} ({c.type}, w={c.weight})" for c in cross_doc_neighbors)
         domains = _domains_for_entity(conn, e["id"])
         domains_str = ", ".join(domains) if domains else "none"
         neighborhood_lines.append(
-            f"- {e['name']} ({e['type']}) | domains: {domains_str} | neighbors: {neighbors_str or 'none'}"
+            f"- {e['name']} ({e['type']}) | domains: {domains_str} | neighbors: {neighbors_str or 'none (all candidates were single-document coincidences)'}"
         )
     entity_neighborhoods = "\n".join(neighborhood_lines)
 
@@ -91,7 +112,10 @@ async def explore_concepts(
         max_tokens=1024,
         messages=[{
             "role": "user",
-            "content": CONCEPT_PROMPT.format(query=query, entity_neighborhoods=entity_neighborhoods),
+            "content": CONCEPT_PROMPT.format(
+                query=query, entity_neighborhoods=entity_neighborhoods,
+                min_shared_docs=MIN_SHARED_DOCUMENTS,
+            ),
         }],
         schema=CONCEPT_SCHEMA,
         tool_name="propose_concepts",

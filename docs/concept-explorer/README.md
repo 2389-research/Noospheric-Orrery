@@ -12,9 +12,10 @@ NaVILA and LaViRA in the orrery, now exposed as a single endpoint.
 query
   └─ resolve   ─▶ search_knowledge_graph(query)            top-matching entities
        └─ traverse ─▶ get_cooccurrences(entity_id) per hit  1-hop neighbors, weighted
-            └─ domains  ─▶ entity_sources ⋈ document_domains  which domain(s) each entity lives in
-                 └─ synthesize ─▶ one Relay.complete_structured call
-                      └─ 3 concepts: {name, evidence}
+            └─ filter   ─▶ require ≥ MIN_SHARED_DOCUMENTS   drop same-paper-only neighbors
+                 └─ domains  ─▶ entity_sources ⋈ document_domains  which domain(s) each entity lives in
+                      └─ synthesize ─▶ one Relay.complete_structured call
+                           └─ 3 concepts: {name, evidence}
 ```
 
 One retrieval pass (entities only, no chunk text) + one LLM call. No background job —
@@ -32,7 +33,20 @@ retrieved or passed downstream.
 
 For each of the top-matched entities (capped — `MAX_ENTITIES`), call the existing
 `store.relationships.get_cooccurrences(entity_id, limit=...)` (the function backing
-`GET /entities/{id}/cooccurrences`).
+`GET /entities/{id}/cooccurrences`). Over-fetches (`COOCCURRENCE_LIMIT * 3`) to leave
+headroom for the same-document filter below.
+
+### 2b. Filter — cross-document only
+
+A neighbor is kept only if it shares **at least `MIN_SHARED_DOCUMENTS` (2) distinct
+documents** with the entity (`_shared_document_count`, an `entity_sources` self-join).
+A neighbor confined to a single shared document is a same-paper coincidence — both
+terms just happened to appear in one document together — not a graph-level signal. Since
+the whole point of this endpoint is to surface a *cross-document* gap or tension, letting
+a single-paper coincidence through would just restate that one paper's content back at
+the user, not synthesize anything new. If every candidate neighbor for an entity fails
+this filter, that entity's neighbor list is reported as empty (with an explicit note),
+rather than silently falling back to same-doc neighbors.
 
 ### 3. Domains
 
