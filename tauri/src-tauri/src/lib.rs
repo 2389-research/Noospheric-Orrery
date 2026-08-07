@@ -477,6 +477,13 @@ fn wait_for_service(
     }
 }
 
+/// A failed launch must not leave a half-running stack behind the error
+/// dialog: kill every spawned service, then hand the error back.
+fn abort_launch(state: &Supervisor, error: String) -> String {
+    kill_children(state);
+    error
+}
+
 #[tauri::command]
 async fn launch(app: tauri::AppHandle) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || launch_impl(app))
@@ -553,7 +560,8 @@ fn launch_impl(app: tauri::AppHandle) -> Result<String, String> {
         ORCH_PORT,
         Duration::from_secs(90),
         service_exit_probe(state.inner(), orch_idx),
-    )?;
+    )
+    .map_err(|error| abort_launch(state.inner(), error))?;
     wait_for_service(
         &app,
         &paths,
@@ -561,7 +569,8 @@ fn launch_impl(app: tauri::AppHandle) -> Result<String, String> {
         FRONT_PORT,
         Duration::from_secs(60),
         service_exit_probe(state.inner(), front_idx),
-    )?;
+    )
+    .map_err(|error| abort_launch(state.inner(), error))?;
     let url = format!("http://127.0.0.1:{FRONT_PORT}");
     println!("✅ Services ready — {url}");
     let _ = app.emit("bootstrap-log", format!("Ready at {url}"));
@@ -819,6 +828,22 @@ mod tests {
         let mut probe = service_exit_probe(&supervisor, 0);
         assert_eq!(probe(), None);
         kill_children(&supervisor);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn abort_launch_kills_children_and_returns_error() {
+        let supervisor = Supervisor::default();
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id() as i32;
+        supervisor.children.lock().unwrap().push(child);
+
+        let error = abort_launch(&supervisor, "frontend exited".to_string());
+
+        assert_eq!(error, "frontend exited");
+        assert!(supervisor.children.lock().unwrap().is_empty());
+        // Killed AND reaped: signal 0 to the old pid must fail (ESRCH).
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     }
 
     #[cfg(unix)]
