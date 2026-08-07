@@ -52,8 +52,14 @@ jobs:
     name: desktop (signing scripts + supervisor)
     runs-on: macos-latest
     timeout-minutes: 30
+    # This job only reads the repo; don't hand its shell steps a writable
+    # token or leave checkout credentials in the git config.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Real-codesign fixtures plus the release-workflow structure checks —
       # otherwise signing regressions (like #52) only surface at release time.
