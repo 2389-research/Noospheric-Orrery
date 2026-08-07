@@ -403,18 +403,18 @@ enum WaitOutcome {
     TimedOut,
 }
 
-/// Poll until the service's port accepts connections, its child exits, or
-/// the timeout lapses. The port is checked first: a served port means the
-/// service is up even if the direct child handed off and exited.
+/// Poll until the service reports ready, its child exits, or the timeout
+/// lapses. Readiness is checked first: a served port means the service is
+/// up even if the direct child handed off and exited.
 fn wait_for_ready(
-    port: u16,
+    mut ready: impl FnMut() -> bool,
     timeout: Duration,
     poll_interval: Duration,
     mut child_status: impl FnMut() -> Option<String>,
 ) -> WaitOutcome {
     let start = Instant::now();
     loop {
-        if port_open(port) {
+        if ready() {
             return WaitOutcome::Ready;
         }
         if let Some(status) = child_status() {
@@ -459,7 +459,12 @@ fn wait_for_service(
     timeout: Duration,
     child_status: impl FnMut() -> Option<String>,
 ) -> Result<(), String> {
-    match wait_for_ready(port, timeout, Duration::from_millis(500), child_status) {
+    match wait_for_ready(
+        || port_open(port),
+        timeout,
+        Duration::from_millis(500),
+        child_status,
+    ) {
         WaitOutcome::Ready => Ok(()),
         WaitOutcome::Exited(status) => {
             // Through log_line, so the failure lands in the service's log
@@ -769,17 +774,18 @@ mod tests {
 
     const FAST_POLL: Duration = Duration::from_millis(10);
 
-    /// Bind an ephemeral port, then release it so nothing is listening there.
-    fn closed_port() -> u16 {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap().port()
-    }
-
     #[test]
     fn ready_when_port_opens() {
+        // Real socket path: the listener stays bound for the whole test, so
+        // port_open genuinely observes a served port.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let outcome = wait_for_ready(port, Duration::from_secs(5), FAST_POLL, || None);
+        let outcome = wait_for_ready(
+            || port_open(port),
+            Duration::from_secs(5),
+            FAST_POLL,
+            || None,
+        );
         assert!(matches!(outcome, WaitOutcome::Ready));
     }
 
@@ -789,17 +795,22 @@ mod tests {
         // handed off to a grandchild and exited; exit is only a heuristic.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let outcome = wait_for_ready(port, Duration::from_secs(5), FAST_POLL, || {
-            Some("exit status: 0".to_string())
-        });
+        let outcome = wait_for_ready(
+            || port_open(port),
+            Duration::from_secs(5),
+            FAST_POLL,
+            || Some("exit status: 0".to_string()),
+        );
         assert!(matches!(outcome, WaitOutcome::Ready));
     }
 
     #[test]
     fn exited_child_reported_before_timeout() {
+        // "Never ready" is injected: a released real port can be re-bound by
+        // a concurrent test's ephemeral listener, which flipped this flaky.
         // Generous timeout: a wait loop that ignores the exit probe fails
         // this test by returning TimedOut instead.
-        let outcome = wait_for_ready(closed_port(), Duration::from_secs(30), FAST_POLL, || {
+        let outcome = wait_for_ready(|| false, Duration::from_secs(30), FAST_POLL, || {
             Some("signal: 5 (SIGTRAP)".to_string())
         });
         match outcome {
@@ -810,12 +821,7 @@ mod tests {
 
     #[test]
     fn times_out_when_no_ready_no_exit() {
-        let outcome = wait_for_ready(
-            closed_port(),
-            Duration::from_millis(50),
-            FAST_POLL,
-            || None,
-        );
+        let outcome = wait_for_ready(|| false, Duration::from_millis(50), FAST_POLL, || None);
         assert!(matches!(outcome, WaitOutcome::TimedOut));
     }
 
