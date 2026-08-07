@@ -24,7 +24,8 @@ verify_signature() {
   local identity="$2"
   local authority="$3"
   local signature_details
-  local entitlement_details
+  local entitlement_xml
+  local jit_value
 
   codesign --verify --strict --verbose=2 "$candidate" || return 1
   signature_details="$(codesign --display --verbose=4 "$candidate" 2>&1)" || return 1
@@ -33,12 +34,15 @@ verify_signature() {
     return 1
   fi
   if is_bundled_node "$candidate"; then
-    if ! entitlement_details="$(codesign --display --entitlements - "$candidate" 2>&1)"; then
+    if ! entitlement_xml="$(codesign --display --entitlements - --xml "$candidate" 2>/dev/null)"; then
       echo "could not inspect entitlements: $candidate" >&2
       return 1
     fi
-    if ! grep -Fq 'com.apple.security.cs.allow-jit' <<<"$entitlement_details"; then
-      echo "missing allow-jit entitlement: $candidate" >&2
+    # Key presence is not enough: allow-jit must be boolean true, or V8
+    # still SIGTRAPs. plutil rejects missing, non-boolean, and false alike.
+    if ! jit_value="$(plutil -extract 'com\.apple\.security\.cs\.allow-jit' raw -expect bool -o - - <<<"$entitlement_xml" 2>/dev/null)" \
+      || [[ "$jit_value" != "true" ]]; then
+      echo "allow-jit entitlement is not boolean true: $candidate" >&2
       return 1
     fi
   fi

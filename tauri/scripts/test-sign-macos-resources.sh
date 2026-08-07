@@ -71,7 +71,7 @@ if [[ -n "$tauri_action_line" && -n "$notarize_dmg_line" && -n "$api_key_cleanup
 fi
 # Guards the v0.5.0 regression at the finish line: if the app bundling step
 # ever re-signs nested resources, node must still carry allow-jit before the
-# artifact is notarized or shipped (issue #52).
+# disk image is notarized, stapled, or published (issue #52).
 if [[ -n "$tauri_action_line" && -n "$verify_node_line" && -n "$notarize_dmg_line" ]] \
   && ! ((tauri_action_line < verify_node_line && verify_node_line < notarize_dmg_line)); then
   record_failure "bundled node entitlement verification must run between the Tauri action and notarization"
@@ -80,7 +80,9 @@ for verify_node_command in \
   'bundle/macos' \
   'Contents/Resources/resources/bin/node' \
   'codesign --display --entitlements' \
-  'com.apple.security.cs.allow-jit'; do
+  'plutil -extract' \
+  'com\.apple\.security\.cs\.allow-jit' \
+  '-expect bool'; do
   if ! grep -Fq -- "$verify_node_command" <<<"$verify_node_block"; then
     record_failure "bundled node entitlement verification is missing: $verify_node_command"
   fi
@@ -247,17 +249,20 @@ assert_command_fails() {
 }
 
 # V8 JITs on real workloads; without allow-jit a hardened-runtime node
-# SIGTRAPs the moment it runs application code (issue #52).
+# SIGTRAPs the moment it runs application code (issue #52). Only boolean
+# true counts — a present-but-false key disables JIT just the same.
 assert_jit_entitlement() {
   local candidate="$1"
-  local entitlement_details
+  local entitlement_xml
+  local jit_value
 
-  if ! entitlement_details="$(codesign --display --entitlements - "$candidate" 2>&1)"; then
+  if ! entitlement_xml="$(codesign --display --entitlements - --xml "$candidate" 2>/dev/null)"; then
     record_failure "could not inspect entitlements: $candidate"
     return
   fi
-  if ! grep -Fq 'com.apple.security.cs.allow-jit' <<<"$entitlement_details"; then
-    record_failure "missing allow-jit entitlement: $candidate"
+  if ! jit_value="$(plutil -extract 'com\.apple\.security\.cs\.allow-jit' raw -expect bool -o - - <<<"$entitlement_xml" 2>/dev/null)" \
+    || [[ "$jit_value" != "true" ]]; then
+    record_failure "allow-jit entitlement is not boolean true: $candidate"
   fi
 }
 
@@ -287,6 +292,7 @@ TRAVERSAL_RESOURCE_DIR="$FIXTURE_ROOT/traversal-resources"
 UNREADABLE_DIRECTORY="$TRAVERSAL_RESOURCE_DIR/unreadable"
 DASH_RESOURCE_DIR="$FIXTURE_ROOT/-resources"
 DASH_FIXTURE="$DASH_RESOURCE_DIR/dash-tool"
+FALSE_JIT_ENTITLEMENTS="$FIXTURE_ROOT/false-jit.entitlements.plist"
 TEST_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
 TEST_SIGNING_AUTHORITY="${APPLE_SIGNING_AUTHORITY:-}"
 
@@ -326,6 +332,16 @@ cp /usr/bin/true "$UNREADABLE_DIRECTORY/hidden-tool"
 chmod 000 "$UNREADABLE_DIRECTORY"
 cp /usr/bin/true "$DASH_FIXTURE"
 chmod 0755 "$DASH_FIXTURE"
+cat >"$FALSE_JIT_ENTITLEMENTS" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<false/>
+</dict>
+</plist>
+PLIST
 
 assert_macho "$EXECUTABLE_FIXTURE"
 assert_macho "$NODE_FIXTURE"
@@ -365,6 +381,14 @@ fi
 codesign --force --sign - --options runtime "$NODE_RUNTIME_FIXTURE" 2>/dev/null
 if verify_signature "$NODE_RUNTIME_FIXTURE" "-" "" >/dev/null 2>&1; then
   record_failure "node signed without JIT entitlements passed production verification"
+fi
+
+# Explicit-false variant: the key being present must not satisfy
+# verification — only boolean true lets V8 JIT.
+codesign --force --sign - --options runtime \
+  --entitlements "$FALSE_JIT_ENTITLEMENTS" "$NODE_RUNTIME_FIXTURE" 2>/dev/null
+if verify_signature "$NODE_RUNTIME_FIXTURE" "-" "" >/dev/null 2>&1; then
+  record_failure "node signed with allow-jit=false passed production verification"
 fi
 
 assert_command_fails \

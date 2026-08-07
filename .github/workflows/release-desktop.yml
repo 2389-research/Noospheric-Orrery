@@ -181,7 +181,10 @@ jobs:
 
       # V8 JITs at runtime: if app bundling ever re-signs nested resources and
       # strips allow-jit from node, the frontend SIGTRAPs on launch (issue #52).
-      # Catch that before the artifact is notarized or shipped.
+      # The Tauri action has already notarized the .app by this point, but this
+      # gate still stops a broken build before the disk image is notarized,
+      # stapled, or published. Only boolean true counts — a present-but-false
+      # key disables JIT just the same.
       - name: Verify bundled node entitlements
         run: |
           shopt -s nullglob
@@ -196,10 +199,12 @@ jobs:
             exit 1
           fi
           codesign --verify --strict "$node_path"
-          entitlement_details="$(codesign --display --entitlements - "$node_path" 2>&1)"
-          if ! grep -Fq 'com.apple.security.cs.allow-jit' <<<"$entitlement_details"; then
-            printf '%s\n' "$entitlement_details" >&2
-            echo "Bundled node lost its allow-jit entitlement; V8 will SIGTRAP on launch" >&2
+          entitlement_xml="$(codesign --display --entitlements - --xml "$node_path")"
+          jit_value="$(plutil -extract 'com\.apple\.security\.cs\.allow-jit' raw -expect bool -o - - \
+            <<<"$entitlement_xml" 2>/dev/null)" || jit_value=""
+          if [[ "$jit_value" != "true" ]]; then
+            printf '%s\n' "$entitlement_xml" >&2
+            echo "Bundled node allow-jit entitlement is not boolean true; V8 will SIGTRAP on launch" >&2
             exit 1
           fi
 
