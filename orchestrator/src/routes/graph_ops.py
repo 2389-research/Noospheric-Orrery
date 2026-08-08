@@ -6,46 +6,57 @@ from collections import defaultdict, deque
 from fastapi import APIRouter, HTTPException, Depends, Query
 from ..dependencies import get_auth_store, AuthStore
 from ..broadcast import broadcast_search
+from ..repositories.graph_reads import _chunks, entities_in_domain, entity_by_name
 
 router = APIRouter(prefix="/graph")
 
 
 def _resolve_entity(store, name_or_id: str):
-    """Look up an entity by ID or case-insensitive name."""
+    """Look up an entity by ID or case-insensitive name.
+
+    The name fallback resolves in SQL. It previously fetched `list(limit=500)` and
+    scanned client-side, so an entity past position 500 was reported "not found" — and
+    which 500 you got depended on the default ordering, making it look intermittent
+    rather than broken. Every traversal endpoint enters through here.
+    """
     entity = store.entities.get(name_or_id)
     if entity:
         return entity
-    # Fall back to name lookup
-    entities = store.entities.list(limit=500)
-    match = next((e for e in entities if e.canonical_name.lower() == name_or_id.lower()), None)
+    match = entity_by_name(store.entities._conn, name_or_id)
     if not match:
         raise HTTPException(status_code=404, detail=f"Entity not found: {name_or_id}")
-    return match
+    return store.entities.get(match["id"])
 
 
 def _get_adjacency(conn, entity_ids: list[str]) -> dict[str, list[dict]]:
     """Get co-occurrence neighbors for a set of entity IDs. Returns {entity_id: [{id, name, type, weight}]}."""
     if not entity_ids:
         return {}
-    ph = ",".join("?" * len(entity_ids))
-    rows = conn.execute(f"""
-        SELECT r.from_entity, r.to_entity, e1.canonical_name as from_name, e1.type as from_type,
-               e2.canonical_name as to_name, e2.type as to_type, r.weight
-        FROM relationships r
-        JOIN entities e1 ON r.from_entity = e1.id
-        JOIN entities e2 ON r.to_entity = e2.id
-        WHERE r.type = 'co_occurs' AND (r.from_entity IN ({ph}) OR r.to_entity IN ({ph}))
-          AND r.invalid_at IS NULL AND e1.invalid_at IS NULL AND e2.invalid_at IS NULL
-    """, entity_ids + entity_ids).fetchall()
+    # Chunked: this builds one IN clause per id, twice, so an unbounded list blows past
+    # SQLite's bound-parameter limit. Reachable from a wide subgraph request, where it
+    # would raise rather than degrade.
+    rows = []
+    for chunk in _chunks(entity_ids, 400):   # 400 ids -> 800 bound params
+        ph = ",".join("?" * len(chunk))
+        rows += conn.execute(f"""
+            SELECT r.from_entity, r.to_entity, e1.canonical_name as from_name, e1.type as from_type,
+                   e2.canonical_name as to_name, e2.type as to_type, r.weight
+            FROM relationships r
+            JOIN entities e1 ON r.from_entity = e1.id
+            JOIN entities e2 ON r.to_entity = e2.id
+            WHERE r.type = 'co_occurs' AND (r.from_entity IN ({ph}) OR r.to_entity IN ({ph}))
+              AND r.invalid_at IS NULL AND e1.invalid_at IS NULL AND e2.invalid_at IS NULL
+        """, list(chunk) + list(chunk)).fetchall()
 
+    wanted = set(entity_ids)
     adj: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
-        if r["from_entity"] in entity_ids:
+        if r["from_entity"] in wanted:
             adj[r["from_entity"]].append({
                 "id": r["to_entity"], "name": r["to_name"],
                 "type": r["to_type"], "weight": r["weight"],
             })
-        if r["to_entity"] in entity_ids:
+        if r["to_entity"] in wanted:
             adj[r["to_entity"]].append({
                 "id": r["from_entity"], "name": r["from_name"],
                 "type": r["from_type"], "weight": r["weight"],
@@ -403,25 +414,18 @@ async def explore_domain(
     """, (domain_path,)).fetchall()
     documents = [{"id": r["id"], "title": r["title"], "content_type": r["content_type"] or "text"} for r in doc_rows]
 
-    # Top entities in this domain (by source count within domain docs)
-    doc_ids = [d["id"] for d in documents]
+    # Top entities in this domain, by how many of its documents mention them.
+    # Was an IN clause over EVERY document id in the domain, which raises past
+    # SQLite's bound-parameter limit — so this failed exactly on the large domains
+    # it is most useful for. The shared read does the same work, scoped and bounded.
     top_entities = []
     type_counts: dict[str, int] = defaultdict(int)
-    if doc_ids:
-        ph = ",".join("?" * len(doc_ids))
-        entity_rows = conn.execute(f"""
-            SELECT e.id, e.canonical_name, e.type, COUNT(DISTINCT es.document_id) as doc_count
-            FROM entity_sources es
-            JOIN entities e ON es.entity_id = e.id
-            WHERE es.document_id IN ({ph}) AND e.invalid_at IS NULL
-            GROUP BY e.id ORDER BY doc_count DESC LIMIT 30
-        """, doc_ids).fetchall()
-        for r in entity_rows:
-            top_entities.append({
-                "id": r["id"], "name": r["canonical_name"],
-                "type": r["type"], "doc_count": r["doc_count"],
-            })
-            type_counts[r["type"]] += 1
+    for e in entities_in_domain(conn, domain_path, limit=30):
+        top_entities.append({
+            "id": e["id"], "name": e["canonical_name"],
+            "type": e["type"], "doc_count": e["degree"],
+        })
+        type_counts[e["type"]] += 1
 
     # Related domains (share entities via trade routes)
     related_rows = conn.execute("""
