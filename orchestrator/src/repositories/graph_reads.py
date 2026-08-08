@@ -79,13 +79,20 @@ def entity_by_name(conn, name, *, include_invalid=False) -> dict | None:
 
 def degrees_of(conn, ids) -> dict[str, int]:
     """id -> mention count. One GROUP BY, never a per-row correlated subquery — the
-    latter turns a page of entities into a page of table scans."""
+    latter turns a page of entities into a page of table scans.
+
+    Filters like every other primitive here. Callers usually pass ids that came from
+    `entities_by_ids` and are already active, but a primitive that is "active by
+    default" cannot be the one place that quietly is not: a caller passing raw ids
+    would get a degree for a soft-deleted entity and have no way to tell.
+    """
     out: dict[str, int] = {i: 0 for i in ids}
     for chunk in _chunks(ids):
         ph = ",".join("?" * len(chunk))
         for r in conn.execute(
-            f"SELECT entity_id, COUNT(*) c FROM entity_sources "
-            f"WHERE entity_id IN ({ph}) GROUP BY entity_id",
+            f"SELECT es.entity_id, COUNT(*) c FROM entity_sources es "
+            f"JOIN entities e ON e.id = es.entity_id AND e.{ACTIVE} "
+            f"WHERE es.entity_id IN ({ph}) GROUP BY es.entity_id",
             list(chunk),
         ):
             out[r["entity_id"]] = r["c"]

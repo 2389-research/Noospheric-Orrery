@@ -171,9 +171,17 @@ async def get_entity(name: str) -> str:
     # SQL. This used to fetch `/entities?limit=500` and scan client-side, so any entity
     # past position 500 was reported "not found" — and which 500 you got depended on
     # the default ordering, which made it look intermittent rather than broken.
-    seed = await call_api(f"/graph/neighborhood/{name}?depth=1&max_nodes=1")
-    if isinstance(seed, dict) and "seed" not in seed:
-        return f"Entity '{name}' not found"
+    # quote(..., safe="") because the name is a PATH segment: an entity called
+    # "c++/cli" or one containing ? or # would otherwise be truncated or split, and
+    # the lookup would fail for a reason the user cannot see.
+    seed = await call_api(f"/graph/neighborhood/{quote(name, safe='')}?depth=1&max_nodes=1")
+    if "detail" in seed:
+        # Only a genuine 404 means "no such entity". Reporting a 500 or a connection
+        # failure as "not found" tells the caller the graph lacks something it may well
+        # contain, which is worse than an error — they stop looking.
+        if "API 404" in str(seed["detail"]):
+            return f"Entity '{name}' not found"
+        return f"Error looking up '{name}': {seed['detail']}"
     entity_id = seed["seed"]["id"]
     detail = await call_api(f"/entities/{entity_id}")
     if isinstance(detail, dict) and "canonical_name" not in detail:

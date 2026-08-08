@@ -188,3 +188,18 @@ def test_domain_neighbours_prefers_the_materialized_table(test_store):
     test_store.conn.commit()
 
     assert domain_neighbours(test_store.conn, "alpha") == [{"path": "zeta", "weight": 99}]
+
+
+def test_degrees_excludes_invalidated_entities(test_store):
+    """`degrees_of` filters like every other primitive here.
+
+    Callers usually pass ids that came from `entities_by_ids` and are already active,
+    but a primitive documented as "active by default" cannot be the one place that
+    quietly is not — a caller passing raw ids would get a degree for a soft-deleted
+    entity with no way to tell.
+    """
+    _seed(test_store)
+    before = degrees_of(test_store.conn, ["e2"])["e2"]
+    assert before > 0
+    _invalidate(test_store, "e2")
+    assert degrees_of(test_store.conn, ["e2"])["e2"] == 0
