@@ -68,11 +68,14 @@ def _index_ddl(source: str, name: str) -> str | None:
 
 @pytest.mark.parametrize("table", _MIRRORED_TABLES)
 def test_table_ddl_is_mirrored(table):
-    if table in _ALLOWED_DIVERGENCE:
-        pytest.skip(_ALLOWED_DIVERGENCE[table])
     orch, worker = _table_ddl(_ORCH.read_text(), table), _table_ddl(_WORKER.read_text(), table)
+    # Presence is checked BEFORE the allow-list. The escape hatch exists to permit a
+    # deliberate DIFFERENCE, never to excuse a table missing from one file — that is
+    # the failure it was written to catch.
     assert orch is not None, f"`{table}` missing from orchestrator/src/db.py"
     assert worker is not None, f"`{table}` missing from worker/src/db.py"
+    if table in _ALLOWED_DIVERGENCE:
+        pytest.skip(_ALLOWED_DIVERGENCE[table])
     assert orch == worker, (
         f"the `{table}` DDL differs between the two db.py files. Both processes open "
         f"the same databases, so whichever opens a workspace first decides its shape.")
@@ -83,6 +86,11 @@ def test_index_is_mirrored(name):
     orch, worker = _index_ddl(_ORCH.read_text(), name), _index_ddl(_WORKER.read_text(), name)
     assert orch is not None, f"`{name}` missing from orchestrator/src/db.py"
     assert worker is not None, f"`{name}` missing from worker/src/db.py"
+    # Same allow-list as the tables — it was documented as covering both, but only the
+    # table test consulted it, so an intentional index difference had no way to be
+    # declared and the escape hatch was a dead letter.
+    if name in _ALLOWED_DIVERGENCE:
+        pytest.skip(_ALLOWED_DIVERGENCE[name])
     assert orch == worker, f"the `{name}` index differs between the two db.py files"
 
 

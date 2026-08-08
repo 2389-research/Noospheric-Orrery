@@ -113,7 +113,12 @@ def test_init_db_is_idempotent(fresh_db):
 
 def test_connections_are_configured_by_one_factory(fresh_db):
     """init_db takes its connection from get_connection rather than repeating the
-    PRAGMAs, so WAL and busy_timeout have a single definition."""
+    PRAGMAs, so WAL and busy_timeout have a single definition.
+
+    The timeout is pinned to the exact value, not `> 0`: the point of routing init_db
+    through the factory is that there is one number, so a test that accepts any
+    positive number would not notice the two drifting apart again.
+    """
     conn = db.get_connection(fresh_db)
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-    assert conn.execute("PRAGMA busy_timeout").fetchone()[0] > 0
+    assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
