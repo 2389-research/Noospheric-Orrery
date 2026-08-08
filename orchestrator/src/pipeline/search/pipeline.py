@@ -22,16 +22,43 @@ _config = SearchConfig()
 _indexes_ready = False
 
 
+def mark_indexes_stale() -> None:
+    """Force a FAISS rebuild on the next search.
+
+    The index is built once per process. A correction that invalidates or merges an
+    entity changes what the index SHOULD contain, but leaves the index itself alone —
+    so the stale vector keeps occupying a top-k slot. `_enrich_results` drops it from
+    the output, which is why a deleted entity no longer appears, but the slot it
+    consumed is simply lost: an active entity that would have ranked just below it
+    never surfaces. Filtering the results is therefore necessary but not sufficient.
+
+    Cheap to call — the rebuild reads stored embeddings rather than re-embedding.
+    """
+    global _indexes_ready
+    _indexes_ready = False
+
+
 def _enrich_results(conn: sqlite3.Connection, results: SubQueryResults):
     """Fill in entity names/types and chunk text from DB."""
+    # DROP entities whose active lookup fails, do not merely skip enriching them. The
+    # FAISS index is built periodically, so an entity invalidated SINCE the last build
+    # is still returned as a hit; leaving it in the list with blank metadata lets
+    # fusion surface a soft-deleted entity anyway — which is the bug the build-time
+    # filter alone does not close.
+    active_entities = []
     for e in results.semantic_entities:
-        row = conn.execute("SELECT canonical_name, type FROM entities WHERE id = ?", (e.entity_id,)).fetchone()
-        if row:
-            e.name = row[0]
-            e.entity_type = row[1]
-            e.source_count = conn.execute(
-                "SELECT COUNT(*) FROM entity_sources WHERE entity_id = ?", (e.entity_id,)
-            ).fetchone()[0]
+        row = conn.execute(
+            "SELECT canonical_name, type FROM entities "
+            "WHERE id = ? AND invalid_at IS NULL", (e.entity_id,)).fetchone()
+        if not row:
+            continue
+        e.name = row[0]
+        e.entity_type = row[1]
+        e.source_count = conn.execute(
+            "SELECT COUNT(*) FROM entity_sources WHERE entity_id = ?", (e.entity_id,)
+        ).fetchone()[0]
+        active_entities.append(e)
+    results.semantic_entities = active_entities
 
     for c in results.semantic_chunks:
         row = conn.execute(

@@ -98,6 +98,21 @@ def _log(conn, *, action, before_value=None, after_value=None, from_entity_id=No
     )
 
 
+
+def _mark_search_index_stale() -> None:
+    """Tell search its FAISS index no longer matches the graph.
+
+    Imported lazily: the search package pulls in faiss/torch, and graph_repair is
+    imported by request paths that must not pay that cost. Best-effort — a correction
+    must not fail because search is unavailable.
+    """
+    try:
+        from .search import mark_indexes_stale
+        mark_indexes_stale()
+    except Exception:  # pragma: no cover - search is optional at import time
+        pass
+
+
 def apply_invalidation(conn, entity_id, *, reason=None, actor="human",
                        model_verdict=None, model_confidence=None, reviewer=None, commit=True):
     """Soft-delete a node + the edges *this call* invalidates (only those valid at apply
@@ -123,6 +138,7 @@ def apply_invalidation(conn, entity_id, *, reason=None, actor="human",
     _log(conn, action="invalidate", before_value=name_row[0], after_value=json.dumps(edge_ids),
          from_entity_id=entity_id, from_name=name_row[0], actor=actor, reason=reason,
          model_verdict=model_verdict, model_confidence=model_confidence, reviewer=reviewer)
+    _mark_search_index_stale()
     if commit:
         conn.commit()
     return {"edges_invalidated": len(edge_ids)}
@@ -144,6 +160,7 @@ def rollback_invalidation(conn, entity_id, *, commit=True):
                      f"WHERE id IN ({ph})", edge_ids)
     _log(conn, action="rollback_invalidate", after_value=json.dumps(edge_ids),
          from_entity_id=entity_id)
+    _mark_search_index_stale()
     if commit:
         conn.commit()
     return {"edges_restored": len(edge_ids)}
@@ -254,6 +271,7 @@ def apply_merge(conn, loser_id, survivor_id, *, actor="human", reason=None,
     _log(conn, action="merge", before_value=ls[1], after_value=snapshot, from_entity_id=loser_id,
          from_name=ls[1], to_entity_id=survivor_id, to_name=ss[1], actor=actor, reason=reason,
          model_verdict=model_verdict, model_confidence=model_confidence, reviewer=reviewer)
+    _mark_search_index_stale()
     if commit:
         conn.commit()
     return {"survivor": survivor_id, "loser": loser_id, "edges_recomputed": len(rows)}
@@ -298,6 +316,7 @@ def rollback_merge(conn, loser_id, *, commit=True):
     if restored:
         conn.execute("UPDATE entities SET invalid_at=NULL, invalid_reason=NULL WHERE id=?", (loser_id,))
     _log(conn, action="rollback_merge", from_entity_id=loser_id, from_name=snap["loser"]["canonical_name"])
+    _mark_search_index_stale()
     if commit:
         conn.commit()
     return {"restored": loser_id if restored else None, "sourceless": not restored}

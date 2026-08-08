@@ -1,5 +1,11 @@
 """Stage 1: Parallel retrieval — FAISS semantic + exact match."""
 
+# Every read of `entities` outside search already applies `invalid_at IS NULL`
+# (graph_ops, the repositories); search was the one surface that did not, so an entity
+# removed through the corrections flow still surfaced here while every other view
+# correctly hid it. Written out literally at each site, as the rest of the codebase
+# does — a constant would force these into f-strings for no gain.
+
 import sqlite3
 import numpy as np
 from .models import ScoredEntity, ScoredChunk
@@ -34,10 +40,16 @@ def build_indexes(conn: sqlite3.Connection) -> dict:
     import faiss
     global _entity_index, _chunk_index, _entity_ids, _chunk_ids
 
-    model = _get_model()
+    # NOT `model = _get_model()` up front. That instantiates (and, on a cold host,
+    # DOWNLOADS) all-MiniLM-L6-v2 on every index build — including the common case
+    # where every row already has a stored embedding and nothing needs encoding.
+    # Resolved instead at the two points that actually encode.
 
     # Entity index
-    entities = conn.execute("SELECT id, canonical_name, embedding FROM entities ORDER BY canonical_name").fetchall()
+    # Build-time filter: a soft-deleted entity must never enter the index at all.
+    entities = conn.execute(
+        "SELECT id, canonical_name, embedding FROM entities "
+        "WHERE invalid_at IS NULL ORDER BY canonical_name").fetchall()
     if entities:
         _entity_ids = [e[0] for e in entities]
         # Use stored embeddings if available, otherwise compute
@@ -52,7 +64,7 @@ def build_indexes(conn: sqlite3.Connection) -> dict:
 
         if needs_embed:
             names = [n for _, n in needs_embed]
-            new_embeds = model.encode(names, normalize_embeddings=True).astype(np.float32)
+            new_embeds = _get_model().encode(names, normalize_embeddings=True).astype(np.float32)
             for j, (idx, _) in enumerate(needs_embed):
                 embeddings[idx] = new_embeds[j]
                 # Store back to DB
@@ -82,7 +94,8 @@ def build_indexes(conn: sqlite3.Connection) -> dict:
 
         if needs_embed:
             texts = [t for _, t in needs_embed]
-            new_embeds = model.encode(texts, normalize_embeddings=True, batch_size=64).astype(np.float32)
+            new_embeds = _get_model().encode(
+                texts, normalize_embeddings=True, batch_size=64).astype(np.float32)
             for j, (idx, _) in enumerate(needs_embed):
                 embeddings[idx] = new_embeds[j]
                 conn.execute("UPDATE chunks SET embedding = ? WHERE id = ?",
@@ -102,7 +115,9 @@ def build_indexes(conn: sqlite3.Connection) -> dict:
 def embed_new_entities(conn: sqlite3.Connection):
     """Embed entities that don't have embeddings yet."""
     model = _get_model()
-    rows = conn.execute("SELECT id, canonical_name FROM entities WHERE embedding IS NULL").fetchall()
+    rows = conn.execute(
+        "SELECT id, canonical_name FROM entities "
+        "WHERE embedding IS NULL AND invalid_at IS NULL").fetchall()
     if not rows:
         return 0
     names = [r[1] for r in rows]
@@ -169,7 +184,8 @@ def search_entities_exact(conn: sqlite3.Connection, query: str, min_term_length:
 
     # Exact full match
     rows = conn.execute(
-        "SELECT id, canonical_name, type FROM entities WHERE LOWER(canonical_name) = ?",
+        "SELECT id, canonical_name, type FROM entities "
+        "WHERE LOWER(canonical_name) = ? AND invalid_at IS NULL",
         (query_lower,)
     ).fetchall()
     for r in rows:
@@ -184,11 +200,13 @@ def search_entities_exact(conn: sqlite3.Connection, query: str, min_term_length:
     for term in query_lower.split():
         if len(term) < min_term_length:
             continue
+        # No SQL-level `id NOT IN (...)`: the `seen` check below already skips
+        # duplicates, so that clause bought nothing and was the only reason this
+        # query had to be assembled at runtime.
         rows = conn.execute(
-            "SELECT id, canonical_name, type FROM entities WHERE LOWER(canonical_name) LIKE ? AND id NOT IN ({})".format(
-                ",".join("?" * len(seen)) if seen else "''"
-            ),
-            (f"%{term}%", *list(seen))
+            "SELECT id, canonical_name, type FROM entities "
+            "WHERE LOWER(canonical_name) LIKE ? AND invalid_at IS NULL",
+            (f"%{term}%",)
         ).fetchall()
         for r in rows:
             if r[0] in seen:

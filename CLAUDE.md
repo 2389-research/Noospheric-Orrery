@@ -263,7 +263,13 @@ cd orchestrator && pytest tests/ -v
 cd worker && pytest tests/ -v
 ```
 
-Tests use `tmp_path` fixtures for SQLite isolation. The orchestrator `conftest.py` sets up a test client and a fresh in-memory DB for each test.
+Tests use `tmp_path` fixtures for SQLite isolation: the orchestrator `conftest.py` gives each test a test client plus a fresh **file-backed** DB at `tmp_path/test.db`.
+
+**Do not "fix" this to `:memory:`** — it cannot work here, for two reasons:
+- `":memory:"` is **per-connection**. `SQLiteDataStore(db_path)` calls `init_db(db_path)` and then `get_connection(db_path)`, so the schema and the store would land in two *separate* empty databases.
+- **WAL is unavailable in memory.** `PRAGMA journal_mode=WAL` on `:memory:` silently returns `memory`, so the tests would stop exercising the journal mode this codebase depends on for concurrent orchestrator/worker writes.
+
+`tmp_path` is already per-test, so the fixture is fresh either way.
 
 ## Common Gotchas
 
