@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 from .config import SearchConfig
 from .models import SubQueryResults, ScoredEntity, ScoredChunk, SearchResponse
 from .retrieval import (
-    ACTIVE, build_indexes, embed_text, embed_new_entities, embed_new_chunks,
+    build_indexes, embed_text, embed_new_entities, embed_new_chunks,
     search_entities_semantic, search_chunks_semantic, search_entities_exact,
 )
 from .entity_boost import boost_chunks_via_entities
@@ -32,8 +32,8 @@ def _enrich_results(conn: sqlite3.Connection, results: SubQueryResults):
     active_entities = []
     for e in results.semantic_entities:
         row = conn.execute(
-            f"SELECT canonical_name, type FROM entities WHERE id = ? AND {ACTIVE}",
-            (e.entity_id,)).fetchone()
+            "SELECT canonical_name, type FROM entities "
+            "WHERE id = ? AND invalid_at IS NULL", (e.entity_id,)).fetchone()
         if not row:
             continue
         e.name = row[0]

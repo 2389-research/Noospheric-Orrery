@@ -1,11 +1,10 @@
 """Stage 1: Parallel retrieval — FAISS semantic + exact match."""
 
-# The active-graph filter. Every read of `entities` outside search already applies
-# it (graph_ops, the repositories); search was the one surface that did not, so an
-# entity removed through the corrections flow still surfaced here while every other
-# view correctly hid it. Defined locally so this fix carries no dependency; if a
-# shared read layer lands later, point this at it rather than re-spelling the string.
-ACTIVE = "invalid_at IS NULL"
+# Every read of `entities` outside search already applies `invalid_at IS NULL`
+# (graph_ops, the repositories); search was the one surface that did not, so an entity
+# removed through the corrections flow still surfaced here while every other view
+# correctly hid it. Written out literally at each site, as the rest of the codebase
+# does — a constant would force these into f-strings for no gain.
 
 import sqlite3
 import numpy as np
@@ -46,8 +45,8 @@ def build_indexes(conn: sqlite3.Connection) -> dict:
     # Entity index
     # Build-time filter: a soft-deleted entity must never enter the index at all.
     entities = conn.execute(
-        f"SELECT id, canonical_name, embedding FROM entities WHERE {ACTIVE} "
-        f"ORDER BY canonical_name").fetchall()
+        "SELECT id, canonical_name, embedding FROM entities "
+        "WHERE invalid_at IS NULL ORDER BY canonical_name").fetchall()
     if entities:
         _entity_ids = [e[0] for e in entities]
         # Use stored embeddings if available, otherwise compute
@@ -113,7 +112,8 @@ def embed_new_entities(conn: sqlite3.Connection):
     """Embed entities that don't have embeddings yet."""
     model = _get_model()
     rows = conn.execute(
-        f"SELECT id, canonical_name FROM entities WHERE embedding IS NULL AND {ACTIVE}").fetchall()
+        "SELECT id, canonical_name FROM entities "
+        "WHERE embedding IS NULL AND invalid_at IS NULL").fetchall()
     if not rows:
         return 0
     names = [r[1] for r in rows]
@@ -180,8 +180,8 @@ def search_entities_exact(conn: sqlite3.Connection, query: str, min_term_length:
 
     # Exact full match
     rows = conn.execute(
-        f"SELECT id, canonical_name, type FROM entities "
-        f"WHERE LOWER(canonical_name) = ? AND {ACTIVE}",
+        "SELECT id, canonical_name, type FROM entities "
+        "WHERE LOWER(canonical_name) = ? AND invalid_at IS NULL",
         (query_lower,)
     ).fetchall()
     for r in rows:
@@ -196,12 +196,13 @@ def search_entities_exact(conn: sqlite3.Connection, query: str, min_term_length:
     for term in query_lower.split():
         if len(term) < min_term_length:
             continue
+        # No SQL-level `id NOT IN (...)`: the `seen` check below already skips
+        # duplicates, so that clause bought nothing and was the only reason this
+        # query had to be assembled at runtime.
         rows = conn.execute(
-            ("SELECT id, canonical_name, type FROM entities "
-             "WHERE LOWER(canonical_name) LIKE ? AND " + ACTIVE + " AND id NOT IN ({})").format(
-                ",".join("?" * len(seen)) if seen else "''"
-            ),
-            (f"%{term}%", *list(seen))
+            "SELECT id, canonical_name, type FROM entities "
+            "WHERE LOWER(canonical_name) LIKE ? AND invalid_at IS NULL",
+            (f"%{term}%",)
         ).fetchall()
         for r in rows:
             if r[0] in seen:
