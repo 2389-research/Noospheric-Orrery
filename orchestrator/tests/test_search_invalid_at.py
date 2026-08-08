@@ -139,3 +139,39 @@ def test_the_search_package_is_not_shadowed_by_a_module(test_store):
         "pipeline/search.py is shadowed by pipeline/search/ and can never run — "
         "edits to it are silently inert")
     assert (pipeline_dir / "search" / "retrieval.py").exists()
+
+
+def test_a_correction_marks_the_search_index_stale(test_store):
+    """Filtering the results is necessary but not sufficient.
+
+    The FAISS index is built once per process. Dropping invalidated hits at read time
+    stops a deleted entity from APPEARING, but the stale vector still occupied a top-k
+    slot on the way through — so an active entity ranked just below it silently never
+    surfaces. The correction has to invalidate the index too.
+    """
+    from src.pipeline import graph_repair
+    from src.pipeline.search import pipeline as search_pipeline
+
+    _seed(test_store)
+    search_pipeline._indexes_ready = True          # simulate an index built earlier
+
+    graph_repair.apply_invalidation(test_store.conn, "e1", reason="test")
+
+    assert search_pipeline._indexes_ready is False, (
+        "a soft delete must force a rebuild; otherwise the removed entity keeps "
+        "consuming a result slot that an active entity should have had")
+
+
+def test_rolling_a_correction_back_also_marks_the_index_stale(test_store):
+    """The inverse case: an index built WHILE the entity was invalid does not contain
+    it, so restoring the entity has to rebuild too or it stays invisible."""
+    from src.pipeline import graph_repair
+    from src.pipeline.search import pipeline as search_pipeline
+
+    _seed(test_store)
+    graph_repair.apply_invalidation(test_store.conn, "e1", reason="test")
+    search_pipeline._indexes_ready = True
+
+    graph_repair.rollback_invalidation(test_store.conn, "e1")
+
+    assert search_pipeline._indexes_ready is False

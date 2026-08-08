@@ -22,6 +22,22 @@ _config = SearchConfig()
 _indexes_ready = False
 
 
+def mark_indexes_stale() -> None:
+    """Force a FAISS rebuild on the next search.
+
+    The index is built once per process. A correction that invalidates or merges an
+    entity changes what the index SHOULD contain, but leaves the index itself alone —
+    so the stale vector keeps occupying a top-k slot. `_enrich_results` drops it from
+    the output, which is why a deleted entity no longer appears, but the slot it
+    consumed is simply lost: an active entity that would have ranked just below it
+    never surfaces. Filtering the results is therefore necessary but not sufficient.
+
+    Cheap to call — the rebuild reads stored embeddings rather than re-embedding.
+    """
+    global _indexes_ready
+    _indexes_ready = False
+
+
 def _enrich_results(conn: sqlite3.Connection, results: SubQueryResults):
     """Fill in entity names/types and chunk text from DB."""
     # DROP entities whose active lookup fails, do not merely skip enriching them. The
