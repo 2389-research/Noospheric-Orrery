@@ -155,15 +155,13 @@ def test_a_snapshot_from_another_contract_version_is_discarded(test_store):
     """A cached payload built under a different contract must be rebuilt, not served.
 
     The 5.0.0 -> 5.1.0 rename kept every layer and key in place and changed only
-    VALUES (`scope: "collection"` -> `"collection"`, `container_type`, the node `type`). So a
+    VALUES (`scope: "repo"` -> `"collection"`, `container_type`, the node `type`). So a
     stale payload still parses, still has `meta`, and simply goes QUIET: the collection
     structure endpoint filters on the new scope and finds nothing, losing every
     shared-entity link with no error raised anywhere. Version equality is the only
     check that catches a change of that shape.
     """
     import json
-
-    from src.pipeline.graph_snapshot import load_snapshot, rebuild_snapshot
 
     rebuild_snapshot(test_store)
     assert load_snapshot(test_store) is not None

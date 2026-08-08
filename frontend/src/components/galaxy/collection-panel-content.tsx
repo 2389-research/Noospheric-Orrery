@@ -30,10 +30,18 @@ export function CollectionPanelContent({ data, onNavigateEntity }: CollectionPan
   // resolution. `domain` is reset from props on every change for the same reason: it
   // was only ever assigned when the response carried a truthy domain, so a collection
   // without one silently kept the PREVIOUS collection's domain on screen.
+  //
+  // EVERY field resets at the start, not just the ones the response overwrites. The
+  // failure path is what makes this necessary: if B errors after A loaded, `loading`
+  // clears but `summary`/`topEntities` still hold A's, so the panel renders A's content
+  // under B's name — a wrong answer presented as a successful one, which is worse than
+  // the error it is hiding.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(false);
+    setSummary("");
+    setTopEntities([]);
     setDomain(data.domain ?? null);
     (async () => {
       try {
@@ -126,6 +134,13 @@ export function CollectionPanelContent({ data, onNavigateEntity }: CollectionPan
         {loading ? (
           <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)", fontStyle: "italic" }}>
             loading entities…
+          </div>
+        ) : error ? (
+          // Distinct from the empty case on purpose: an empty list after a FAILED load
+          // is not evidence the collection has no entities, and saying so states
+          // something the panel does not know.
+          <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)" }}>
+            couldn&apos;t load entities
           </div>
         ) : topEntities.length === 0 ? (
           <div style={{ fontSize: 11, color: "rgba(140,200,255,0.6)" }}>

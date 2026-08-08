@@ -1,11 +1,11 @@
-"""GET /repos/{collection_id}/structure — repo -> modules -> files(+entities) for the
+"""GET /collections/{collection_id}/structure — collection -> modules -> files(+entities) for the
 repo-system viz.
 
 Key behaviours under test:
 - Only the top `max_files` files by entity count are returned as render nodes
   (the main-graph top-N-by-degree strategy), while `total_files` still reports
   the full count. A 7k-file repo must not ship every file.
-- Connected repos come from the (cheap) repo_edges table + the precomputed graph
+- Connected collections come from the (cheap) collection_edges table + the precomputed graph
   snapshot's repo routes — not a per-request entity_sources self-join.
 """
 

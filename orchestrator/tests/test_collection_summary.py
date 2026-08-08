@@ -1,8 +1,11 @@
-"""GET /repos/{collection_id}/summary — side-panel payload for a repo node.
+"""GET /collections/{collection_id}/summary — side-panel payload for a collection node.
 
-Returns the grounded repo-level LLM summary (the repo-level `code_intent`
-document, dc.level == 'collection') plus top entities by mention count across the
-repo's documents.
+Returns the grounded root-level LLM summary (the `code_intent` document linked at
+`dc.role == 'root'`) plus top entities by mention count across the collection's
+documents.
+
+`role`, not `level`: this schema has no `level` column — it carries the explicit
+role/emits_cooccurrence pair that column was split into.
 """
 
 
