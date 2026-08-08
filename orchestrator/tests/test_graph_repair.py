@@ -172,6 +172,85 @@ def test_resolve_approve_retype_is_atomic(test_db):
     assert conn.execute("SELECT COUNT(*) FROM normalization_log WHERE action='retype'").fetchone()[0] == 1
 
 
+def test_the_index_is_marked_stale_only_after_the_write_is_durable(test_db, monkeypatch):
+    """The ORDERING, which is the whole point and which no end-state assertion covers.
+
+    Every other staleness test checks the flag afterwards, and the flag ends up False
+    whether the mark runs before or after the commit — so moving it back above
+    `conn.commit()` would keep them all green while reintroducing the bug: a rebuild
+    triggered by a premature mark reads pre-commit rows and then publishes itself ready,
+    leaving a stale index believed fresh.
+
+    Asserts from a SECOND connection, because that is what a rebuild actually is — a
+    different connection, which under WAL sees only committed data. If the mark fires
+    first, the correction is not visible there yet and this fails.
+    """
+    import sqlite3
+    from src.pipeline import graph_repair
+
+    conn = sqlite3.connect(test_db)
+    _seed_entity_with_edge(conn)
+
+    seen = {}
+
+    def _probe():
+        other = sqlite3.connect(test_db)
+        try:
+            seen["invalid_at"] = other.execute(
+                "SELECT invalid_at FROM entities WHERE id='e1'").fetchone()[0]
+        finally:
+            other.close()
+
+    monkeypatch.setattr(graph_repair, "_mark_search_index_stale", _probe)
+    graph_repair.apply_invalidation(conn, "e1", reason="ordering")
+
+    assert seen, "the mark must actually run"
+    assert seen["invalid_at"] is not None, (
+        "the index was marked stale before the soft delete was committed — a rebuild "
+        "racing that mark would read the entity as still active and publish a stale "
+        "index as ready")
+    conn.close()
+
+
+def _resolve_and_report_index_flag(test_db, action, **kwargs):
+    """Approve a correction through the PRODUCTION path and report the index flag after.
+
+    `resolve_correction` runs every apply_* with `commit=False` and owns the single
+    commit itself, so the apply_* functions cannot mark the index — they would be marking
+    it against writes that have not landed yet, letting a concurrent rebuild publish
+    pre-correction rows as fresh. The owner of the transaction has to mark it after the
+    commit, and these are the only tests covering that arrangement: every other staleness
+    test calls apply_* directly with the default `commit=True`.
+    """
+    import sqlite3
+    from src.pipeline.graph_repair import propose_correction, resolve_correction
+    from src.pipeline.search import pipeline as search_pipeline
+
+    conn = sqlite3.connect(test_db)
+    try:
+        _seed_entity_with_edge(conn)
+        iid = propose_correction(conn, action=action, entity="panopticon", **kwargs)["issue_id"]
+        search_pipeline._indexes_ready = True
+        resolve_correction(conn, iid, "approve", reviewer="human")
+        return search_pipeline._indexes_ready
+    finally:
+        search_pipeline._indexes_ready = False   # module global; don't leak to later tests
+        conn.close()
+
+
+def test_resolving_a_retype_marks_the_search_index_stale(test_db):
+    """`retype` never marked the index at all, and `type` is carried on every indexed
+    entity — one half of the enumeration bug that unconditional marking removes."""
+    assert _resolve_and_report_index_flag(test_db, "retype", proposed_type="Concept") is False
+
+
+def test_resolving_a_rename_marks_the_search_index_stale(test_db):
+    """The other half, and the worse one: `canonical_name` is the text the entity index
+    actually embeds, so a rename leaves every vector pointing at the old wording."""
+    assert _resolve_and_report_index_flag(
+        test_db, "rename", proposed_name="panopticon-renamed") is False
+
+
 def test_apply_retype_and_rename_log(test_db):
     import sqlite3
     from src.pipeline.graph_repair import apply_retype, apply_rename

@@ -2,8 +2,11 @@
 # Takes an injected sqlite3.Connection; no FastAPI/worker coupling. Proposing never
 # mutates the graph — it only validates + inserts a pending row into graph_issues.
 import json
+import logging
 import sqlite3
 import uuid
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_ACTIONS = ("invalidate", "merge", "retype", "rename")
 
@@ -102,15 +105,26 @@ def _log(conn, *, action, before_value=None, after_value=None, from_entity_id=No
 def _mark_search_index_stale() -> None:
     """Tell search its FAISS index no longer matches the graph.
 
-    Imported lazily: the search package pulls in faiss/torch, and graph_repair is
-    imported by request paths that must not pay that cost. Best-effort — a correction
-    must not fail because search is unavailable.
+    Imported lazily: the search package pulls in faiss/torch, and graph_repair sits on
+    request paths that must not pay that cost.
+
+    Still non-raising, and now more deliberately so: every caller runs this AFTER its
+    commit, so raising here would report a correction that already succeeded as a
+    failure — strictly worse than a stale index. But it no longer fails *silently*: an
+    unavailable search used to be indistinguishable from a working one, so an index that
+    never got invalidated looked exactly like an index that did.
     """
     try:
         from .search import mark_indexes_stale
+    except ImportError:  # search deps (numpy/faiss) absent — search is optional
+        logger.warning("search package unavailable; FAISS index not marked stale — "
+                       "search results may keep ranking corrected entities")
+        return
+    try:
         mark_indexes_stale()
-    except Exception:  # pragma: no cover - search is optional at import time
-        pass
+    except Exception:  # pragma: no cover - defensive; the flag flip cannot fail today
+        logger.exception("failed to mark the search index stale; it may now be serving "
+                         "vectors for entities that no longer exist")
 
 
 def apply_invalidation(conn, entity_id, *, reason=None, actor="human",
@@ -138,9 +152,11 @@ def apply_invalidation(conn, entity_id, *, reason=None, actor="human",
     _log(conn, action="invalidate", before_value=name_row[0], after_value=json.dumps(edge_ids),
          from_entity_id=entity_id, from_name=name_row[0], actor=actor, reason=reason,
          model_verdict=model_verdict, model_confidence=model_confidence, reviewer=reviewer)
-    _mark_search_index_stale()
     if commit:
         conn.commit()
+        # AFTER the commit, never before: a rebuild racing a pre-commit mark reads the
+        # old rows, then publishes itself ready — leaving a stale index believed fresh.
+        _mark_search_index_stale()
     return {"edges_invalidated": len(edge_ids)}
 
 
@@ -160,9 +176,11 @@ def rollback_invalidation(conn, entity_id, *, commit=True):
                      f"WHERE id IN ({ph})", edge_ids)
     _log(conn, action="rollback_invalidate", after_value=json.dumps(edge_ids),
          from_entity_id=entity_id)
-    _mark_search_index_stale()
     if commit:
         conn.commit()
+        # AFTER the commit, never before: a rebuild racing a pre-commit mark reads the
+        # old rows, then publishes itself ready — leaving a stale index believed fresh.
+        _mark_search_index_stale()
     return {"edges_restored": len(edge_ids)}
 
 
@@ -271,9 +289,11 @@ def apply_merge(conn, loser_id, survivor_id, *, actor="human", reason=None,
     _log(conn, action="merge", before_value=ls[1], after_value=snapshot, from_entity_id=loser_id,
          from_name=ls[1], to_entity_id=survivor_id, to_name=ss[1], actor=actor, reason=reason,
          model_verdict=model_verdict, model_confidence=model_confidence, reviewer=reviewer)
-    _mark_search_index_stale()
     if commit:
         conn.commit()
+        # AFTER the commit, never before: a rebuild racing a pre-commit mark reads the
+        # old rows, then publishes itself ready — leaving a stale index believed fresh.
+        _mark_search_index_stale()
     return {"survivor": survivor_id, "loser": loser_id, "edges_recomputed": len(rows)}
 
 
@@ -316,9 +336,11 @@ def rollback_merge(conn, loser_id, *, commit=True):
     if restored:
         conn.execute("UPDATE entities SET invalid_at=NULL, invalid_reason=NULL WHERE id=?", (loser_id,))
     _log(conn, action="rollback_merge", from_entity_id=loser_id, from_name=snap["loser"]["canonical_name"])
-    _mark_search_index_stale()
     if commit:
         conn.commit()
+        # AFTER the commit, never before: a rebuild racing a pre-commit mark reads the
+        # old rows, then publishes itself ready — leaving a stale index believed fresh.
+        _mark_search_index_stale()
     return {"restored": loser_id if restored else None, "sourceless": not restored}
 
 
@@ -369,4 +391,13 @@ def resolve_correction(conn, issue_id, action, *, reviewer="human"):
     conn.execute("UPDATE graph_issues SET status='accepted', reviewer=?, resolved_at=CURRENT_TIMESTAMP WHERE id=?",
                  (reviewer, issue_id))
     conn.commit()  # single atomic commit for apply + status
+    # This is the ONLY production path, and it runs every apply_* with commit=False —
+    # so those functions cannot mark the index themselves and the owner of the
+    # transaction has to, once the write is durable.
+    #
+    # Unconditional rather than per-action on purpose. It is an idempotent flag flip and
+    # a spurious rebuild is cheap by design, whereas enumerating actions is how `rename`
+    # and `retype` were missed: both mutate `canonical_name`/`type`, which is exactly
+    # what the entity index embeds, yet neither ever marked it stale.
+    _mark_search_index_stale()
     return {"status": "accepted", "applied": applied}

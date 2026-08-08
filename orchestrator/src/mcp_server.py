@@ -46,7 +46,11 @@ _active_workspace: str | None = None
 async def call_api(path: str, method: str = "GET", body: dict | None = None) -> dict:
     """Call the orchestrator API. Returns the JSON body on success, or a
     {"detail": ...} dict on transport / status / decode errors so MCP tools
-    can surface a readable message instead of crashing."""
+    can surface a readable message instead of crashing.
+
+    Status errors also carry `status`, so a caller that needs to distinguish "the graph
+    does not have this" from "the lookup failed" can branch on the code instead of
+    pattern-matching the human-readable message."""
     headers = {}
     if _active_workspace:
         headers["X-Workspace-Id"] = _active_workspace
@@ -59,7 +63,8 @@ async def call_api(path: str, method: str = "GET", body: dict | None = None) -> 
             resp.raise_for_status()
             return resp.json()
     except httpx.HTTPStatusError as e:
-        return {"detail": f"API {e.response.status_code}: {e.response.text[:200]}"}
+        return {"status": e.response.status_code,
+                "detail": f"API {e.response.status_code}: {e.response.text[:200]}"}
     except httpx.RequestError as e:
         return {"detail": f"Connection error: {e}"}
     except json.JSONDecodeError:
@@ -167,19 +172,28 @@ async def search_images(query: str, top_k: int = 10) -> str:
 @mcp.tool()
 async def get_entity(name: str) -> str:
     """Look up a specific entity by name. Returns its type, source documents, merge history, and co-occurring entities."""
-    # Resolve through the traversal endpoint, which does a case-insensitive lookup in
-    # SQL. This used to fetch `/entities?limit=500` and scan client-side, so any entity
-    # past position 500 was reported "not found" — and which 500 you got depended on
-    # the default ordering, which made it look intermittent rather than broken.
-    # quote(..., safe="") because the name is a PATH segment: an entity called
-    # "c++/cli" or one containing ? or # would otherwise be truncated or split, and
-    # the lookup would fail for a reason the user cannot see.
+    # Resolve server-side. This used to fetch `?limit=500` and scan here, so an entity
+    # past position 500 was reported "not found" — on a 94k-node graph, almost all of
+    # them. /neighborhood resolves by name in SQL and returns the node it matched.
+    # safe="" because `name` is an LLM-supplied argument interpolated into a PATH.
+    # quote's default safe="/" leaves separators intact, so a name like "../../stats"
+    # survives into the URL and httpx normalises the dot segments away — the MCP server
+    # then calls a DIFFERENT orchestrator endpoint and reports its body as this entity.
+    #
+    # Note this does NOT make "/"-containing names resolve: uvicorn percent-decodes the
+    # path before Starlette routes it, so %2F becomes "/" again and the extra segment
+    # still misses `{entity_id_or_name}`. Serving those needs a `:path` converter or the
+    # name moved off the URL entirely.
     seed = await call_api(f"/graph/neighborhood/{quote(name, safe='')}?depth=1&max_nodes=1")
     if "detail" in seed:
         # Only a genuine 404 means "no such entity". Reporting a 500 or a connection
         # failure as "not found" tells the caller the graph lacks something it may well
         # contain, which is worse than an error — they stop looking.
-        if "API 404" in str(seed["detail"]):
+        #
+        # Branch on the status, not the message: the message is assembled for humans,
+        # and matching "API 404" inside it makes the control flow depend on wording that
+        # nothing guarantees.
+        if seed.get("status") == 404:
             return f"Entity '{name}' not found"
         return f"Error looking up '{name}': {seed['detail']}"
     entity_id = seed["seed"]["id"]
@@ -265,7 +279,7 @@ async def get_neighborhood(entity_name: str, depth: int = 1, max_nodes: int = 20
     """Expand the neighborhood around an entity. Returns connected entities within N hops.
     Use depth=1 for immediate neighbors, depth=2 to see friends-of-friends.
     This is the primary graph exploration tool — start here after search."""
-    result = await call_api(f"/graph/neighborhood/{quote(entity_name)}?depth={depth}&max_nodes={max_nodes}")
+    result = await call_api(f"/graph/neighborhood/{quote(entity_name, safe='')}?depth={depth}&max_nodes={max_nodes}")
     if "detail" in result:
         return f"Error: {result['detail']}"
     seed = result["seed"]
@@ -288,7 +302,7 @@ async def get_neighborhood(entity_name: str, depth: int = 1, max_nodes: int = 20
 async def get_shared_context(entity_a: str, entity_b: str) -> str:
     """Find what two entities have in common: shared documents, shared neighbors, shared domains.
     Use this to understand WHY two entities are related or to discover non-obvious connections."""
-    result = await call_api(f"/graph/shared-context/{quote(entity_a)}/{quote(entity_b)}")
+    result = await call_api(f"/graph/shared-context/{quote(entity_a, safe='')}/{quote(entity_b, safe='')}")
     if "detail" in result:
         return f"Error: {result['detail']}"
     ea, eb = result["entity_a"], result["entity_b"]
@@ -314,7 +328,7 @@ async def get_shared_context(entity_a: str, entity_b: str) -> str:
 async def find_paths(entity_a: str, entity_b: str, max_depth: int = 4) -> str:
     """Find shortest path(s) between two entities through co-occurrence edges.
     Shows HOW two entities connect through the graph — useful for discovering indirect relationships."""
-    result = await call_api(f"/graph/paths/{quote(entity_a)}/{quote(entity_b)}?max_depth={max_depth}")
+    result = await call_api(f"/graph/paths/{quote(entity_a, safe='')}/{quote(entity_b, safe='')}?max_depth={max_depth}")
     if "detail" in result:
         return f"Error: {result['detail']}"
     ea, eb = result["entity_a"], result["entity_b"]

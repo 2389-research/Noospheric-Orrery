@@ -3,8 +3,12 @@
 
 from __future__ import annotations
 
+from ...repositories.graph_reads import degrees_of, entities_by_ids
 import sqlite3
+import threading
 from typing import TYPE_CHECKING
+
+import anyio
 
 if TYPE_CHECKING:
     from orrery_relay import Relay
@@ -21,42 +25,99 @@ from .fusion import rrf_fuse
 _config = SearchConfig()
 _indexes_ready = False
 
+# Guards the check-build-publish sequence as one unit, and the staleness flag with it.
+#
+# Without it the mark is simply lost: a search thread reads `_indexes_ready == False`,
+# spends seconds inside `build_indexes` (snapshotting the graph as it was), a correction
+# thread commits and sets the flag False, and the search thread then sets it True —
+# publishing an index built from pre-correction rows as fresh. Both threads are real:
+# `/search` is `async def` (event loop) while `/corrections/review` is a sync `def`
+# (anyio threadpool).
+#
+# It also protects `retrieval`'s module globals, which is the more serious of the two:
+# `_entity_ids` and `_entity_index` are assigned separately, so two overlapping builds
+# can pair one build's id list with the other's index and return the WRONG entities —
+# not merely a lost ranking slot.
+#
+# Deliberately a plain Lock, not an RLock: nothing reachable from `build_indexes`
+# re-enters this module, so reentrancy is not needed today — and if someone later adds a
+# `mark_indexes_stale()` inside the build path, an RLock would silently swallow it (a
+# lost mark, exactly the bug this guards against) whereas a Lock deadlocks loudly on the
+# first test run.
+_index_lock = threading.Lock()
+
 
 def mark_indexes_stale() -> None:
     """Force a FAISS rebuild on the next search.
 
     The index is built once per process. A correction that invalidates or merges an
-    entity changes what the index SHOULD contain, but leaves the index itself alone —
-    so the stale vector keeps occupying a top-k slot. `_enrich_results` drops it from
-    the output, which is why a deleted entity no longer appears, but the slot it
-    consumed is simply lost: an active entity that would have ranked just below it
-    never surfaces. Filtering the results is therefore necessary but not sufficient.
+    entity changes what the index SHOULD contain but leaves the index itself alone, so
+    the stale vector keeps occupying a top-k slot. `_enrich_results` drops it from the
+    output — which is why a deleted entity no longer appears — but the slot it consumed
+    is simply lost: an active entity ranked just below it never surfaces. Filtering the
+    results is therefore necessary but not sufficient.
 
-    Cheap to call — the rebuild reads stored embeddings rather than re-embedding.
+    Cheap: the rebuild reads stored embeddings rather than re-embedding.
     """
     global _indexes_ready
-    _indexes_ready = False
+    with _index_lock:
+        _indexes_ready = False
+
+
+def _ensure_indexes_built(conn: sqlite3.Connection) -> None:
+    """Check, build and publish as one unit — the sequence `_index_lock` exists for.
+
+    Splitting them is what lets a concurrent staleness mark be overwritten by the very
+    build it was meant to force. Blocking is deliberate: `mark_indexes_stale` waits for
+    an in-flight build to publish `True` and then flips it `False`, so the mark survives.
+    Do NOT "optimise" that back into a lock-free assignment.
+
+    Call from a worker thread, never the event loop — see `search_knowledge_graph`.
+    """
+    global _indexes_ready
+    with _index_lock:
+        if not _indexes_ready:
+            build_indexes(conn)
+            _indexes_ready = True
+
+
+def rebuild_indexes_now(conn: sqlite3.Connection):
+    """Force a rebuild under the same lock the search path uses, and publish it ready.
+
+    The manual rebuild endpoint called `build_indexes` directly, which is the same
+    unguarded write to `retrieval`'s module globals as an unlocked search — two builds
+    overlapping can pair one's `_entity_ids` with the other's `_entity_index`, so FAISS
+    positions resolve to the wrong entities. It also left `_indexes_ready` untouched, so
+    an explicit rebuild did not clear staleness.
+    """
+    global _indexes_ready
+    with _index_lock:
+        stats = build_indexes(conn)
+        _indexes_ready = True
+        return stats
 
 
 def _enrich_results(conn: sqlite3.Connection, results: SubQueryResults):
     """Fill in entity names/types and chunk text from DB."""
     # DROP entities whose active lookup fails, do not merely skip enriching them. The
-    # FAISS index is built periodically, so an entity invalidated SINCE the last build
-    # is still returned as a hit; leaving it in the list with blank metadata lets
-    # fusion surface a soft-deleted entity anyway — which is the bug the build-time
-    # filter alone does not close.
+    # FAISS index is built periodically, so an entity invalidated since the last build
+    # still comes back as a hit; leaving it in the list with blank metadata let fusion
+    # return a soft-deleted entity anyway — the exact bug the filter was added to fix.
+    #
+    # Two batched reads rather than two queries per hit: this runs once per SUB-query,
+    # so a 4-sub-query search over 20 hits each was ~160 round trips for what the
+    # primitives answer in 2. Iterating `semantic_entities` preserves the ranked order.
+    ids = [e.entity_id for e in results.semantic_entities]
+    active = entities_by_ids(conn, ids)
+    degrees = degrees_of(conn, list(active))
     active_entities = []
     for e in results.semantic_entities:
-        row = conn.execute(
-            "SELECT canonical_name, type FROM entities "
-            "WHERE id = ? AND invalid_at IS NULL", (e.entity_id,)).fetchone()
-        if not row:
+        row = active.get(e.entity_id)
+        if row is None:
             continue
-        e.name = row[0]
-        e.entity_type = row[1]
-        e.source_count = conn.execute(
-            "SELECT COUNT(*) FROM entity_sources WHERE entity_id = ?", (e.entity_id,)
-        ).fetchone()[0]
+        e.name = row["canonical_name"]
+        e.entity_type = row["type"]
+        e.source_count = degrees.get(e.entity_id, 0)
         active_entities.append(e)
     results.semantic_entities = active_entities
 
@@ -105,14 +166,21 @@ async def search_knowledge_graph(
     top_k: int = 20,
 ) -> SearchResponse:
     """Full search pipeline. Returns ranked entities + chunks."""
-    global _indexes_ready
-
     _config.max_results = top_k
 
-    # Ensure indexes are built
-    if not _indexes_ready:
-        build_indexes(conn)
-        _indexes_ready = True
+    # Off the event loop, NOT `with _index_lock:` inline.
+    #
+    # This coroutine runs on the loop thread, so taking the lock here would block the
+    # whole process — not just this request — for as long as someone else holds it. And
+    # `/search/rebuild` is a sync def (anyio threadpool) that now holds it across an
+    # entire build, which on a large graph is seconds, or a model download on first use.
+    # Serialising the builds is the point; stalling every other route while one runs is
+    # not. Awaiting a worker thread also fixes the pre-existing stall where a stale index
+    # blocked the loop for the duration of its own rebuild.
+    #
+    # Safe to hand `conn` across: get_connection opens with check_same_thread=False, and
+    # this awaits the thread, so the connection is never used from two threads at once.
+    await anyio.to_thread.run_sync(_ensure_indexes_built, conn)
 
     # Stage 0: Query expansion
     if expand and relay is not None:
@@ -142,4 +210,5 @@ async def search_knowledge_graph(
 
 
 # Re-export for backward compat
-__all__ = ["search_knowledge_graph", "build_indexes", "embed_new_entities", "embed_new_chunks"]
+__all__ = ["search_knowledge_graph", "build_indexes", "embed_new_entities", "embed_new_chunks",
+           "mark_indexes_stale", "rebuild_indexes_now"]

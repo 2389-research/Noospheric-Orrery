@@ -1,34 +1,42 @@
 """Search must hide soft-deleted entities, like every other surface.
 
-An entity removed through the corrections flow (`entities.invalid_at`) was still
-reachable through search. Every other read already filtered it — graph_ops and the
-repositories both do — so search was the single surface where a "deleted" node came
-back, which is worse than never having supported deletion: the graph says one thing
-and the search box says another.
+Search was the one read that ignored `invalid_at`, so a node removed through the
+corrections flow still surfaced there. Three separate holes, because there are three
+ways an entity reaches a result: the FAISS index build, the lexical (exact/substring)
+lookup, and per-hit hydration. An entity invalidated AFTER the last index build is
+still in the index, so the read-time filters matter independently of the build one.
 
-Three separate holes, because there are three ways an entity reaches a result:
-
-1. the FAISS index build,
-2. the lexical (exact / substring) lookup, which bypasses the vector index entirely,
-3. per-hit hydration.
-
-(3) matters independently of (1): the index is built periodically, so an entity
-invalidated SINCE the last build is still a live hit no matter how clean the build
-filter is. Closing only the build would look correct in a fresh test and fail in
-production.
+Targets `src.pipeline.search`, the PACKAGE. A same-named `search.py` sat beside it and
+shadowed-out — unreachable, and it briefly attracted a fix meant for this code. It has
+been deleted.
 """
 
 import numpy as np
+import pytest
 
 from src.pipeline.search import retrieval
+
+
+@pytest.fixture(autouse=True)
+def _restore_index_ready_flag():
+    """`_indexes_ready` is module-level state, so a test that sets it leaks into every
+    test that runs after it in the same process. The staleness tests below deliberately
+    set it True to simulate an already-built index; without this they would leave it
+    True (or False) for unrelated tests and the pollution would only show up as an
+    order-dependent failure somewhere else."""
+    from src.pipeline.search import pipeline as search_pipeline
+    before = search_pipeline._indexes_ready
+    yield
+    search_pipeline._indexes_ready = before
 
 
 def _seed(store):
     """Seed WITH stored embeddings, which is also the production case.
 
     `build_indexes` only reaches for the SentenceTransformer when a row is missing one,
-    so pre-storing them keeps this test off the model-download path and fast. The
-    vectors are arbitrary — nothing here asserts on semantic distance, only membership.
+    so pre-storing them keeps this test off the model-download path (CI installs
+    sentence-transformers but configures no HF cache) and keeps it fast. The vectors
+    are arbitrary — nothing here asserts on semantic distance, only on membership.
     """
     c = store.conn
     c.execute("INSERT INTO documents (id, title) VALUES ('d0', 'doc')")
@@ -50,10 +58,8 @@ def test_invalidated_entity_never_enters_the_index(test_store, monkeypatch):
     _seed(test_store)
     _invalidate(test_store, "e1")
 
-    # Pin the laziness as well as the filter. Every embedding is stored, so there is
-    # nothing to encode and touching the model at all is the bug — on a cold host it
-    # DOWNLOADS all-MiniLM-L6-v2, which is why CI hung when build_indexes loaded it
-    # unconditionally.
+    # Pin the laziness as well as the filter: with every embedding stored there is
+    # nothing to encode, so touching the model at all is the bug.
     def _no_model():
         raise AssertionError("build_indexes loaded the embedding model with nothing to encode")
     monkeypatch.setattr(retrieval, "_get_model", _no_model)
@@ -64,11 +70,10 @@ def test_invalidated_entity_never_enters_the_index(test_store, monkeypatch):
 
 
 def test_lexical_lookup_hides_invalidated_entities(test_store):
-    """Exact and substring matching bypass the vector index, so they need the filter
-    in their own right — a clean index does not protect them."""
+    """Exact and substring matching bypass the vector index entirely, so they need the
+    filter in their own right."""
     _seed(test_store)
     _invalidate(test_store, "e1")
-
     hits = retrieval.search_entities_exact(test_store.conn, "beta widget")
     assert "e1" not in {h.entity_id for h in hits}
 
@@ -79,12 +84,12 @@ def test_lexical_lookup_hides_invalidated_entities(test_store):
 
 
 def test_hydration_drops_entities_invalidated_since_the_last_index_build(test_store):
-    """The hole the build-time filter cannot close.
+    """The third hole, and the one the build-time filter cannot close.
 
-    The index is built periodically, so an entity invalidated AFTER the last build is
-    still a live hit. Enrichment must DROP it — merely skipping the name/type fill
-    leaves it in the list with blank metadata, and fusion then returns a soft-deleted
-    entity anyway.
+    The FAISS index is built periodically, so an entity invalidated AFTER the last
+    build is still a live hit. Enrichment used to merely skip filling in its name and
+    leave it in the list, so fusion returned a soft-deleted entity with blank metadata.
+    It has to be DROPPED. Ranked order among the survivors must not change.
     """
     from src.pipeline.search.models import ScoredEntity, SubQueryResults
     from src.pipeline.search.pipeline import _enrich_results
@@ -101,8 +106,89 @@ def test_hydration_drops_entities_invalidated_since_the_last_index_build(test_st
     surviving = [e.entity_id for e in results.semantic_entities]
     assert surviving == ["e0", "e2"], "the invalidated hit is dropped, order otherwise kept"
     assert all(e.name and e.entity_type for e in results.semantic_entities), \
-        "survivors are enriched, not merely retained"
+        "survivors are enriched, not just retained"
+    assert all(e.source_count == 1 for e in results.semantic_entities), \
+        "each seeded entity is mentioned in exactly one document"
 
+
+def test_a_correction_marks_the_search_index_stale(test_store):
+    """Filtering the results is necessary but not sufficient.
+
+    The FAISS index is built once per process. Dropping invalidated hits at read time
+    stops a deleted entity from APPEARING, but the stale vector still occupied a top-k
+    slot on the way through — so an active entity ranked just below it silently never
+    surfaces. Found by review on the base repo; the same gap existed here.
+    """
+    from src.pipeline import graph_repair
+    from src.pipeline.search import pipeline as search_pipeline
+
+    _seed(test_store)
+    search_pipeline._indexes_ready = True          # simulate an index built earlier
+    graph_repair.apply_invalidation(test_store.conn, "e1", reason="test")
+
+    assert search_pipeline._indexes_ready is False, (
+        "a soft delete must force a rebuild; otherwise the removed entity keeps "
+        "consuming a result slot an active entity should have had")
+
+
+def test_rolling_a_correction_back_also_marks_the_index_stale(test_store):
+    """The inverse: an index built WHILE the entity was invalid does not contain it, so
+    restoring the entity has to rebuild or it stays invisible."""
+    from src.pipeline import graph_repair
+    from src.pipeline.search import pipeline as search_pipeline
+
+    _seed(test_store)
+    graph_repair.apply_invalidation(test_store.conn, "e1", reason="test")
+    search_pipeline._indexes_ready = True
+    graph_repair.rollback_invalidation(test_store.conn, "e1")
+
+    assert search_pipeline._indexes_ready is False
+
+
+def test_a_merge_marks_the_search_index_stale(test_store):
+    """Merge is the other way a node leaves the active graph.
+
+    Invalidate and merge are separate code paths that happen to share a consequence:
+    both soft-delete an entity, so both leave a vector in the index with no active row
+    behind it. Covering only invalidation would let a regression in the merge path
+    through.
+
+    Scope, so this is not read as more coverage than it is: this is the CORRECTIONS
+    merge. Batch normalization (`POST /normalize`) does not come through here — it goes
+    through `embedding_normalizer._merge_entities_conn`, which hard-deletes and still
+    never marks the index stale. Same gap in `sqlite_store`'s document-delete and
+    `EntityRepo.delete`. Pre-existing, and untouched by this change.
+    """
+    from src.pipeline import graph_repair
+    from src.pipeline.search import pipeline as search_pipeline
+
+    _seed(test_store)
+    search_pipeline._indexes_ready = True
+    graph_repair.apply_merge(test_store.conn, "e1", "e0", reason="test")
+
+    assert search_pipeline._indexes_ready is False, (
+        "the merged-away entity is soft-deleted, so its vector must not keep "
+        "occupying a top-k slot")
+
+
+def test_rolling_a_merge_back_also_marks_the_index_stale(test_store):
+    """The inverse, for the same reason rollback_invalidation has one: an index built
+    while the loser was merged away does not contain it, so restoring it has to
+    rebuild or the entity stays invisible to search."""
+    from src.pipeline import graph_repair
+    from src.pipeline.search import pipeline as search_pipeline
+
+    _seed(test_store)
+    graph_repair.apply_merge(test_store.conn, "e1", "e0", reason="test")
+    search_pipeline._indexes_ready = True
+    graph_repair.rollback_merge(test_store.conn, "e1")
+
+    assert search_pipeline._indexes_ready is False
+
+# ── Tests that originated HERE, in the base repo ─────────────────────────────
+# The fork never received these, so they are not in the file this was ported from.
+# Keep them: they cover two holes the staleness work does not — the entity-boost
+# expansion reaching THROUGH an invalidated node, and the shadowed-module trap.
 
 def test_entity_boost_does_not_reach_through_an_invalidated_entity(test_store):
     """The boost joins chunks via shared entities, so an unfiltered join lets a
@@ -148,39 +234,3 @@ def test_the_search_package_is_not_shadowed_by_a_module(test_store):
         "pipeline/search.py is shadowed by pipeline/search/ and can never run — "
         "edits to it are silently inert")
     assert (pipeline_dir / "search" / "retrieval.py").exists()
-
-
-def test_a_correction_marks_the_search_index_stale(test_store):
-    """Filtering the results is necessary but not sufficient.
-
-    The FAISS index is built once per process. Dropping invalidated hits at read time
-    stops a deleted entity from APPEARING, but the stale vector still occupied a top-k
-    slot on the way through — so an active entity ranked just below it silently never
-    surfaces. The correction has to invalidate the index too.
-    """
-    from src.pipeline import graph_repair
-    from src.pipeline.search import pipeline as search_pipeline
-
-    _seed(test_store)
-    search_pipeline._indexes_ready = True          # simulate an index built earlier
-
-    graph_repair.apply_invalidation(test_store.conn, "e1", reason="test")
-
-    assert search_pipeline._indexes_ready is False, (
-        "a soft delete must force a rebuild; otherwise the removed entity keeps "
-        "consuming a result slot that an active entity should have had")
-
-
-def test_rolling_a_correction_back_also_marks_the_index_stale(test_store):
-    """The inverse case: an index built WHILE the entity was invalid does not contain
-    it, so restoring the entity has to rebuild too or it stays invisible."""
-    from src.pipeline import graph_repair
-    from src.pipeline.search import pipeline as search_pipeline
-
-    _seed(test_store)
-    graph_repair.apply_invalidation(test_store.conn, "e1", reason="test")
-    search_pipeline._indexes_ready = True
-
-    graph_repair.rollback_invalidation(test_store.conn, "e1")
-
-    assert search_pipeline._indexes_ready is False

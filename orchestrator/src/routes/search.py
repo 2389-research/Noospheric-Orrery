@@ -135,10 +135,10 @@ def rebuild_search_index(auth: AuthStore = Depends(get_auth_store)):
     """Rebuild FAISS search indexes — re-embeds entities and chunks missing embeddings."""
     store = auth.store
 
-    from ..pipeline.search import build_indexes, embed_new_entities, embed_new_chunks
+    from ..pipeline.search import rebuild_indexes_now, embed_new_entities, embed_new_chunks
     new_entities = embed_new_entities(store.conn)
     new_chunks = embed_new_chunks(store.conn)
-    stats = build_indexes(store.conn)
+    stats = rebuild_indexes_now(store.conn)
     store.close()
     return {"status": "rebuilt", "new_entities_embedded": new_entities, "new_chunks_embedded": new_chunks, **stats}
 
