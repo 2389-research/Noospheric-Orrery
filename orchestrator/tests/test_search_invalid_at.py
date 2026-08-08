@@ -46,9 +46,18 @@ def _invalidate(store, eid):
     store.conn.commit()
 
 
-def test_invalidated_entity_never_enters_the_index(test_store):
+def test_invalidated_entity_never_enters_the_index(test_store, monkeypatch):
     _seed(test_store)
     _invalidate(test_store, "e1")
+
+    # Pin the laziness as well as the filter. Every embedding is stored, so there is
+    # nothing to encode and touching the model at all is the bug — on a cold host it
+    # DOWNLOADS all-MiniLM-L6-v2, which is why CI hung when build_indexes loaded it
+    # unconditionally.
+    def _no_model():
+        raise AssertionError("build_indexes loaded the embedding model with nothing to encode")
+    monkeypatch.setattr(retrieval, "_get_model", _no_model)
+
     retrieval.build_indexes(test_store.conn)
     assert "e1" not in (retrieval._entity_ids or [])
     assert {"e0", "e2"} <= set(retrieval._entity_ids or [])

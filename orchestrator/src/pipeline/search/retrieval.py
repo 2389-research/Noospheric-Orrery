@@ -40,7 +40,10 @@ def build_indexes(conn: sqlite3.Connection) -> dict:
     import faiss
     global _entity_index, _chunk_index, _entity_ids, _chunk_ids
 
-    model = _get_model()
+    # NOT `model = _get_model()` up front. That instantiates (and, on a cold host,
+    # DOWNLOADS) all-MiniLM-L6-v2 on every index build — including the common case
+    # where every row already has a stored embedding and nothing needs encoding.
+    # Resolved instead at the two points that actually encode.
 
     # Entity index
     # Build-time filter: a soft-deleted entity must never enter the index at all.
@@ -61,7 +64,7 @@ def build_indexes(conn: sqlite3.Connection) -> dict:
 
         if needs_embed:
             names = [n for _, n in needs_embed]
-            new_embeds = model.encode(names, normalize_embeddings=True).astype(np.float32)
+            new_embeds = _get_model().encode(names, normalize_embeddings=True).astype(np.float32)
             for j, (idx, _) in enumerate(needs_embed):
                 embeddings[idx] = new_embeds[j]
                 # Store back to DB
@@ -91,7 +94,8 @@ def build_indexes(conn: sqlite3.Connection) -> dict:
 
         if needs_embed:
             texts = [t for _, t in needs_embed]
-            new_embeds = model.encode(texts, normalize_embeddings=True, batch_size=64).astype(np.float32)
+            new_embeds = _get_model().encode(
+                texts, normalize_embeddings=True, batch_size=64).astype(np.float32)
             for j, (idx, _) in enumerate(needs_embed):
                 embeddings[idx] = new_embeds[j]
                 conn.execute("UPDATE chunks SET embedding = ? WHERE id = ?",
