@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 from .config import SearchConfig
 from .models import SubQueryResults, ScoredEntity, ScoredChunk, SearchResponse
 from .retrieval import (
-    build_indexes, embed_text, embed_new_entities, embed_new_chunks,
+    ACTIVE, build_indexes, embed_text, embed_new_entities, embed_new_chunks,
     search_entities_semantic, search_chunks_semantic, search_entities_exact,
 )
 from .entity_boost import boost_chunks_via_entities
@@ -24,14 +24,25 @@ _indexes_ready = False
 
 def _enrich_results(conn: sqlite3.Connection, results: SubQueryResults):
     """Fill in entity names/types and chunk text from DB."""
+    # DROP entities whose active lookup fails, do not merely skip enriching them. The
+    # FAISS index is built periodically, so an entity invalidated SINCE the last build
+    # is still returned as a hit; leaving it in the list with blank metadata lets
+    # fusion surface a soft-deleted entity anyway — which is the bug the build-time
+    # filter alone does not close.
+    active_entities = []
     for e in results.semantic_entities:
-        row = conn.execute("SELECT canonical_name, type FROM entities WHERE id = ?", (e.entity_id,)).fetchone()
-        if row:
-            e.name = row[0]
-            e.entity_type = row[1]
-            e.source_count = conn.execute(
-                "SELECT COUNT(*) FROM entity_sources WHERE entity_id = ?", (e.entity_id,)
-            ).fetchone()[0]
+        row = conn.execute(
+            f"SELECT canonical_name, type FROM entities WHERE id = ? AND {ACTIVE}",
+            (e.entity_id,)).fetchone()
+        if not row:
+            continue
+        e.name = row[0]
+        e.entity_type = row[1]
+        e.source_count = conn.execute(
+            "SELECT COUNT(*) FROM entity_sources WHERE entity_id = ?", (e.entity_id,)
+        ).fetchone()[0]
+        active_entities.append(e)
+    results.semantic_entities = active_entities
 
     for c in results.semantic_chunks:
         row = conn.execute(

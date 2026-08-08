@@ -48,7 +48,7 @@ def boost_chunks_via_entities(
         SELECT es.chunk_id, COUNT(DISTINCT es.entity_id) as overlap,
                GROUP_CONCAT(e.canonical_name, ', ') as names
         FROM entity_sources es
-        JOIN entities e ON e.id = es.entity_id
+        JOIN entities e ON e.id = es.entity_id AND e.invalid_at IS NULL
         WHERE es.entity_id IN ({placeholders}) AND es.chunk_id IS NOT NULL
         GROUP BY es.chunk_id
         ORDER BY overlap DESC
