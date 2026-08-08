@@ -4,20 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 import { getAuthToken } from "@/lib/firebase";
-
-const ENTITY_COLORS: Record<string, string> = {
-  Person: "#378ADD",
-  Organization: "#7F77DD",
-  Product: "#1D9E75",
-  Technology: "#BA7517",
-  Event: "#D85A30",
-  Concept: "#9c9a92",
-  Location: "#5DCAA5",
-};
-
-function getEntityColor(type: string): string {
-  return ENTITY_COLORS[type] ?? "#9c9a92";
-}
+import { getEntityColor } from "./entity-colors";
 
 function relativeTime(dateStr: string | null | undefined): string {
   if (!dateStr) return "unknown";
@@ -144,20 +131,21 @@ export function DomainPanelContent({ data, domainColor, onNavigateEntity, onNavi
         const headers: Record<string, string> = {};
         if (token) headers["Authorization"] = `Bearer ${token}`;
         if (noosphereId) headers["X-Workspace-Id"] = noosphereId;
-        const graphResp = await fetch(`/api/graph`, { headers });
-        const graph = await graphResp.json();
-        const routes = (graph.trade_routes || []).filter(
-          (r: { source: string; target: string }) => r.source === data.path || r.target === data.path
+        // Scoped read. This used to fetch the WHOLE graph payload and filter
+        // client-side — 9,459 edges plus a 57,155-node index, ~3.2s and ~3.4MB, to
+        // show six neighbours. The endpoint does the same co-occurrence read bounded
+        // to one domain.
+        const resp = await fetch(
+          `/api/graph/domain/${encodeURIComponent(data.path)}/neighbours?limit=6`,
+          { headers },
         );
+        const { neighbours = [] } = await resp.json();
         setConnectedDomains(
-          routes
-            .map((r: { source: string; target: string; weight: number }) => ({
-              path: r.source === data.path ? r.target : r.source,
-              name: (r.source === data.path ? r.target : r.source).split("/").pop() || "",
-              weight: r.weight,
-            }))
-            .sort((a: ConnectedDomain, b: ConnectedDomain) => b.weight - a.weight)
-            .slice(0, 6)
+          neighbours.map((n: { path: string; weight: number }) => ({
+            path: n.path,
+            name: n.path.split("/").pop() || "",
+            weight: n.weight,
+          }))
         );
       } catch {
         // trade routes are optional

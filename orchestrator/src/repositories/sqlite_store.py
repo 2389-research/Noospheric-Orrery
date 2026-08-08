@@ -57,6 +57,25 @@ class SQLiteDocumentRepository(DocumentRepository):
             thumbnail_path=row["thumbnail_path"] if "thumbnail_path" in row.keys() else None,
         )
 
+    def get_titles(self, ids):
+        """Map doc_id -> {title, content_type} for the given ids. Lets a caller
+        label a set of documents (e.g. an entity's source docs) without joining
+        against the paginated `list()` — which only returns the first page, so
+        callers were falling back to showing raw doc-id hashes. Batched to stay
+        under SQLite's bound-parameter limit (an entity can cite thousands)."""
+        out = {}
+        ids = list(dict.fromkeys(ids))  # de-dupe, preserve order
+        for i in range(0, len(ids), 900):
+            batch = ids[i:i + 900]
+            placeholders = ",".join("?" * len(batch))
+            rows = self._conn.execute(
+                f"SELECT id, title, content_type FROM documents WHERE id IN ({placeholders})",
+                batch,
+            ).fetchall()
+            for r in rows:
+                out[r["id"]] = {"title": r["title"], "content_type": r["content_type"] or "text"}
+        return out
+
     def list(self, limit=50, offset=0):
         rows = self._conn.execute(
             "SELECT d.*, GROUP_CONCAT(dd.domain_path) as domains FROM documents d "
@@ -861,6 +880,103 @@ class SQLiteSimmerIterationRepository(SimmerIterationRepository):
 
 # ── Composite DataStore ──────────────────────────────────
 
+class SQLiteCollectionRepository:
+    """Reads and writes for the collection layer.
+
+    A COLLECTION is a labelled, hierarchical grouping of documents — a git repo, an
+    agent run, anything whose documents arrived together. It sits beside `domains`
+    rather than above or below: both are containers of documents, and they stay
+    distinct because their provenance differs (a domain is inferred, a collection is
+    given).
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def create(self, id, name, path, root_path, parent_path=None, kind="git_repo"):
+        self._conn.execute(
+            "INSERT INTO collections (id, name, path, root_path, parent_path, kind) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (id, name, path, root_path, parent_path, kind),
+        )
+        self._conn.commit()
+        return id
+
+    def link_document(self, document_id, collection_id, *, parent_path=None,
+                      role=None, emits_cooccurrence=None):
+        """Attach a document to a collection at a position in its tree.
+
+        `role` ('root' | 'group' | 'leaf') and `emits_cooccurrence` are deliberately
+        separate. Structural position and extraction behaviour are independent: a root
+        or group summary mentions everything beneath it, so its co-occurrence is noise
+        — but that is a DEFAULT, not a law. Deriving one from the other is what forces
+        every new collection kind to impersonate a code repo in order to opt in.
+        """
+        if emits_cooccurrence is None:
+            emits_cooccurrence = role == "leaf"
+        self._conn.execute(
+            "INSERT OR IGNORE INTO document_collections "
+            "(document_id, collection_id, parent_path, role, emits_cooccurrence) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (document_id, collection_id, parent_path, role, int(bool(emits_cooccurrence))),
+        )
+        self._conn.commit()
+
+    def get_collection_routes(self):
+        """collection <-> collection edges DERIVED from shared entities.
+
+        One join to `entities` filters both sides, since dc1 and dc2 reach the same
+        entity_id — an invalidated entity contributes no routes.
+
+        `emits_cooccurrence` is honoured on BOTH sides. It is the explicit replacement
+        for the old `level == 'file'` test, and a derived read that ignores it silently
+        reinstates the behaviour the column was added to remove: a collection's rollup
+        and per-group summary documents mention everything under them, so letting them
+        contribute makes every collection look related to every other.
+        """
+        rows = self._conn.execute("""
+            SELECT dc1.collection_id, dc2.collection_id, COUNT(*) as weight
+            FROM entity_sources es1
+            JOIN entity_sources es2 ON es1.entity_id = es2.entity_id
+                                   AND es1.document_id != es2.document_id
+            JOIN entities e ON e.id = es1.entity_id AND e.invalid_at IS NULL
+            JOIN document_collections dc1 ON es1.document_id = dc1.document_id
+                                         AND dc1.emits_cooccurrence = 1
+            JOIN document_collections dc2 ON es2.document_id = dc2.document_id
+                                         AND dc2.emits_cooccurrence = 1
+            WHERE dc1.collection_id < dc2.collection_id
+            GROUP BY dc1.collection_id, dc2.collection_id
+        """).fetchall()
+        return [{"source": r[0], "target": r[1], "weight": r[2]} for r in rows]
+
+    def get_collection_weights(self):
+        """entity id -> {collection_id: normalized share of its mentions}.
+
+        Same `emits_cooccurrence` opt-out as the routes above: a summary document
+        mentions everything beneath it, so counting it would pull every entity's mass
+        toward whichever collection has the wordiest rollup.
+        """
+        rows = self._conn.execute("""
+            SELECT es.entity_id, dc.collection_id, COUNT(*) as weight
+            FROM entity_sources es
+            JOIN document_collections dc ON es.document_id = dc.document_id
+                                        AND dc.emits_cooccurrence = 1
+            JOIN entities e ON e.id = es.entity_id AND e.invalid_at IS NULL
+            GROUP BY es.entity_id, dc.collection_id
+        """).fetchall()
+        # Named access, not positional: the columns are (entity_id, collection_id,
+        # weight), so an index slip silently sums ids instead of counts.
+        totals: dict[str, int] = {}
+        for r in rows:
+            totals[r["entity_id"]] = totals.get(r["entity_id"], 0) + r["weight"]
+        result: dict[str, dict[str, float]] = {}
+        for r in rows:
+            total = totals[r["entity_id"]]
+            result.setdefault(r["entity_id"], {})[r["collection_id"]] = (
+                round(r["weight"] / total, 3) if total else 0)
+        return result
+
+
 class SQLiteDataStore(DataStore):
     def __init__(self, db_path: str):
         init_db(db_path)
@@ -876,7 +992,10 @@ class SQLiteDataStore(DataStore):
         self._normalization = SQLiteNormalizationRepository(self._conn)
         self._layout = SQLiteLayoutRepository(self._conn)
         self._simmer_iterations = SQLiteSimmerIterationRepository(self._conn)
+        self._collections = SQLiteCollectionRepository(self._conn)
 
+    @property
+    def collections(self): return self._collections
     @property
     def documents(self): return self._documents
     @property

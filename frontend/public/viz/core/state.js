@@ -5,12 +5,30 @@
 
 import { WORLD_W, WORLD_H, sqrt, random, hypot, assignDomainColors, blendColors, hexRGB, rnd, TAU } from './utils.js';
 
+// Hydration swaps rather than grows: the render set stays at exactly the size the
+// server chose (max_render_nodes), so the draw cost and sprite budget never drift.
+// A newly-resolved node displaces one of the weakest currently-rendered nodes,
+// picked at random from the lowest-degree pool so the same node isn't always the
+// victim. Eviction is not lossy — every node stays in `nodeIndex` and can be
+// hydrated again.
+const EVICT_POOL_SIZE = 100;
+
 export class WorldState {
   constructor() {
     this.domains = new Map();    // path → domain node
     this.entities = new Map();   // id → entity node
+    this.collections = new Map();      // id → collection node (binned inside its domain)
+    this.domainEntities = new Map(); // path → entity nodes (reverse index for 1-hop hover)
+    this.collectionEntities = new Map();   // collectionId → entity nodes (reverse index for 1-hop hover)
+    this.nodeIndex = new Map();      // id → raw record for EVERY node, not just the render set
+    this.nodeIdByName = new Map();   // lowercased name → id, over that same full set
+    this.renderCap = 0;              // held at the server's render-set size
+    this._evictPool = [];            // lowest-degree ids, candidates to displace
     this.clusters = [];          // [{id, domainPaths, centroidX, centroidY, radius}]
     this.tradeRoutes = [];       // [{source, target, weight}]
+    this.collectionRoutes = [];        // collection↔collection shared-entity edges
+    this.collectionEdges = [];         // collection↔collection manifest co-usage edges
+    this.collectionNeighbors = new Map(); // collectionId → Set(connected ids), built once at load
     this.domainColors = {};      // path → hex
     this.tick = 0;
 
@@ -36,17 +54,44 @@ export class WorldState {
     this.graphData = data;
     this.domains.clear();
     this.entities.clear();
+    this.collections.clear();
+
+    // One `layout.positions` map holds every node type, so a domain is any positioned
+    // id that is not a collection. Collections are nodes[] entries of type='collection'.
+    const layout = data.layout || {};
+    const layoutPositions = layout.positions || {};
+    const collectionRecords = (data.nodes || [])
+      .filter(n => n.type === 'collection')
+      .map(n => ({
+        id: n.id, name: n.label, path: n.path, document_count: n.degree || 0,
+        domain: (n.memberships || []).find(m => m.container_type === 'domain')?.id ?? null,
+      }));
+    const collectionIds = new Set(collectionRecords.map(r => r.id));
+    const domainPositions = Object.fromEntries(
+      Object.entries(layoutPositions).filter(([id]) => !collectionIds.has(id)));
+    const collectionPositions = layoutPositions;
+    const palette = layout.palette || null;
+    const simmeringDomains = data.meta?.activity?.simmering_domains || [];
+
+    // Per-domain facts come from `taxonomy`, looked up by path. Domains are enumerated
+    // from the positions map, NOT from taxonomy: taxonomy describes every domain with
+    // content (156 on the office graph) while only the positioned ones can be drawn
+    // (145), so enumerating the wider set would yield domains with no coordinates.
+    const taxByPath = new Map((data.taxonomy || []).map(t => [t.path, t]));
+    const docCountOf = p => taxByPath.get(p)?.document_count || 0;
+    const specVersionOf = p => taxByPath.get(p)?.spec_version || 0;
+    const isSubdomainOf = p => !!taxByPath.get(p)?.is_subdomain;
 
     // Compute colors
-    const domainList = Object.keys(data.domain_positions).map(path => ({
+    const domainList = Object.keys(domainPositions).map(path => ({
       path,
-      spec_version: data.domain_specs?.[path]?.spec_version ?? null,
+      spec_version: specVersionOf(path) || null,
     }));
     this.domainColors = assignDomainColors(domainList);
 
-    // Also store per-domain from API colors as fallback
-    if (data.region_colors) {
-      for (const [path, color] of Object.entries(data.region_colors)) {
+    // Also store per-domain API colors as fallback
+    if (palette) {
+      for (const [path, color] of Object.entries(palette)) {
         if (!this.domainColors[path]) {
           this.domainColors[path] = color;
         }
@@ -55,29 +100,29 @@ export class WorldState {
 
     // Create domain nodes in world space
     const PADDING = 0.08;
-    for (const [path, pos] of Object.entries(data.domain_positions)) {
-      const vc = data.domain_video_counts?.[path] || 0;
-      const isSub = (data.subdomains || []).includes(path);
-      const specs = data.domain_specs || {};
-      const hasSpec = specs[path] && specs[path].spec_version > 0;
+    for (const [path, pos] of Object.entries(domainPositions)) {
+      const vc = docCountOf(path);
+      const isSub = isSubdomainOf(path);
+      const specVersion = specVersionOf(path);
+      const hasSpec = specVersion > 0;
 
       // UMAP → world space
       const wx = (PADDING + pos.x * (1 - 2 * PADDING)) * WORLD_W;
       const wy = (PADDING + pos.y * (1 - 2 * PADDING)) * WORLD_H;
 
       // Compute maturity
-      const allPaths = Object.keys(data.domain_positions);
+      const allPaths = Object.keys(domainPositions);
       const subdoms = allPaths.filter(p => p.startsWith(path + '/') && p !== path);
       let maturity = 0;
       if (subdoms.length === 0) {
         maturity = hasSpec ? 1.0 : 0.0;
       } else {
-        const subWithSpec = subdoms.filter(p => specs[p] && specs[p].spec_version > 0).length;
+        const subWithSpec = subdoms.filter(p => specVersionOf(p) > 0).length;
         const subCoverage = subWithSpec / subdoms.length;
         maturity = hasSpec ? 0.5 + subCoverage * 0.5 : subCoverage * 0.4;
       }
 
-      const isSimmering = (data.active_simmers || []).includes(path);
+      const isSimmering = simmeringDomains.includes(path);
       const radius = isSub ? 60 + sqrt(vc) * 20 : 120 + sqrt(vc) * 35;
 
       this.domains.set(path, {
@@ -92,7 +137,7 @@ export class WorldState {
         x: wx, y: wy,  // current position (after repulsion)
         docCount: vc,
         maturity,
-        specVersion: hasSpec ? specs[path].spec_version : 0,
+        specVersion,
         entityCount: 0, // populated after entities are loaded
         simmering: isSimmering,
         isSubdomain: isSub,
@@ -109,77 +154,302 @@ export class WorldState {
     // Compute clusters
     this._computeClusters(600);
 
-    // Create entity nodes
-    for (const ent of (data.entities || [])) {
-      const dw = ent.domainWeights || {};
-      const domNames = Object.keys(dw);
-      if (!domNames.length) continue;
-
-      // Position: weighted average of domain positions
-      let sx = 0, sy = 0, tw = 0;
-      const domColors = [], domWeights = [];
-      for (const [dname, w] of Object.entries(dw)) {
-        const dom = this.domains.get(dname);
-        if (!dom) continue;
-        // Cube weights for symmetry breaking
-        const cw = w * w * w;
-        sx += dom.x * cw;
-        sy += dom.y * cw;
-        tw += cw;
-        domColors.push(dom.color);
-        domWeights.push(w);
+    // Collection nodes FIRST (so entities can be positioned relative to theirs).
+    // Placed by their OWN semantic position, mapped to world coords like domains.
+    const COLL_PAD = 0.08;
+    for (const coll of collectionRecords) {
+      const pos = collectionPositions[coll.id];
+      let rwx, rwy;
+      if (pos) {
+        rwx = (COLL_PAD + pos.x * (1 - 2 * COLL_PAD)) * WORLD_W;
+        rwy = (COLL_PAD + pos.y * (1 - 2 * COLL_PAD)) * WORLD_H;
+      } else {
+        const dom = coll.domain ? this.domains.get(coll.domain) : null;
+        rwx = dom ? dom.x : WORLD_W / 2;
+        rwy = dom ? dom.y : WORLD_H / 2;
       }
-      if (tw === 0) continue;
-      sx /= tw; sy /= tw;
-
-      const vc = ent.videoCount || 0;
-      const color = domColors.length > 1 ? blendColors(domColors, domWeights) : domColors[0];
-
-      this.entities.set(ent.entityId || ('ent:' + ent.name), {
-        id: ent.entityId || ('ent:' + ent.name),
-        kind: 'entity',
-        name: ent.name,
-        label: ent.name,
-        type: ent.type,
-        color,
-        radius: 2 + Math.min(sqrt(vc) * 0.8, 8),
-        worldX: sx + rnd(-30, 30),
-        worldY: sy + rnd(-30, 30),
-        x: sx + rnd(-30, 30),
-        y: sy + rnd(-30, 30),
-        vx: 0, vy: 0,
-        sourceCount: vc,
-        domainWeights: dw,
-        phase: random() * TAU,
-        birthScale: 0,
-        stability: Math.min(0.9, 0.3 * Math.log(vc + 1) / Math.log(30)),
-        activityGlow: 0,
+      this.collections.set(coll.id, {
+        id: 'collection:' + coll.id, collectionId: coll.id, kind: 'collection',
+        label: coll.name, name: coll.name, domainPath: coll.domain || null,
+        color: '#e0a030', radius: 16 + Math.min(sqrt(coll.document_count || 0) * 3, 10),
+        worldX: rwx, worldY: rwy, x: rwx, y: rwy, docCount: coll.document_count || 0,
+        phase: random() * TAU, birthScale: 0,
       });
     }
+
+    // Create entity nodes — positioned around the COLLECTION they belong to
+    // (collectionWeights), since a code entity lives in a specific collection. Falls
+    // back to the domain centroid only if it has no resolvable collection.
+    const entityRecords = (data.nodes || []).filter(n => n.type === 'entity');
+    for (const ent of entityRecords) {
+      const node = this._makeEntityNode(ent);
+      if (node) this.entities.set(node.id, node);
+    }
+
+    // Index EVERY node the payload describes, not only the rendered top-N, so a
+    // search hit outside the render set stays resolvable and can be hydrated on
+    // demand (see hydrateEntity — without this, hits on the un-rendered tail, ~91k of
+    // 94k on the office graph, were a silent no-op).
+    //
+    const nodeIndexSource = data.node_index || {};
+    this.nodeIndex.clear();
+    this.nodeIdByName.clear();
+    for (const [id, rec] of Object.entries(nodeIndexSource)) {
+      this.nodeIndex.set(id, rec.id ? rec : { ...rec, id });
+      const nm = (rec.label || '').toLowerCase();
+      // First id wins on a name collision — ~8% of names are shared on the office
+      // graph, which is also why the search broadcast really wants to carry ids.
+      if (nm && !this.nodeIdByName.has(nm)) this.nodeIdByName.set(nm, id);
+    }
+
+    // Hold the render set at whatever the server sized it to; hydration swaps.
+    this.renderCap = this.entities.size;
+    this._evictPool = [];
 
     // Entity repulsion — push overlapping entities apart
     this._spreadEntities(30, 50);
 
-    // Count entities per domain
+    // Count entities per domain + build reverse indexes (domain/collection → entities)
+    // so 1-hop neighborhood highlighting is an O(1) lookup on hover, not a
+    // per-frame scan over all entities.
+    this.domainEntities.clear();
+    this.collectionEntities.clear();
     for (const [, e] of this.entities) {
       for (const path of Object.keys(e.domainWeights || {})) {
         const dom = this.domains.get(path);
         if (dom) dom.entityCount++;
+        let arr = this.domainEntities.get(path);
+        if (!arr) this.domainEntities.set(path, arr = []);
+        arr.push(e);
+      }
+      for (const rid of Object.keys(e.collectionWeights || {})) {
+        if (!this.collections.has(rid)) continue;
+        let arr = this.collectionEntities.get(rid);
+        if (!arr) this.collectionEntities.set(rid, arr = []);
+        arr.push(e);
       }
     }
 
+    // (collection nodes are created above, before entities, so entities can be
+    // positioned relative to theirs)
+    // All route kinds arrive in one typed `edges` collection, separated by type +
+    // scope rather than by having their own top-level key.
+    const edgesOf = (type, scope) => (data.edges || [])
+      .filter(e => e.type === type && (scope === undefined || e.scope === scope))
+      .map(e => ({ source: e.source, target: e.target, weight: e.weight }));
+
+    this.collectionRoutes = edgesOf('cooccurrence', 'collection');
+    // Every ASSERTED collection edge, not just `uses`. Filtering to 'uses' dropped
+    // `chain_next`, so a tracker run's trajectory neighbours vanished from the
+    // adjacency index and its lines stopped drawing. (Drawing the two kinds
+    // *differently* is separate viz work; the payload keeps them distinct either way.)
+    this.collectionEdges = (data.edges || [])
+      .filter(e => e.scope === 'collection' && e.type !== 'cooccurrence')
+      .map(e => ({ source: e.source, target: e.target, weight: e.weight, type: e.type }));
+
+    // Collection adjacency index (both directions), built once — so neighborhood
+    // hover reads O(1) instead of rescanning the edge arrays per lookup.
+    this.collectionNeighbors = new Map();
+    const _adj = (a, b) => {
+      let s = this.collectionNeighbors.get(a);
+      if (!s) this.collectionNeighbors.set(a, s = new Set());
+      s.add(b);
+    };
+    for (const e of [...this.collectionRoutes, ...this.collectionEdges]) {
+      if (e.source == null || e.target == null) continue;
+      _adj(e.source, e.target); _adj(e.target, e.source);
+    }
+
     // Trade routes
-    this.tradeRoutes = (data.trade_routes || []).map(r => ({
+    // Sorted strongest-first so the renderer can draw just the top-N as the
+    // domain backbone (there can be ~9k routes; the weak tail is near-invisible
+    // at ~0.06 alpha but was the dominant stroke cost when zoomed in).
+    this.tradeRoutes = edgesOf('cooccurrence', 'domain').map(r => ({
       source: r.source,
       target: r.target,
       weight: r.weight,
       pulseStart: null,
       pulseDuration: 900,
-    }));
+    })).sort((a, b) => b.weight - a.weight);
 
     // Reset ambient pulses on data reload
     this.pulses = [];
     this.nextPulseTime = 0;
+  }
+
+  /**
+   * Read an entity record from either vocabulary into the fields placement needs.
+   *
+   * Nodes carry `label` / `subtype` / `degree` / `memberships[]`. Only `domain` and
+   * `collection` memberships are bucketed: routing every non-collection container into the domain
+   * map would put an unknown container's ids into `domainEntities`, keyed by something
+   * `this.domains` has never heard of.
+   */
+  _entityFields(n) {
+    const dw = {}, rw = {};
+    for (const m of (n.memberships || [])) {
+      if (m.container_type === 'collection') rw[m.id] = m.weight;
+      else if (m.container_type === 'domain') dw[m.id] = m.weight;
+    }
+    return { id: n.id, name: n.label, subtype: n.subtype, degree: n.degree || 0, dw, rw };
+  }
+
+  /**
+   * Build a render node for one entity record, or null if it cannot be placed.
+   *
+   * Shared by the bulk load and by hydrateEntity so a lazily-resolved node lands
+   * in exactly the same spot it would have had if it were in the render set.
+   * Requires domains and collections to be positioned already.
+   */
+  _makeEntityNode(ent) {
+    const { id: entId, name, subtype, degree, dw, rw } = this._entityFields(ent);
+    const useCollection = Object.keys(rw).some(rid => this.collections.has(rid));
+
+    let sx = 0, sy = 0, tw = 0;
+    if (useCollection) {
+      for (const [rid, w] of Object.entries(rw)) {
+        const coll = this.collections.get(rid);
+        if (!coll) continue;
+        const cw = w * w * w;       // cube for symmetry breaking
+        sx += coll.x * cw; sy += coll.y * cw; tw += cw;
+      }
+    } else {
+      for (const [dname, w] of Object.entries(dw)) {
+        const dom = this.domains.get(dname);
+        if (!dom) continue;
+        const cw = w * w * w;
+        sx += dom.x * cw; sy += dom.y * cw; tw += cw;
+      }
+    }
+    if (tw === 0) return null;
+    sx /= tw; sy /= tw;
+
+    // Color keeps the domain palette (blended) for visual continuity.
+    const domColors = [], domWeights = [];
+    for (const [dname, w] of Object.entries(dw)) {
+      const dom = this.domains.get(dname);
+      if (dom) { domColors.push(dom.color); domWeights.push(w); }
+    }
+    const vc = degree;
+    const color = domColors.length > 1 ? blendColors(domColors, domWeights) : (domColors[0] || '#e0a030');
+    const jx = sx + rnd(-30, 30), jy = sy + rnd(-30, 30);
+
+    return {
+      id: entId,
+      kind: 'entity',
+      name,
+      label: name,
+      type: subtype,
+      color,
+      radius: 2 + Math.min(sqrt(vc) * 0.8, 8),
+      worldX: jx,
+      worldY: jy,
+      x: jx,
+      y: jy,
+      vx: 0, vy: 0,
+      sourceCount: vc,
+      domainWeights: dw,
+      collectionWeights: rw,
+      phase: random() * TAU,
+      birthScale: 0,
+      stability: Math.min(0.9, 0.3 * Math.log(vc + 1) / Math.log(30)),
+      activityGlow: 0,
+    };
+  }
+
+  /** Rebuild the pool of lowest-degree nodes that are safe to displace. */
+  _refillEvictPool() {
+    const cands = [];
+    for (const [id, e] of this.entities) {
+      if (id === this.pinnedId || id === this.hoveredId) continue;
+      if (e.activityGlow > 0) continue;   // mid-animation; dropping it would flicker
+      cands.push(e);
+    }
+    cands.sort((a, b) => a.sourceCount - b.sourceCount);
+    this._evictPool = cands.slice(0, EVICT_POOL_SIZE).map(e => e.id);
+  }
+
+  /**
+   * Drop one of the weakest rendered nodes to make room for `protectId`.
+   *
+   * Random within the low-degree pool so repeated hydration doesn't keep hammering
+   * the single weakest node. Refills once if the pool is exhausted or fully
+   * protected; returns false only if nothing is safe to evict, in which case the
+   * caller accepts one node over cap rather than refusing to resolve a search hit.
+   */
+  _evictWeakest(protectId) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      while (this._evictPool.length) {
+        const i = (random() * this._evictPool.length) | 0;
+        const id = this._evictPool.splice(i, 1)[0];
+        if (id === protectId || id === this.pinnedId || id === this.hoveredId) continue;
+        const victim = this.entities.get(id);
+        if (!victim || victim.activityGlow > 0) continue;
+        this.entities.delete(id);
+        // Keep the hover reverse-indexes free of dangling nodes. Domain
+        // `entityCount` is deliberately NOT decremented: it sizes the domain glyph
+        // and reflects the server's count, so it must stay stable as nodes swap.
+        for (const path of Object.keys(victim.domainWeights || {})) {
+          const arr = this.domainEntities.get(path);
+          const at = arr ? arr.indexOf(victim) : -1;
+          if (at >= 0) arr.splice(at, 1);
+        }
+        for (const rid of Object.keys(victim.collectionWeights || {})) {
+          const arr = this.collectionEntities.get(rid);
+          const at = arr ? arr.indexOf(victim) : -1;
+          if (at >= 0) arr.splice(at, 1);
+        }
+        return true;
+      }
+      this._refillEvictPool();
+    }
+    return false;
+  }
+
+  /**
+   * Resolve an entity by id or name, adding a render node for it if the payload
+   * described it but did not include it in the render set.
+   *
+   * A hydrated node is deliberately left out of `domainEntities` / `collectionEntities`
+   * and out of each domain's `entityCount`: hydrating must make a node
+   * addressable without shifting domain sizes or hover neighborhoods. It also
+   * skips `_spreadEntities`, so it can overlap a neighbour — acceptable for a
+   * transient search hit, and far better than the node being unreachable.
+   */
+  hydrateEntity(idOrName) {
+    if (!idOrName) return null;
+    const key = String(idOrName);
+
+    const direct = this.entities.get(key);
+    if (direct) return direct;
+
+    const lower = key.toLowerCase();
+    const id = this.nodeIndex.has(key) ? key : this.nodeIdByName.get(lower);
+    if (id) {
+      const already = this.entities.get(id);
+      if (already) return already;
+      const node = this._makeEntityNode(this.nodeIndex.get(id));
+      if (node) {
+        // Swap, don't grow — make room before inserting.
+        if (this.renderCap && this.entities.size >= this.renderCap) this._evictWeakest(id);
+        node.hydrated = true;
+        this.entities.set(node.id, node);
+        return node;
+      }
+      // Placement failed (no resolvable domain or collection). FALL THROUGH rather than
+      // returning null: an entity with the same label may already be in the render set,
+      // and returning null here hid it — the index said "exists" and we answered "no",
+      // so a search hit for an already-visible star silently failed to light it up.
+    }
+
+    // Payload without a `positions` map (older snapshot): fall back to scanning
+    // the render set by label, which is what callers used to do inline.
+    for (const [, e] of this.entities) {
+      // A node with no label would throw here and abort the glow for the WHOLE result
+      // set — and this fallback runs on every miss, including typos.
+      if ((e.label || '').toLowerCase() === lower) return e;
+    }
+    return null;
   }
 
   /** Push domains apart to enforce minimum separation */
@@ -327,6 +597,10 @@ export class WorldState {
       if (e.activityGlow > 0) e.activityGlow = Math.max(0, e.activityGlow - 0.0015 * dt);
     }
 
+    for (const r of this.collections.values()) {
+      if (r.birthScale < 1) r.birthScale = Math.min(1, r.birthScale + 0.02);
+    }
+
     // Update active pulses
     this.pulses = this.pulses.filter(p => p.progress < 1);
     for (const p of this.pulses) {
@@ -347,17 +621,14 @@ export class WorldState {
     const hitEntities = [];
     const hitDomainPaths = new Set();
 
-    // Find hit entities (preserve search ranking order)
+    // Find hit entities (preserve search ranking order). Resolves through the
+    // full node index, so a hit on the un-rendered tail still lights up.
     for (const name of entityNames) {
-      const nameLower = name.toLowerCase();
-      for (const [, e] of this.entities) {
-        if (e.label.toLowerCase() === nameLower) {
-          hitEntities.push(e);
-          if (e.domainWeights) {
-            for (const path of Object.keys(e.domainWeights)) hitDomainPaths.add(path);
-          }
-          break;
-        }
+      const e = this.hydrateEntity(name);
+      if (!e) continue;
+      hitEntities.push(e);
+      if (e.domainWeights) {
+        for (const path of Object.keys(e.domainWeights)) hitDomainPaths.add(path);
       }
     }
 

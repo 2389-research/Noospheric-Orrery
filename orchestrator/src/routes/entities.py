@@ -52,12 +52,20 @@ def get_entity(entity_id: str, auth: AuthStore = Depends(get_auth_store)):
         raise HTTPException(status_code=404, detail="Entity not found")
     sources = store.entity_sources.get_for_entity(entity_id)
     merge_history = store.normalization.get_merge_history(entity_id)
+    # Attach each source doc's title/content_type so the client can label them
+    # directly. Previously the panel joined against the paginated /documents list
+    # (default limit 50), so any source doc past the first page showed a raw
+    # doc-id hash instead of its title.
+    titles = store.documents.get_titles([s.document_id for s in sources])
     store.close()
     return {
         "id": entity.id, "canonical_name": entity.canonical_name, "type": entity.type,
         "created_at": entity.created_at,
         "sources": [{"document_id": s.document_id, "chunk_id": s.chunk_id,
                       "extraction_pass": s.extraction_pass, "spec_version": s.spec_version,
-                      "job_id": s.job_id} for s in sources],
+                      "job_id": s.job_id,
+                      "title": titles.get(s.document_id, {}).get("title"),
+                      "content_type": titles.get(s.document_id, {}).get("content_type", "text")}
+                     for s in sources],
         "merge_history": merge_history,
     }

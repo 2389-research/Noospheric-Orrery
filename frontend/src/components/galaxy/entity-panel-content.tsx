@@ -2,21 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-
-// Entity type colors matching cosmic viz exactly
-const ENTITY_COLORS: Record<string, string> = {
-  Person: "#378ADD",
-  Organization: "#7F77DD",
-  Product: "#1D9E75",
-  Technology: "#BA7517",
-  Event: "#D85A30",
-  Concept: "#9c9a92",
-  Location: "#5DCAA5",
-};
-
-function getEntityColor(type: string): string {
-  return ENTITY_COLORS[type] ?? "#9c9a92";
-}
+import { ENTITY_COLORS, getEntityColor } from "./entity-colors";
 
 // Donut SVG for domain weights
 function DomainDonut({
@@ -161,20 +147,23 @@ export function EntityPanelContent({
       try {
         const entity = await api.getEntity(data.id);
         setMergeHistory(entity.merge_history ?? []);
-        // Build source doc list with mention counts
+        // Build source doc list with mention counts. Titles now come straight
+        // from the entity's sources (the API joins them), so we no longer join
+        // against the paginated /documents list — which capped at 50 and made
+        // most source docs show a raw doc-id hash instead of a title.
         const docCounts: Record<string, number> = {};
+        const docMeta: Record<string, { title: string | null; content_type: string }> = {};
         for (const s of entity.sources) {
           docCounts[s.document_id] = (docCounts[s.document_id] || 0) + 1;
+          docMeta[s.document_id] = { title: s.title, content_type: s.content_type || "text" };
         }
-        const docs = await api.getDocuments();
-        const docMap = Object.fromEntries(docs.map((d) => [d.id, { title: d.title, content_type: d.content_type || "text" }]));
         setSourceDocs(
           Object.entries(docCounts)
             .map(([id, count]) => ({
               id,
-              title: docMap[id]?.title || id.slice(0, 8),
+              title: docMeta[id]?.title || id.slice(0, 8),
               mentions: count,
-              content_type: docMap[id]?.content_type || "text",
+              content_type: docMeta[id]?.content_type || "text",
             }))
             .sort((a, b) => b.mentions - a.mentions)
         );

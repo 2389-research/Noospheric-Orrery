@@ -1,6 +1,7 @@
 import uuid
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
+from ..db import mark_graph_dirty
 from ..dependencies import get_auth_store, AuthStore
 from ..pipeline.graph_repair import propose_correction, get_pending_issues, resolve_correction
 
@@ -48,7 +49,12 @@ def review(issue_id: str, action: str, auth: AuthStore = Depends(get_auth_store)
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
     store = auth.store
     try:
-        return resolve_correction(store.conn, issue_id, action)
+        result = resolve_correction(store.conn, issue_id, action)
+        # Approving reversibly edits the active graph — flag the snapshot.
+        if action == "approve":
+            mark_graph_dirty(store.conn)
+            store.conn.commit()
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:

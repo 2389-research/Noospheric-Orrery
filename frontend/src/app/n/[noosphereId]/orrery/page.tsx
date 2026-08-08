@@ -7,6 +7,12 @@ import { ImagePane } from "@/components/image-pane";
 import { api } from "@/lib/api";
 import { getAuthToken } from "@/lib/firebase";
 import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
+import { useSearchParams } from "next/navigation";
+import { useScreensaverSettings } from "@/lib/screensaver-settings";
+import { useSearchBroadcast } from "@/lib/use-search-broadcast";
+import { isSameOriginMessage } from "@/lib/viz-message";
+import { MagosOverlay } from "@/components/magos-overlay";
+import { ScreensaverSettingsPanel } from "@/components/screensaver-settings-panel";
 
 interface SelectedNode {
   nodeType: string;
@@ -22,18 +28,40 @@ interface SearchResult {
   total_chunks: number;
 }
 
-type ViewMode = "galaxy" | "star";
+type ViewMode = "galaxy" | "star" | "collection";
 
 interface Breadcrumb {
   label: string;
   action: () => void;
 }
 
+// Idle "attract mode" (screensaver) timings. Idle-start and beat now come from
+// device-local screensaver settings; the star-dwell stays fixed.
+const ATTRACT_STAR_LINGER_MS = 16000;  // dwell time inside an entity's star view
+
 export default function VizPage() {
   const noosphereId = useNoosphereId();
+  // Optional params forwarded to the viz iframes:
+  //   ?scale=0.66  — render-resolution override (e.g. a 4K TV on a weak GPU)
+  //   ?fps=1       — show the FPS meter (can also toggle with the 'f' key)
+  // Omitted → iframe uses the device's native devicePixelRatio / meter hidden.
+  const searchParams = useSearchParams();
+  const scaleParam = searchParams.get("scale");
+  const fpsParam = searchParams.get("fps");
+  // Device-local screensaver settings (idle/beat/magos/fps/scale). URL params win
+  // over the stored scale for kiosk deep-links. FPS is driven live via postMessage.
+  const [screensaver, setScreensaver] = useScreensaverSettings();
+  const settingsRef = useRef(screensaver);
+  useEffect(() => { settingsRef.current = screensaver; }, [screensaver]);
+  const effectiveScale = scaleParam ?? (screensaver.scale !== 1 ? String(screensaver.scale) : "");
+  const vizSuffix =
+    (effectiveScale ? `&scale=${encodeURIComponent(effectiveScale)}` : "") +
+    (fpsParam ? `&fps=${encodeURIComponent(fpsParam)}` : "");
   const [viewMode, setViewMode] = useState<ViewMode>("galaxy");
   const [starEntityId, setStarEntityId] = useState<string | null>(null);
   const [starEntityName, setStarEntityName] = useState<string>("");
+  const [collectionId, setRepoId] = useState<string | null>(null);
+  const [collectionName, setRepoName] = useState<string>("");
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [selectedDocType, setSelectedDocType] = useState<string>("text");
@@ -47,6 +75,7 @@ export default function VizPage() {
   const [authToken, setAuthToken] = useState<string>("");
   const galaxyRef = useRef<HTMLIFrameElement>(null);
   const starRef = useRef<HTMLIFrameElement>(null);
+  const collectionRef = useRef<HTMLIFrameElement>(null);
 
   // Get auth token for iframe API calls
   const isNoop = process.env.NEXT_PUBLIC_AUTH_MODE === "noop";
@@ -64,15 +93,18 @@ export default function VizPage() {
   }, []);
 
   // Current iframe ref
-  const activeRef = viewMode === "star" ? starRef : galaxyRef;
+  const activeRef = viewMode === "star" ? starRef : viewMode === "collection" ? collectionRef : galaxyRef;
 
-  // Breadcrumbs
+  // Breadcrumbs — galaxy only.
+  //
+  // There were `star` and `collection` entries here, but the bar itself is hidden in
+  // exactly those two modes (see its `display` below), so they could never render. Each
+  // drill-in view draws its OWN `#nav` inside its iframe (star.html / collection.html),
+  // which is what actually shows the entity or collection name — so the fix is to drop
+  // the dead entries, not to reveal a second, competing breadcrumb.
   const breadcrumbs: Breadcrumb[] = [
-    { label: "Galaxy", action: () => exitStarView() },
+    { label: "Galaxy", action: () => exitToGalaxy() },
   ];
-  if (viewMode === "star" && starEntityName) {
-    breadcrumbs.push({ label: starEntityName, action: () => {} });
-  }
 
   // Enter star view with fade — refresh auth token first
   const enterStarView = useCallback(async (entityId: string, entityName: string) => {
@@ -106,19 +138,58 @@ export default function VizPage() {
     }, 300);
   }, []);
 
+  // Enter collection view with fade — refresh auth token first
+  const enterRepoView = useCallback(async (id: string, name: string) => {
+    try {
+      const fresh = await getAuthToken();
+      if (fresh) setAuthToken(fresh);
+    } catch {}
+    setFading(true);
+    setTimeout(() => {
+      setRepoId(id);
+      setRepoName(name);
+      setViewMode("collection");
+      setSelectedNode(null);
+      setSearchResults(null);
+      setSelectedDocId(null);
+      setTimeout(() => setFading(false), 50);
+    }, 300);
+  }, []);
+
+  // Exit collection view
+  const exitCollectionView = useCallback(() => {
+    setFading(true);
+    setTimeout(() => {
+      setViewMode("galaxy");
+      setRepoId(null);
+      setRepoName("");
+      setSelectedNode(null);
+      setSelectedDocId(null);
+      setTimeout(() => setFading(false), 50);
+    }, 300);
+  }, []);
+
+  // Exit whichever drill-in view is active back to the galaxy
+  const exitToGalaxy = useCallback(() => {
+    if (viewMode === "star") exitStarView();
+    else if (viewMode === "collection") exitCollectionView();
+  }, [viewMode, exitStarView, exitCollectionView]);
+
   // Reset to galaxy home
   const resetGalaxy = useCallback(() => {
-    if (viewMode === "star") {
-      exitStarView();
+    const wasDrilledIn = viewMode === "star" || viewMode === "collection";
+    if (wasDrilledIn) {
+      exitToGalaxy();
     }
     setTimeout(() => {
       galaxyRef.current?.contentWindow?.postMessage({ type: "reset_galaxy" }, "*");
-    }, viewMode === "star" ? 400 : 0);
-  }, [viewMode, exitStarView]);
+    }, wasDrilledIn ? 400 : 0);
+  }, [viewMode, exitToGalaxy]);
 
   // Listen for postMessage events
   useEffect(() => {
     const handler = (e: MessageEvent) => {
+      if (!isSameOriginMessage(e)) return;
       if (e.data?.type === "node_selected") {
         if (e.data.nodeType === "document") {
           setSelectedDocId(e.data.data.id as string);
@@ -134,10 +205,12 @@ export default function VizPage() {
         setSelectedDocId(null);
       } else if (e.data?.type === "enter_star") {
         enterStarView(e.data.entityId, e.data.entityName);
+      } else if (e.data?.type === "enter_collection") {
+        enterRepoView(e.data.collectionId, e.data.collectionName);
       } else if (e.data?.type === "navigate_galaxy") {
-        exitStarView();
+        exitToGalaxy();
       } else if (e.data?.type === "reset_home") {
-        exitStarView();
+        exitToGalaxy();
         // After fade back, reset galaxy camera to full overview
         setTimeout(() => {
           galaxyRef.current?.contentWindow?.postMessage({ type: "reset_galaxy" }, "*");
@@ -146,32 +219,104 @@ export default function VizPage() {
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [enterStarView, exitStarView]);
+  }, [enterStarView, enterRepoView, exitToGalaxy]);
 
-  // WebSocket for real-time search broadcasts
+  // ── Idle "attract mode" (screensaver) ──────────────────────────────────────
+  // After ATTRACT_IDLE_MS with no real user input, the orrery roams on its own:
+  // glides to random domains/entities and selects them, and ~20% of hops dive
+  // into an entity's star system, linger, and return. Any real input (mouse /
+  // key / touch, from the shell OR either iframe) exits instantly; background
+  // API calls don't count. Trigger on demand via a `trigger_sleep` postMessage,
+  // a `?sleep=1` URL param, or window.__sleep().
+  const attractRef = useRef(false);
+  const idleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const beatTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const lingerTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const viewModeRef = useRef(viewMode);
+  const exitToGalaxyRef = useRef(exitToGalaxy);
+  useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
+  useEffect(() => { exitToGalaxyRef.current = exitToGalaxy; }, [exitToGalaxy]);
+
+  const stopAttract = useCallback(() => {
+    if (!attractRef.current) return;
+    attractRef.current = false;
+    clearInterval(beatTimer.current);
+    clearTimeout(lingerTimer.current);
+    galaxyRef.current?.contentWindow?.postMessage({ type: "attract_stop" }, "*");
+  }, []);
+
+  const startAttract = useCallback(() => {
+    if (attractRef.current) return;
+    attractRef.current = true;
+    if (viewModeRef.current !== "galaxy") exitToGalaxyRef.current();
+    // Let any drill-in exit finish its fade, then begin roaming.
+    setTimeout(() => {
+      if (!attractRef.current) return;
+      const g = galaxyRef.current?.contentWindow;
+      g?.postMessage({ type: "attract_start" }, "*");
+      g?.postMessage({ type: "attract_hop" }, "*");
+    }, 450);
+    beatTimer.current = setInterval(() => {
+      if (viewModeRef.current === "galaxy") {
+        galaxyRef.current?.contentWindow?.postMessage({ type: "attract_hop" }, "*");
+      }
+    }, Math.max(3, settingsRef.current.beatSeconds) * 1000);
+  }, []);
+
+  const bumpIdle = useCallback(() => {
+    if (attractRef.current) stopAttract();
+    clearTimeout(idleTimer.current);
+    idleTimer.current = setTimeout(startAttract, Math.max(1, settingsRef.current.idleMinutes) * 60 * 1000);
+  }, [startAttract, stopAttract]);
+
   useEffect(() => {
-    const wsUrl = (window.location.protocol === "https:" ? "wss:" : "ws:") + "//" + window.location.host + "/api/ws";
-    let ws: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout>;
-    function connect() {
-      ws = new WebSocket(wsUrl);
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === "search_result" && data.entities) {
-            activeRef.current?.contentWindow?.postMessage({
-              type: "search_result",
-              entities: data.entities,
-              doc_ids: data.doc_ids || [],
-            }, "*");
-          }
-        } catch { /* ignore */ }
-      };
-      ws.onclose = () => { reconnectTimer = setTimeout(connect, 3000); };
-    }
-    connect();
-    return () => { clearTimeout(reconnectTimer); ws?.close(); };
-  }, [viewMode]);
+    const onActivity = () => bumpIdle();
+    const events: (keyof WindowEventMap)[] = ["mousemove", "mousedown", "wheel", "keydown", "touchstart"];
+    events.forEach(ev => window.addEventListener(ev, onActivity, { passive: true }));
+    const onMsg = (e: MessageEvent) => {
+      if (!isSameOriginMessage(e)) return;
+      if (e.data?.type === "user_activity") bumpIdle();
+      else if (e.data?.type === "trigger_sleep") startAttract();
+      else if (e.data?.type === "enter_star" && attractRef.current) {
+        // attract dove into a star — dwell, then return to the map and resume.
+        clearTimeout(lingerTimer.current);
+        lingerTimer.current = setTimeout(() => {
+          if (attractRef.current) exitToGalaxyRef.current();
+        }, ATTRACT_STAR_LINGER_MS);
+      }
+    };
+    window.addEventListener("message", onMsg);
+    (window as unknown as { __sleep?: () => void }).__sleep = startAttract;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("sleep") === "1") startAttract();
+    else bumpIdle();
+    return () => {
+      events.forEach(ev => window.removeEventListener(ev, onActivity));
+      window.removeEventListener("message", onMsg);
+      clearTimeout(idleTimer.current);
+      clearInterval(beatTimer.current);
+      clearTimeout(lingerTimer.current);
+      // Reset so a re-mount (React StrictMode double-invokes effects in dev)
+      // restarts cleanly — otherwise startAttract()'s `if (attractRef.current)
+      // return` guard leaves the beat interval dead after remount.
+      attractRef.current = false;
+    };
+  }, [bumpIdle, startAttract]);
+
+  // Push the FPS-meter toggle to the galaxy iframe whenever the setting changes.
+  useEffect(() => {
+    galaxyRef.current?.contentWindow?.postMessage({ type: "set_fps", on: screensaver.fps }, "*");
+  }, [screensaver.fps, viewMode]);
+
+  // Real-time search broadcasts → whichever iframe is currently on top. The
+  // callback closes over `activeRef`, so it always targets the live view without
+  // the subscription needing to know that viewMode exists.
+  useSearchBroadcast(({ entities, doc_ids }) => {
+    activeRef.current?.contentWindow?.postMessage(
+      { type: "search_result", entities, doc_ids },
+      "*",
+    );
+  });
 
   // Fetch domain colors
   useEffect(() => {
@@ -258,6 +403,9 @@ export default function VizPage() {
 
   return (
     <div style={{ height: "calc(100vh - 57px)", position: "relative", overflow: "hidden", margin: "-24px" }}>
+      {/* Screensaver: Magos Lex commentary overlay + settings gear */}
+      <MagosOverlay enabled={screensaver.magos} workspaceId={noosphereId} />
+      <ScreensaverSettingsPanel settings={screensaver} update={setScreensaver} />
       {/* Search bar — top center */}
       <div style={{
         position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)",
@@ -312,7 +460,7 @@ export default function VizPage() {
       {/* Breadcrumb + nav — top left, hidden when panel is open */}
       <div style={{
         position: "absolute", top: 12, left: 14, zIndex: 20,
-        display: (showPanel || showDoc || showSearchResults || viewMode === "star") ? "none" : "flex",
+        display: (showPanel || showDoc || showSearchResults || viewMode === "star" || viewMode === "collection") ? "none" : "flex",
         alignItems: "center", gap: 8,
         fontFamily: "'Courier New', monospace",
       }}>
@@ -351,7 +499,8 @@ export default function VizPage() {
       {/* Galaxy/Sector iframe (always mounted, hidden when in star mode) */}
       {authToken && <iframe
         ref={galaxyRef}
-        src={`/viz/index.html?api=${encodeURIComponent("/api")}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}`}
+        src={`/viz/index.html?api=${encodeURIComponent("/api")}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}${vizSuffix}`}
+        onLoad={() => galaxyRef.current?.contentWindow?.postMessage({ type: "set_fps", on: settingsRef.current.fps }, "*")}
         style={{
           width: "100%", height: "100%", border: "none",
           position: "absolute", top: 0, left: 0,
@@ -364,12 +513,25 @@ export default function VizPage() {
       {viewMode === "star" && starEntityId && authToken && (
         <iframe
           ref={starRef}
-          src={`/viz/star.html?entity=${encodeURIComponent(starEntityId)}&api=${encodeURIComponent("/api")}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}`}
+          src={`/viz/star.html?entity=${encodeURIComponent(starEntityId)}&api=${encodeURIComponent("/api")}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}${vizSuffix}`}
           style={{
             width: "100%", height: "100%", border: "none",
             position: "absolute", top: 0, left: 0,
           }}
           title="Star View"
+        />
+      )}
+
+      {/* Collection iframe (mounted in collection mode, once the auth token is ready) */}
+      {viewMode === "collection" && collectionId && authToken && (
+        <iframe
+          ref={collectionRef}
+          src={`/viz/collection.html?collection=${encodeURIComponent(collectionId)}&api=${encodeURIComponent("/api")}&token=${encodeURIComponent(authToken)}&workspace=${encodeURIComponent(noosphereId)}${vizSuffix}`}
+          style={{
+            width: "100%", height: "100%", border: "none",
+            position: "absolute", top: 0, left: 0,
+          }}
+          title="Collection View"
         />
       )}
 

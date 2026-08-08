@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Noospheric Orrery — Collection</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #01040a; color: #c0c8e0; font-family: 'Courier New', monospace; overflow: hidden; }
+canvas { display: block; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; cursor: grab; z-index: 1; }
+canvas:active { cursor: grabbing; }
+#nav {
+  position: fixed; top: 12px; left: 14px; z-index: 10;
+  display: flex; align-items: center; gap: 8px;
+  font: 10px 'Courier New', monospace;
+}
+#nav .nav-btn {
+  padding: 0; background: none; border: none; cursor: pointer;
+  color: rgba(100,200,180,0.6); font: 10px 'Courier New', monospace;
+  letter-spacing: .06em; transition: color .12s;
+}
+#nav .nav-btn:hover { color: rgba(100,220,180,1); }
+#nav .sep { color: rgba(100,200,180,0.25); font-size: 10px; }
+#nav .current { color: rgba(100,200,180,0.9); font-size: 10px; letter-spacing: .06em; }
+#hud {
+  position: fixed; top: 36px; left: 14px; z-index: 10;
+  font-size: 10px; letter-spacing: .08em; line-height: 1.8; pointer-events: none;
+}
+#hud .info { color: rgba(224,160,48,0.7); }
+#hud .sub { color: rgba(224,160,48,0.4); }
+#tooltip {
+  position: fixed; z-index: 20; pointer-events: none; display: none;
+  background: rgba(6,13,34,0.95); border: 0.5px solid rgba(224,160,48,0.3);
+  border-radius: 4px; padding: 8px 12px; min-width: 200px; max-width: 350px;
+  font: 10px 'Courier New', monospace; color: rgba(210,230,220,0.8); line-height: 1.9;
+}
+#tooltip .tt-title { font-size: 11px; color: rgba(240,190,90,0.95); margin-bottom: 4px; letter-spacing: .06em; }
+#tooltip .tt-dim { color: rgba(224,160,48,0.4); font-size: 9px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="nav">
+  <button class="nav-btn" onclick="window.parent.postMessage({type:'reset_home'},'*')" title="Reset to galaxy overview">⌂</button>
+  <span class="sep">›</span>
+  <button class="nav-btn" onclick="window.parent.postMessage({type:'navigate_galaxy'},'*')">Galaxy</button>
+  <span class="sep">›</span>
+  <span class="current" id="nav-name">...</span>
+</div>
+<div id="hud">
+  <div class="info" id="hud-info"></div>
+  <div class="sub" id="hud-sub"></div>
+</div>
+<div id="tooltip"></div>
+
+<script type="module">
+// Collection "constellation" view — its real directory tree, reconstructed from
+// each doc's file path, laid out as a radial skill-tree (Path-of-Exile style):
+//   • collection core at the center; every directory depth is an orbit ring at an
+//     increasing radius; nodes at the same depth share a ring.
+//   • BRANCH WEDGES: each directory owns an angular slice and its children fan out
+//     within it (sized by subtree size), so subtrees read as branches radiating out.
+//   • Hover/select a FILE  → light the path back to the core + spawn its entities.
+//   • Hover/select a DIR   → light its whole subtree + its path to the core.
+// Entities are only materialized on selection (kept out of the resting view).
+import { Camera } from './core/camera.js';
+import { sin, cos, hexRGB, rgba, sqrt, clamp, hypot, min, max, TAU, PI } from './core/utils.js';
+import { drawBackground } from './renderers/galaxy.js';
+import { entityGlowSprite, ENTITY_BR0 } from './renderers/sprites.js';
+
+const canvas = document.getElementById('c');
+const camera = new Camera();
+let W, H, ctx;
+
+// Debug hook (mirrors the galaxy view) — drive the camera / inspect the tree.
+window.__viz = { camera, nodes: () => nodes, root: () => root };
+
+// Camera-fit state (shared with the galaxy view's approach): buildRepoView records
+// the content bounding box; the camera is (re)framed from it on load and on any
+// viewport size change — see fitCameraToContent(). `userMoved` latches once the
+// viewer pans/zooms so a later resize doesn't yank the camera out from under them.
+let _fitBox = null, contentLoaded = false, userMoved = false;
+
+// Render resolution. Defaults to devicePixelRatio; ?scale=<n> renders fewer pixels
+// for smoother frames on a weak GPU driving a big display (e.g. ?scale=0.66 on 4K).
+const _scaleParam = parseFloat(new URLSearchParams(location.search).get('scale'));
+const renderScale = Number.isFinite(_scaleParam) && _scaleParam > 0
+  ? Math.min(Math.max(_scaleParam, 0.25), 4)
+  : (window.devicePixelRatio || 1);
+
+// Size the canvas backing store on startup + on resize (never per frame). Bails
+// until the iframe has a real size; frame() retries.
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  if (!w || !h) return;
+  W = w; H = h;
+  canvas.width = Math.round(W * renderScale);
+  canvas.height = Math.round(H * renderScale);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx = canvas.getContext('2d');
+  ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+  if (contentLoaded && !userMoved) fitCameraToContent();
+}
+window.addEventListener('resize', resize);
+resize();
+
+function fitCameraToContent() {
+  if (!_fitBox || !W || !H) return;
+  const { minX, maxX, minY, maxY } = _fitBox;
+  const spanX = maxX - minX + 200;
+  const spanY = maxY - minY + 200;
+  const fitZoom = Math.min(W / spanX, H / spanY) * 0.85;
+  camera.x = (minX + maxX) / 2;
+  camera.y = (minY + maxY) / 2;
+  camera.zoom = fitZoom;
+  camera.targetZoom = fitZoom;
+}
+let tick = 0;
+
+const params = new URLSearchParams(location.search);
+const collectionId = params.get('collection') || '';
+
+// ── Tree state ──────────────────────────────────────────────────────────────
+const CX = 2500, CY = 2500;      // world-space center (collection core)
+const RING0 = 150;               // radius of the depth-1 ring
+const RING_GAP = 165;            // radius added per directory depth
+let root = null;                 // tree root (the collection)
+let nodes = [];                  // flat list of all nodes (root + dirs + files)
+let nodeById = new Map();        // id → node
+let depthRadii = [];             // distinct orbit radii (for the faint rings)
+let collectionMeta = null;
+let hoveredId = null, pinnedId = null, hoveredEntityId = null;
+
+// Escape collection-derived / LLM-generated strings before they go into tooltip innerHTML
+// (file paths and module summaries are untrusted content).
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+const ROOT_ID = '__root__';
+
+// Entity type palette (mirrors the star view).
+const TYPE_COLORS = {
+  Person: '#378ADD', Organization: '#7F77DD', Product: '#1D9E75',
+  Technology: '#BA7517', Event: '#D85A30', Concept: '#9c9a92',
+  Location: '#5DCAA5', Process: '#6BBACC', Tool: '#BA7517', Repo: '#e0a030',
+};
+const typeColor = t => TYPE_COLORS[t] || '#9c9a92';
+
+const API_URL = new URLSearchParams(location.search).get('api') || window.API_URL || 'http://localhost:8100';
+const AUTH_TOKEN = new URLSearchParams(location.search).get('token') || '';
+const WORKSPACE_ID = new URLSearchParams(location.search).get('workspace') || '';
+const fetchHeaders = {};
+if (AUTH_TOKEN && AUTH_TOKEN !== 'noop') fetchHeaders['Authorization'] = `Bearer ${AUTH_TOKEN}`;
+if (WORKSPACE_ID) fetchHeaders['X-Workspace-Id'] = WORKSPACE_ID;
+
+async function loadData() {
+  if (!collectionId) { document.getElementById('nav-name').textContent = 'no collection specified'; return; }
+  try {
+    // encodeURIComponent: collectionId comes off the query string, so it is caller-
+    // supplied and lands in a PATH segment. r.ok before .json(): a 404/500 body parses
+    // as perfectly good JSON, and buildRepoView would then render an error payload as
+    // an empty-but-successful collection rather than reporting the failure.
+    const r = await fetch(`${API_URL}/collections/${encodeURIComponent(collectionId)}/structure`,
+                          { headers: fetchHeaders });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    buildRepoView(await r.json());
+  } catch (err) {
+    console.error('Repo view: load failed', err);
+    document.getElementById('nav-name').textContent = 'load failed';
+  }
+}
+loadData();
+
+// ── Build the directory tree from the docs' file paths ────────────────────────
+function buildRepoView(data) {
+  const { collection, modules: modList = [], total_files, rendered_files } = data;
+  collectionMeta = {
+    id: collection.id, name: collection.name, domain: collection.domain, documentCount: collection.document_count,
+    totalFiles: total_files ?? null, renderedFiles: rendered_files ?? null,
+  };
+
+  // Per-directory: a short summary (tooltip) and the module doc id. The doc id lets
+  // a directory open its grounded summary in the SAME left doc reader files use
+  // (a module IS a code_intent document) — no bespoke panel.
+  const dirSummary = new Map(), dirDocId = new Map();
+  for (const m of modList) {
+    if (!m.path) continue;
+    dirSummary.set(m.path, m.summary || '');
+    if (m.id) dirDocId.set(m.path, m.id);
+  }
+
+  root = { id: ROOT_ID, name: collection.name, kind: 'root', depth: 0, parent: null,
+           children: new Map(), leafCount: 0, summary: '' };
+
+  // Every leaf's `path` is its full collection-relative path — split on '/' and every
+  // prefix becomes a directory node, the leaf becomes the file node.
+  for (const m of modList) {
+    for (const f of (m.files || [])) {
+      const rel = String(f.path || f.title || '').split('/').filter(Boolean);
+      if (!rel.length) continue;
+      let node = root, prefix = '';
+      for (let i = 0; i < rel.length; i++) {
+        const seg = rel[i];
+        prefix = prefix ? prefix + '/' + seg : seg;
+        const leaf = i === rel.length - 1;
+        let child = node.children.get(seg);
+        if (!child) {
+          child = { id: prefix, name: seg, kind: leaf ? 'file' : 'dir', depth: i + 1,
+                    parent: node, children: new Map(), leafCount: 0,
+                    summary: dirSummary.get(prefix) || '', docId: dirDocId.get(prefix) || null,
+                    entities: [], entityCount: 0 };
+          node.children.set(seg, child);
+        }
+        if (leaf) {
+          // A path that's both a file and a directory prefix (e.g. `src/api` +
+          // `src/api/routes.py`) can't be both — if this node already has (or later
+          // gets) children it stays a directory; only attach file data to a true leaf.
+          if (child.children.size === 0) {
+            child.kind = 'file';
+            child.docId = f.id;
+            child.entities = f.entities || [];
+            child.entityCount = (f.entities || []).length;
+          }
+        } else {
+          child.kind = 'dir';   // descending through it → it's a directory
+        }
+        node = child;
+      }
+    }
+  }
+
+  // leafCount = number of file descendants (drives wedge sizing + dir node size).
+  (function count(n) {
+    if (n.kind === 'file') { n.leafCount = 1; return 1; }
+    let s = 0; for (const c of n.children.values()) s += count(c);
+    n.leafCount = Math.max(s, 1); return n.leafCount;
+  })(root);
+
+  // Stable ordering: directories first, then files, alphabetical — so branches
+  // group tidily and the layout is deterministic across reloads.
+  (function sortKids(n) {
+    const arr = [...n.children.values()].sort((a, b) => {
+      if ((a.kind === 'dir') !== (b.kind === 'dir')) return a.kind === 'dir' ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    n.children = new Map(arr.map(c => [c.name, c]));
+    for (const c of n.children.values()) sortKids(c);
+  })(root);
+
+  // Radial-tree layout (Reingold–Tilford): every LEAF (file) gets an EQUAL angular
+  // slot, so spacing is uniform at every depth — recursive wedge-subdivision used to
+  // compound down each branch and crush the deep levels while shallow branches left
+  // the outer rings half-empty. Each directory sits at the center of its children's
+  // angular span, so subtrees still read as branches radiating from the core, and
+  // the total angle a subtree occupies is proportional to how many files it holds.
+  const totalLeaves = Math.max(root.leafCount, 1);
+  let _leaf = 0;
+  (function assignAngle(n) {
+    if (!n.children.size) {
+      n.angle = -PI / 2 + TAU * ((_leaf + 0.5) / totalLeaves);
+      _leaf++;
+    } else {
+      let first = null, last = null;
+      for (const c of n.children.values()) { const a = assignAngle(c); if (first === null) first = a; last = a; }
+      n.angle = (first + last) / 2;
+    }
+    n.radius = n.depth === 0 ? 0 : RING0 + (n.depth - 1) * RING_GAP;
+    n.x = CX + cos(n.angle) * n.radius;
+    n.y = CY + sin(n.angle) * n.radius;
+    return n.angle;
+  })(root);
+
+  // Flatten + visual sizes + orbit radii + bounding box.
+  nodes = []; nodeById = new Map();
+  const radii = new Set();
+  let minX = CX, maxX = CX, minY = CY, maxY = CY;
+  (function walk(n) {
+    nodes.push(n); nodeById.set(n.id, n);
+    if (n.depth > 0) radii.add(Math.round(n.radius));
+    n.vr = n.kind === 'root' ? 30
+        : n.kind === 'dir' ? 7 + min(sqrt(n.leafCount) * 2.2, 15)
+        : 4 + min(sqrt(n.entityCount) * 1.4, 8);
+    const m = n.vr * 4 + 24;
+    minX = Math.min(minX, n.x - m); maxX = Math.max(maxX, n.x + m);
+    minY = Math.min(minY, n.y - m); maxY = Math.max(maxY, n.y + m);
+    for (const c of n.children.values()) walk(c);
+  })(root);
+  depthRadii = [...radii].sort((a, b) => a - b);
+
+  _fitBox = { minX, maxX, minY, maxY };
+  contentLoaded = true;
+  userMoved = false;
+  _hlCache = { id: undefined, val: null };   // node ids can repeat across repos
+  fitCameraToContent();
+
+  const fileCount = nodes.filter(n => n.kind === 'file').length;
+  const dirCount = nodes.filter(n => n.kind === 'dir').length;
+  document.getElementById('nav-name').textContent = collection.name;
+  document.getElementById('hud-info').textContent =
+    `${dirCount} dirs · ${fileCount} files` +
+    (collectionMeta.totalFiles && collectionMeta.totalFiles > fileCount ? ` (top ${fileCount} of ${collectionMeta.totalFiles})` : '');
+  document.getElementById('hud-sub').textContent = `${collection.document_count} docs total`;
+}
+
+// Materialize a file's entity nodes on demand — fanned outward from the file,
+// tangent to its radial direction. Cached on the node.
+function entityNodesFor(fileNode) {
+  if (fileNode._ents) return fileNode._ents;
+  const ents = fileNode.entities || [];
+  const n = ents.length;
+  const dx = cos(fileNode.angle), dy = sin(fileNode.angle);   // outward
+  const tx = -dy, ty = dx;                                    // tangent
+  const fanW = min(160, Math.max(40, n * 16));
+  fileNode._ents = ents.map((e, i) => {
+    const t = n > 1 ? (i / (n - 1) - 0.5) : 0;
+    const out = 42 + (i % 3) * 16;
+    const x = fileNode.x + dx * out + tx * t * fanW;
+    const y = fileNode.y + dy * out + ty * t * fanW;
+    return { id: e.id, name: e.name, type: e.type, kind: 'entity', x, y };
+  });
+  return fileNode._ents;
+}
+
+function activeNode() {
+  const id = pinnedId ?? hoveredId;
+  return id != null ? nodeById.get(id) : null;
+}
+
+// Highlight set for the active node: ancestor chain to the core (always), plus —
+// for a dir, its whole subtree; for a file, its entity nodes. Memoized on the
+// active id — the result only changes when the pinned/hovered node changes, so we
+// avoid re-walking the subtree and allocating two Sets every frame. Invalidated on
+// rebuild (buildRepoView) since node ids can repeat across repos.
+let _hlCache = { id: undefined, val: null };
+function computeHighlight(node) {
+  const id = node ? node.id : null;
+  if (id === _hlCache.id) return _hlCache.val;
+  const nodeIds = new Set(), edgeIds = new Set();
+  let entities = null;
+  if (node) {
+    let n = node;
+    while (n) { nodeIds.add(n.id); if (n.parent) edgeIds.add(n.id); n = n.parent; }
+    if (node.kind === 'dir') {
+      (function down(d) { for (const c of d.children.values()) { nodeIds.add(c.id); edgeIds.add(c.id); down(c); } })(node);
+    } else if (node.kind === 'file') {
+      entities = entityNodesFor(node);
+      for (const e of entities) nodeIds.add(e.id);
+    }
+  }
+  _hlCache = { id, val: { nodeIds, edgeIds, entities } };
+  return _hlCache.val;
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+function nodeColor(n) {
+  return n.kind === 'root' ? '#e0a030' : n.kind === 'dir' ? '#5fc8e0' : '#e6b866';
+}
+
+function drawNode(n, state) {   // state: 'bright' | 'dim' | 'normal'
+  const color = nodeColor(n);
+  const glow = entityGlowSprite(color);
+  const bR = n.vr;
+  const half = (glow.width * 0.5) * (bR / ENTITY_BR0);
+  ctx.globalAlpha = state === 'dim' ? 0.14 : state === 'bright' ? 1 : 0.62;
+  ctx.drawImage(glow, n.x - half, n.y - half, half * 2, half * 2);
+  ctx.globalAlpha = 1;
+  // Crisp core
+  const coreA = state === 'dim' ? 0.22 : state === 'bright' ? 0.98 : 0.7;
+  ctx.fillStyle = n.kind === 'root'
+    ? `rgba(255,244,214,${coreA})`
+    : `rgba(255,240,220,${coreA})`;
+  ctx.beginPath(); ctx.arc(n.x, n.y, Math.max(1.3, bR * 0.35), 0, TAU); ctx.fill();
+}
+
+function drawLabel(n, bright) {
+  const color = nodeColor(n);
+  const [r, g, b] = hexRGB(color);
+  const size = n.kind === 'root' ? 22 : n.kind === 'dir' ? 14 : 12;
+  ctx.font = `${size}px 'Courier New', monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = rgba(r, g, b, bright ? 0.95 : 0.6);
+  ctx.fillText(n.name, n.x, n.y - n.vr - 8);
+  if (n.kind === 'root') {
+    ctx.font = "12px 'Courier New', monospace";
+    ctx.fillStyle = rgba(r, g, b, 0.5);
+    ctx.fillText(`${collectionMeta?.domain || 'unbinned'} · ${collectionMeta?.documentCount ?? 0} docs`, n.x, n.y + n.vr + 18);
+  }
+}
+
+function frame() {
+  // Self-correct canvas size (fresh-mounted iframe may not be full size yet).
+  if (!ctx || W !== window.innerWidth || H !== window.innerHeight) resize();
+  if (!ctx) { requestAnimationFrame(frame); return; }
+
+  tick++;
+  camera.update();
+
+  drawBackground(ctx, W, H, tick);
+  // Tree not built yet (structure fetch still in flight) — just show the backdrop.
+  if (!root) { requestAnimationFrame(frame); return; }
+  ctx.save();
+  camera.applyTransform(ctx, W, H);
+
+  const active = activeNode();
+  const { nodeIds, edgeIds, entities } = computeHighlight(active);
+  const hasActive = !!active;
+
+  // Faint orbit rings (one per directory depth).
+  for (const rr of depthRadii) {
+    ctx.strokeStyle = 'rgba(120,170,210,0.05)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(CX, CY, rr, 0, TAU); ctx.stroke();
+  }
+
+  // Tree edges (child → parent). Highlighted ones brighter and drawn last.
+  ctx.lineWidth = 1;
+  for (const n of nodes) {
+    if (!n.parent || edgeIds.has(n.id)) continue;
+    ctx.strokeStyle = hasActive ? 'rgba(150,180,210,0.05)' : 'rgba(150,180,210,0.13)';
+    ctx.beginPath(); ctx.moveTo(n.x, n.y); ctx.lineTo(n.parent.x, n.parent.y); ctx.stroke();
+  }
+  for (const n of nodes) {
+    if (!n.parent || !edgeIds.has(n.id)) continue;
+    ctx.strokeStyle = 'rgba(255,220,150,0.55)';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(n.x, n.y); ctx.lineTo(n.parent.x, n.parent.y); ctx.stroke();
+  }
+  ctx.lineWidth = 1;
+
+  // Entity edges (from the active file to its entities).
+  if (entities) {
+    for (const e of entities) {
+      ctx.strokeStyle = 'rgba(224,160,48,0.35)';
+      ctx.setLineDash([2, 6]);
+      ctx.beginPath(); ctx.moveTo(active.x, active.y); ctx.lineTo(e.x, e.y); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  // Nodes — dim/normal first, bright (highlighted) last so they read on top.
+  for (const n of nodes) {
+    if (nodeIds.has(n.id)) continue;
+    drawNode(n, hasActive ? 'dim' : 'normal');
+  }
+  for (const n of nodes) {
+    if (!nodeIds.has(n.id)) continue;
+    drawNode(n, 'bright');
+  }
+
+  // Entity nodes for the active file.
+  if (entities) {
+    for (const e of entities) {
+      const color = typeColor(e.type);
+      const glow = entityGlowSprite(color);
+      const half = (glow.width * 0.5) * (6 / ENTITY_BR0);
+      const hov = e.id === hoveredEntityId;
+      ctx.globalAlpha = hov ? 1 : 0.85;
+      ctx.drawImage(glow, e.x - half, e.y - half, half * 2, half * 2);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = `rgba(255,255,255,${hov ? 0.95 : 0.8})`;
+      ctx.beginPath(); ctx.arc(e.x, e.y, 2, 0, TAU); ctx.fill();
+      const [r, g, b] = hexRGB(color);
+      ctx.font = `${hov ? 13 : 11}px 'Courier New', monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = rgba(r, g, b, hov ? 0.95 : 0.7);
+      ctx.fillText(e.name, e.x, e.y - 10);
+    }
+  }
+
+  // Labels: root always; the hovered/pinned node + its highlighted chain; dirs
+  // near the core stay labeled so the top-level structure is always legible.
+  drawLabel(root, hasActive && nodeIds.has(ROOT_ID));
+  for (const n of nodes) {
+    if (n.kind === 'root') continue;
+    const bright = nodeIds.has(n.id);
+    const showAlways = n.kind === 'dir' && n.depth <= 1;
+    if (bright || showAlways || n.id === hoveredId) drawLabel(n, bright || n.id === hoveredId);
+  }
+
+  ctx.restore();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ── Interaction ───────────────────────────────────────────────────────────────
+function hitTest(wx, wy) {
+  const a = activeNode();
+  if (a && a.kind === 'file' && a._ents) {
+    for (const e of a._ents) if (hypot(wx - e.x, wy - e.y) < 11) return e;
+  }
+  let best = null, bestD = Infinity;
+  for (const n of nodes) {
+    const rr = n.vr * 1.4 + 7;
+    const d = hypot(wx - n.x, wy - n.y);
+    if (d < rr && d < bestD) { best = n; bestD = d; }
+  }
+  return best;
+}
+
+canvas.addEventListener('mousedown', e => camera.handleMouseDown(e));
+canvas.addEventListener('mousemove', e => {
+  if (camera.handleMouseDrag(e)) { userMoved = true; return; }
+  W = canvas.width / renderScale; H = canvas.height / renderScale;
+  const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
+  const hit = hitTest(w.x, w.y);
+  // Entities are materialized FROM the active tree node, so hovering one must not
+  // change the active node (that would make the entity vanish as you approach it).
+  // Track entity hover separately and leave hoveredId on the tree node.
+  if (hit && hit.kind === 'entity') { hoveredEntityId = hit.id; }
+  else { hoveredId = hit ? hit.id : null; hoveredEntityId = null; }
+  canvas.style.cursor = hit ? 'pointer' : 'grab';
+
+  const tt = document.getElementById('tooltip');
+  if (hit) {
+    tt.style.display = 'block';
+    tt.style.left = Math.min(e.clientX + 14, W - 350) + 'px';
+    tt.style.top = Math.min(e.clientY - 8, H - 120) + 'px';
+    if (hit.kind === 'file') {
+      tt.innerHTML = `<div class="tt-title">${esc(hit.name)}</div>
+        <div>${hit.entityCount} entities</div>
+        <div class="tt-dim">${esc(hit.id)}</div>
+        <div class="tt-dim">click to open · shows entities + path to root</div>`;
+    } else if (hit.kind === 'dir') {
+      tt.innerHTML = `<div class="tt-title">${esc(hit.name)}/</div>
+        <div>${hit.leafCount} files</div>
+        ${hit.summary ? `<div class="tt-dim">${esc(hit.summary.slice(0, 140))}</div>` : ''}
+        <div class="tt-dim">${hit.docId ? 'click to open module summary + branch' : 'click to highlight this branch'}</div>`;
+    } else if (hit.kind === 'entity') {
+      tt.innerHTML = `<div class="tt-title">${esc(hit.name)}</div>
+        <div>${esc(hit.type || 'entity')}</div>
+        <div class="tt-dim">click to open entity star view</div>`;
+    } else if (hit.kind === 'root') {
+      tt.innerHTML = `<div class="tt-title">${esc(hit.name)}</div>
+        <div>${esc(collectionMeta?.domain || 'unbinned')} · ${collectionMeta?.documentCount ?? 0} docs</div>`;
+    }
+  } else {
+    tt.style.display = 'none';
+  }
+});
+
+canvas.addEventListener('mouseup', e => {
+  const wasDrag = camera.didDrag;
+  camera.handleMouseUp();
+  if (wasDrag) return;
+  W = canvas.width / renderScale; H = canvas.height / renderScale;
+  const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
+  const hit = hitTest(w.x, w.y);
+  if (!hit) {
+    pinnedId = null;
+    window.parent.postMessage({ type: 'node_cleared' }, '*');
+    return;
+  }
+  if (hit.kind === 'entity') {
+    window.parent.postMessage({ type: 'enter_star', entityId: hit.id, entityName: hit.name }, '*');
+    return;
+  }
+  // Toggle pin for tree nodes (drives the highlight).
+  pinnedId = (pinnedId === hit.id) ? null : hit.id;
+  const pinned = pinnedId === hit.id;
+  if (hit.kind === 'file' && hit.docId) {
+    // A file IS a document — open the host's left doc reader.
+    // Guarded on docId: a leaf without one (tracker node docs are not staged, so they
+    // carry no document) would post `id: undefined`, and the reader opens on nothing
+    // and shows a spinner or an error rather than leaving the current pane alone.
+    window.parent.postMessage({
+      type: 'node_selected', nodeType: 'document',
+      data: { id: hit.docId, content_type: 'code_intent' },
+    }, '*');
+  } else if (hit.kind === 'root') {
+    window.parent.postMessage({
+      type: 'node_selected', nodeType: 'collection',
+      data: { id: collectionMeta.id, name: collectionMeta.name, document_count: collectionMeta.documentCount, domain: collectionMeta.domain },
+    }, '*');
+  } else if (pinned && hit.docId) {
+    // Directory backed by a module doc — open its grounded summary in the SAME
+    // left doc reader files use (a module IS a code_intent document). The subtree
+    // highlight comes for free from the pin.
+    window.parent.postMessage({
+      type: 'node_selected', nodeType: 'document',
+      data: { id: hit.docId, content_type: 'code_intent' },
+    }, '*');
+  } else {
+    // Intermediate dir with no module doc, or unpinning — highlight only.
+    window.parent.postMessage({ type: 'node_cleared' }, '*');
+  }
+});
+
+canvas.addEventListener('wheel', e => { userMoved = true; camera.handleWheel(e); }, { passive: false });
+
+// Double-click empty space → zoom in toward cursor (Google Maps style).
+canvas.addEventListener('dblclick', e => {
+  W = canvas.width / renderScale; H = canvas.height / renderScale;
+  const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
+  if (!hitTest(w.x, w.y)) { userMoved = true; camera.flyTo(w.x, w.y, camera.zoom * 1.8, 400); }
+});
+
+// Report real user input to the shell so idle detection works while the collection view
+// is up — same throttled pattern as star.html and the galaxy. Without it the shell only
+// hears from the galaxy iframe, so panning or reading a collection counted as idle and
+// the screensaver cut in mid-use. Throttled; background/API work never triggers it.
+let _lastActivityPing = 0;
+function notifyActivity() {
+  const now = performance.now();
+  if (now - _lastActivityPing < 400) return;
+  _lastActivityPing = now;
+  try { window.parent.postMessage({ type: 'user_activity' }, '*'); } catch (_) {}
+}
+['mousedown', 'mousemove', 'mouseup', 'wheel', 'dblclick', 'keydown', 'touchstart'].forEach(
+  ev => window.addEventListener(ev, notifyActivity, { passive: true })
+);
+</script>
+</body>
+</html>

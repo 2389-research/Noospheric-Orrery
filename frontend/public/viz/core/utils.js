@@ -26,12 +26,28 @@ export function getCurrentLevel(zoom) {
 
 // Color utilities
 export function hexRGB(hex) {
-  if (!hex || hex[0] !== '#') return [128, 128, 128];
+  if (!hex) return [128, 128, 128];
+  // Accepts `rgb(r,g,b)` as well as `#rrggbb`, because blendColors RETURNS `rgb(...)`.
+  // Without this, every entity spanning more than one domain fell through to the grey
+  // fallback and rendered grey instead of its blended domain color.
+  if (hex[0] !== '#') {
+    const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(hex);
+    return m ? [+m[1], +m[2], +m[3]] : [128, 128, 128];
+  }
   return [
     parseInt(hex.slice(1, 3), 16),
     parseInt(hex.slice(3, 5), 16),
     parseInt(hex.slice(5, 7), 16),
   ];
+}
+
+/** Canonical `#rrggbb` for any color this codebase produces (hex or `rgb(...)`).
+ *  Sprite cache keys go through this so `#e0a030` and `rgb(224,160,48)` — the same
+ *  color by two routes — share one cached sprite instead of baking two. */
+export function canonicalHex(color) {
+  const [r, g, b] = hexRGB(color);
+  return '#' + [r, g, b]
+    .map(v => Math.max(0, Math.min(255, v | 0)).toString(16).padStart(2, '0')).join('');
 }
 
 export function rgba(r, g, b, a) {

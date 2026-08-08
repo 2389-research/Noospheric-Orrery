@@ -5,11 +5,13 @@ import { NavTrail, TrailItem } from "./nav-trail";
 import { EntityPanelContent, EntityPanelData } from "./entity-panel-content";
 import { DomainPanelContent, DomainPanelData } from "./domain-panel-content";
 import { TradeRoutePanelContent, TradeRoutePanelData } from "./trade-route-panel-content";
+import { CollectionPanelContent, CollectionPanelData } from "./collection-panel-content";
 
 type PanelNode =
   | { nodeType: "entity"; data: EntityPanelData }
   | { nodeType: "domain"; data: DomainPanelData }
-  | { nodeType: "trade_route"; data: TradeRoutePanelData };
+  | { nodeType: "trade_route"; data: TradeRoutePanelData }
+  | { nodeType: "collection"; data: CollectionPanelData };
 
 interface SelectedNodeRaw {
   nodeType: string;
@@ -64,6 +66,23 @@ function parseSelectedNode(selectedNode: SelectedNodeRaw | null): PanelNode | nu
       },
     };
   }
+  if (selectedNode.nodeType === "collection") {
+    const d = selectedNode.data as {
+      id?: string;
+      name?: string;
+      document_count?: number;
+      domain?: string | null;
+    };
+    return {
+      nodeType: "collection",
+      data: {
+        id: String(d.id ?? ""),
+        name: String(d.name ?? ""),
+        document_count: Number(d.document_count ?? 0),
+        domain: d.domain ?? null,
+      },
+    };
+  }
   if (selectedNode.nodeType === "trade_route") {
     const d = selectedNode.data as {
       source?: string; target?: string;
@@ -108,6 +127,9 @@ export function GalaxyPanel({ selectedNode, domainColors, onClose, onNavigateToE
     }
     if (node.nodeType === "trade_route") {
       return { name: `${node.data.sourceLabel?.split("/").pop()} ↔ ${node.data.targetLabel?.split("/").pop()}`, nodeType: "trade_route" as const, id: `${node.data.source}:${node.data.target}` };
+    }
+    if (node.nodeType === "collection") {
+      return { name: node.data.name, nodeType: "collection" as const, id: node.data.id };
     }
     return { name: node.data.path?.split("/").pop() ?? node.data.name, nodeType: "domain" as const, id: node.data.path };
   });
@@ -230,6 +252,9 @@ export function GalaxyPanel({ selectedNode, domainColors, onClose, onNavigateToE
             onNavigateDomain={handleNavigateDomain}
             onNavigateEntity={handleNavigateEntity}
           />
+        )}
+        {currentNode?.nodeType === "collection" && (
+          <CollectionPanelContent data={currentNode.data} onNavigateEntity={handleNavigateEntity} />
         )}
         {!currentNode && (
           <div style={{ padding: 20, fontSize: 11, color: "rgba(100,180,255,0.3)" }}>

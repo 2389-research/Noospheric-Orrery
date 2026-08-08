@@ -6,7 +6,8 @@ from collections import defaultdict, deque
 from fastapi import APIRouter, HTTPException, Depends, Query
 from ..dependencies import get_auth_store, AuthStore
 from ..broadcast import broadcast_search
-from ..repositories.graph_reads import _chunks, entities_in_domain, entity_by_name
+from ..repositories.graph_reads import (_chunks, domain_neighbours, entities_in_domain,
+                                         entity_by_name)
 
 router = APIRouter(prefix="/graph")
 
@@ -456,3 +457,30 @@ async def explore_domain(
         await broadcast_search(f"domain:{domain_path}", entity_names)
 
     return result
+
+
+@router.get("/domain/{domain_path:path}/neighbours")
+def domain_neighbours_route(
+    domain_path: str,
+    limit: int = 10,
+    auth: AuthStore = Depends(get_auth_store),
+):
+    """Domains sharing entities with `domain_path`, strongest first.
+
+    The domain side panel was fetching the WHOLE graph payload and filtering it in the
+    browser to show six neighbours — on the large graph that is a 57k-node index plus
+    9.4k edges, several MB and seconds, to render one short list. It called this path
+    already; the route simply did not exist, so the panel's neighbours section had been
+    silently failing on a 404 (the fetch is inside a try/catch that treats trade routes
+    as optional, which is why nothing surfaced).
+
+    `{domain_path:path}` because domain paths are hierarchical and contain `/`. The
+    trailing literal segment still binds: the greedy match backtracks to leave
+    `/neighbours` for the suffix.
+    """
+    store = auth.store
+    try:
+        return {"domain": domain_path,
+                "neighbours": domain_neighbours(store.conn, domain_path, limit=limit)}
+    finally:
+        store.close()
