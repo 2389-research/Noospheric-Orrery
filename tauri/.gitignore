@@ -41,7 +41,11 @@ testem.log
 .DS_Store
 Thumbs.db
 node_modules/
-src-tauri/resources/
+# Staged runtimes/services (stage.sh) — but keep the directory itself:
+# tauri-build validates the bundle.resources path exists, so a clean
+# checkout must have it or the crate won't compile.
+src-tauri/resources/*
+!src-tauri/resources/.gitkeep
 src-tauri/target/
 dist/
 scripts/.cache/

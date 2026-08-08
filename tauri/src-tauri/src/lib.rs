@@ -396,21 +396,97 @@ fn port_open(port: u16) -> bool {
     .is_ok()
 }
 
-fn wait_for_port(port: u16, timeout: Duration, name: &str, paths: &Paths) -> Result<(), String> {
+#[derive(Debug)]
+enum WaitOutcome {
+    Ready,
+    Exited(String),
+    TimedOut,
+}
+
+/// Poll until the service reports ready, its child exits, or the timeout
+/// lapses. Readiness is checked first: a served port means the service is
+/// up even if the direct child handed off and exited.
+fn wait_for_ready(
+    mut ready: impl FnMut() -> bool,
+    timeout: Duration,
+    poll_interval: Duration,
+    mut child_status: impl FnMut() -> Option<String>,
+) -> WaitOutcome {
     let start = Instant::now();
-    while start.elapsed() < timeout {
-        if port_open(port) {
-            return Ok(());
+    loop {
+        if ready() {
+            return WaitOutcome::Ready;
         }
-        std::thread::sleep(Duration::from_millis(500));
+        if let Some(status) = child_status() {
+            return WaitOutcome::Exited(status);
+        }
+        if start.elapsed() >= timeout {
+            return WaitOutcome::TimedOut;
+        }
+        std::thread::sleep(poll_interval);
     }
-    let tail = fs::read_to_string(paths.log(name))
+}
+
+/// Probe whether the service child at `idx` has exited; `None` while it
+/// still runs or its status can't be read (the wait then falls back to
+/// its timeout).
+fn service_exit_probe(state: &Supervisor, idx: usize) -> impl FnMut() -> Option<String> + '_ {
+    move || {
+        let mut children = state.children.lock().unwrap();
+        children
+            .get_mut(idx)?
+            .try_wait()
+            .ok()
+            .flatten()
+            .map(|status| status.to_string())
+    }
+}
+
+fn log_tail(paths: &Paths, name: &str) -> String {
+    fs::read_to_string(paths.log(name))
         .map(|s| {
             let lines: Vec<&str> = s.lines().collect();
             lines[lines.len().saturating_sub(25)..].join("\n")
         })
-        .unwrap_or_default();
-    Err(format!("{name} did not become ready on port {port}.\n\n{tail}"))
+        .unwrap_or_default()
+}
+
+fn wait_for_service(
+    app: &tauri::AppHandle,
+    paths: &Paths,
+    name: &str,
+    port: u16,
+    timeout: Duration,
+    child_status: impl FnMut() -> Option<String>,
+) -> Result<(), String> {
+    match wait_for_ready(
+        || port_open(port),
+        timeout,
+        Duration::from_millis(500),
+        child_status,
+    ) {
+        WaitOutcome::Ready => Ok(()),
+        WaitOutcome::Exited(status) => {
+            // Through log_line, so the failure lands in the service's log
+            // file (created on first write — a child that dies without
+            // output otherwise leaves no file at all), the in-memory
+            // buffer, and the live logs window.
+            let died = format!("{name} exited ({status}) before becoming ready");
+            log_line(app, paths, name, &died);
+            Err(format!("{died}.\n\n{}", log_tail(paths, name)))
+        }
+        WaitOutcome::TimedOut => Err(format!(
+            "{name} did not become ready on port {port}.\n\n{}",
+            log_tail(paths, name)
+        )),
+    }
+}
+
+/// A failed launch must not leave a half-running stack behind the error
+/// dialog: kill every spawned service, then hand the error back.
+fn abort_launch(state: &Supervisor, error: String) -> String {
+    kill_children(state);
+    error
 }
 
 #[tauri::command]
@@ -442,6 +518,8 @@ fn launch_impl(app: tauri::AppHandle) -> Result<String, String> {
         }
     }
 
+    let orch_idx;
+    let front_idx;
     {
         let mut children = state.children.lock().unwrap();
 
@@ -458,6 +536,7 @@ fn launch_impl(app: tauri::AppHandle) -> Result<String, String> {
         .current_dir(paths.service("orchestrator"));
         backend_env(&mut orch, &settings, &paths);
         let _ = app.emit("bootstrap-log", "starting orchestrator…".to_string());
+        orch_idx = children.len();
         children.push(spawn_logged(&app, &paths, "orchestrator", orch)?);
 
         let mut worker = Command::new(paths.venv_python("worker"));
@@ -475,11 +554,28 @@ fn launch_impl(app: tauri::AppHandle) -> Result<String, String> {
             .env("NODE_ENV", "production")
             .env("BACKEND_URL", format!("http://127.0.0.1:{ORCH_PORT}"));
         let _ = app.emit("bootstrap-log", "starting frontend…".to_string());
+        front_idx = children.len();
         children.push(spawn_logged(&app, &paths, "frontend", front)?);
     }
 
-    wait_for_port(ORCH_PORT, Duration::from_secs(90), "orchestrator", &paths)?;
-    wait_for_port(FRONT_PORT, Duration::from_secs(60), "frontend", &paths)?;
+    wait_for_service(
+        &app,
+        &paths,
+        "orchestrator",
+        ORCH_PORT,
+        Duration::from_secs(90),
+        service_exit_probe(state.inner(), orch_idx),
+    )
+    .map_err(|error| abort_launch(state.inner(), error))?;
+    wait_for_service(
+        &app,
+        &paths,
+        "frontend",
+        FRONT_PORT,
+        Duration::from_secs(60),
+        service_exit_probe(state.inner(), front_idx),
+    )
+    .map_err(|error| abort_launch(state.inner(), error))?;
     let url = format!("http://127.0.0.1:{FRONT_PORT}");
     println!("✅ Services ready — {url}");
     let _ = app.emit("bootstrap-log", format!("Ready at {url}"));
@@ -669,4 +765,111 @@ pub fn run() {
                 kill_children(&app.state::<Supervisor>());
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    const FAST_POLL: Duration = Duration::from_millis(10);
+
+    #[test]
+    fn ready_when_port_opens() {
+        // Real socket path: the listener stays bound for the whole test, so
+        // port_open genuinely observes a served port.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let outcome = wait_for_ready(
+            || port_open(port),
+            Duration::from_secs(5),
+            FAST_POLL,
+            || None,
+        );
+        assert!(matches!(outcome, WaitOutcome::Ready));
+    }
+
+    #[test]
+    fn ready_wins_when_port_open_and_child_exited() {
+        // A served port means launch succeeded even if the direct child
+        // handed off to a grandchild and exited; exit is only a heuristic.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let outcome = wait_for_ready(
+            || port_open(port),
+            Duration::from_secs(5),
+            FAST_POLL,
+            || Some("exit status: 0".to_string()),
+        );
+        assert!(matches!(outcome, WaitOutcome::Ready));
+    }
+
+    #[test]
+    fn exited_child_reported_before_timeout() {
+        // "Never ready" is injected: a released real port can be re-bound by
+        // a concurrent test's ephemeral listener, which flipped this flaky.
+        // Generous timeout: a wait loop that ignores the exit probe fails
+        // this test by returning TimedOut instead.
+        let outcome = wait_for_ready(|| false, Duration::from_secs(30), FAST_POLL, || {
+            Some("signal: 5 (SIGTRAP)".to_string())
+        });
+        match outcome {
+            WaitOutcome::Exited(status) => assert_eq!(status, "signal: 5 (SIGTRAP)"),
+            other => panic!("expected Exited, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn times_out_when_no_ready_no_exit() {
+        let outcome = wait_for_ready(|| false, Duration::from_millis(50), FAST_POLL, || None);
+        assert!(matches!(outcome, WaitOutcome::TimedOut));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_none_while_child_runs() {
+        let supervisor = Supervisor::default();
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        supervisor.children.lock().unwrap().push(child);
+        let mut probe = service_exit_probe(&supervisor, 0);
+        assert_eq!(probe(), None);
+        kill_children(&supervisor);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn abort_launch_kills_children_and_returns_error() {
+        let supervisor = Supervisor::default();
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id() as i32;
+        supervisor.children.lock().unwrap().push(child);
+
+        let error = abort_launch(&supervisor, "frontend exited".to_string());
+
+        assert_eq!(error, "frontend exited");
+        assert!(supervisor.children.lock().unwrap().is_empty());
+        // Killed AND reaped: signal 0 to the old pid must fail (ESRCH).
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_reports_real_child_exit() {
+        let supervisor = Supervisor::default();
+        let child = Command::new("false").spawn().unwrap();
+        supervisor.children.lock().unwrap().push(child);
+        let mut probe = service_exit_probe(&supervisor, 0);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = probe() {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "child exit never reported");
+            std::thread::sleep(FAST_POLL);
+        };
+        assert!(
+            status.contains("exit status: 1"),
+            "unexpected status: {status}"
+        );
+    }
 }
