@@ -3,20 +3,11 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { getEntityColor } from "./entity-colors";
+import type { CollectionPanelData, CollectionTopEntity } from "@/lib/types";
 
-interface CollectionTopEntity {
-  id: string;
-  name: string;
-  type: string;
-  count: number;
-}
-
-export interface CollectionPanelData {
-  id: string;
-  name: string;
-  document_count: number;
-  domain?: string | null;
-}
+// Re-exported so `galaxy-panel` keeps importing it from here; the definition itself
+// now lives in lib/types.ts alongside the rest of the API contract.
+export type { CollectionPanelData };
 
 interface CollectionPanelContentProps {
   data: CollectionPanelData;

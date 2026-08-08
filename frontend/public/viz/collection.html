@@ -157,8 +157,14 @@ if (WORKSPACE_ID) fetchHeaders['X-Workspace-Id'] = WORKSPACE_ID;
 async function loadData() {
   if (!collectionId) { document.getElementById('nav-name').textContent = 'no collection specified'; return; }
   try {
-    const data = await fetch(`${API_URL}/collections/${collectionId}/structure`, { headers: fetchHeaders }).then(r => r.json());
-    buildRepoView(data);
+    // encodeURIComponent: collectionId comes off the query string, so it is caller-
+    // supplied and lands in a PATH segment. r.ok before .json(): a 404/500 body parses
+    // as perfectly good JSON, and buildRepoView would then render an error payload as
+    // an empty-but-successful collection rather than reporting the failure.
+    const r = await fetch(`${API_URL}/collections/${encodeURIComponent(collectionId)}/structure`,
+                          { headers: fetchHeaders });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    buildRepoView(await r.json());
   } catch (err) {
     console.error('Repo view: load failed', err);
     document.getElementById('nav-name').textContent = 'load failed';
@@ -552,8 +558,11 @@ canvas.addEventListener('mouseup', e => {
   // Toggle pin for tree nodes (drives the highlight).
   pinnedId = (pinnedId === hit.id) ? null : hit.id;
   const pinned = pinnedId === hit.id;
-  if (hit.kind === 'file') {
+  if (hit.kind === 'file' && hit.docId) {
     // A file IS a document — open the host's left doc reader.
+    // Guarded on docId: a leaf without one (tracker node docs are not staged, so they
+    // carry no document) would post `id: undefined`, and the reader opens on nothing
+    // and shows a spinner or an error rather than leaving the current pane alone.
     window.parent.postMessage({
       type: 'node_selected', nodeType: 'document',
       data: { id: hit.docId, content_type: 'code_intent' },
@@ -585,6 +594,21 @@ canvas.addEventListener('dblclick', e => {
   const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
   if (!hitTest(w.x, w.y)) { userMoved = true; camera.flyTo(w.x, w.y, camera.zoom * 1.8, 400); }
 });
+
+// Report real user input to the shell so idle detection works while the collection view
+// is up — same throttled pattern as star.html and the galaxy. Without it the shell only
+// hears from the galaxy iframe, so panning or reading a collection counted as idle and
+// the screensaver cut in mid-use. Throttled; background/API work never triggers it.
+let _lastActivityPing = 0;
+function notifyActivity() {
+  const now = performance.now();
+  if (now - _lastActivityPing < 400) return;
+  _lastActivityPing = now;
+  try { window.parent.postMessage({ type: 'user_activity' }, '*'); } catch (_) {}
+}
+['mousedown', 'mousemove', 'mouseup', 'wheel', 'dblclick', 'keydown', 'touchstart'].forEach(
+  ev => window.addEventListener(ev, notifyActivity, { passive: true })
+);
 </script>
 </body>
 </html>

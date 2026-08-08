@@ -429,13 +429,17 @@ export class WorldState {
       const already = this.entities.get(id);
       if (already) return already;
       const node = this._makeEntityNode(this.nodeIndex.get(id));
-      if (!node) return null;   // no resolvable domain or collection → nowhere to put it
-
-      // Swap, don't grow — make room before inserting.
-      if (this.renderCap && this.entities.size >= this.renderCap) this._evictWeakest(id);
-      node.hydrated = true;
-      this.entities.set(node.id, node);
-      return node;
+      if (node) {
+        // Swap, don't grow — make room before inserting.
+        if (this.renderCap && this.entities.size >= this.renderCap) this._evictWeakest(id);
+        node.hydrated = true;
+        this.entities.set(node.id, node);
+        return node;
+      }
+      // Placement failed (no resolvable domain or collection). FALL THROUGH rather than
+      // returning null: an entity with the same label may already be in the render set,
+      // and returning null here hid it — the index said "exists" and we answered "no",
+      // so a search hit for an already-visible star silently failed to light it up.
     }
 
     // Payload without a `positions` map (older snapshot): fall back to scanning

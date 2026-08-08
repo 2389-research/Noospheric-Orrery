@@ -288,11 +288,13 @@ export function drawConnections(ctx, centerX, centerY, docs, coEntities, hovered
   const hovCo = coEntities.find(e => e.id === hoveredId);
   const hovCenter = hoveredId === centralEntityId;
 
-  // Center → documents (skip lines to off-screen docs unless lit — the doc node
-  // itself is culled there too).
+  // Center → documents. Cull on BOTH endpoints, matching the doc↔co-entity rule below:
+  // a segment is only invisible when neither end is on screen. Testing the doc alone
+  // dropped every line from an on-screen center to an off-screen doc, even though such
+  // a line crosses the viewport — so zooming in made the center's spokes disappear.
   for (const doc of docs) {
     const lit = hovCenter || (hovDoc && doc.id === hovDoc.id);
-    if (!lit && _culled(view, doc._px, doc._py)) continue;
+    if (!lit && _culled(view, doc._px, doc._py) && _culled(view, centerX, centerY)) continue;
     ctx.strokeStyle = `rgba(255,200,120,${lit ? 0.35 : 0.04})`;
     ctx.lineWidth = lit ? 1.8 : 0.5;
     ctx.setLineDash([3, 8]);

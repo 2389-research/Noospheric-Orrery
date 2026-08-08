@@ -8,6 +8,7 @@
 // nothing renders, no error. Entities are out of scope for now (long tail),
 // so their focus just clears the overlay.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isSameOriginMessage } from "@/lib/viz-message";
 
 const POSE_PNG: Record<string, string> = {
   reading: "reading.png", galxy: "galxy.png", pointing: "pointing.png",
@@ -41,6 +42,7 @@ export function MagosOverlay({ enabled, workspaceId }: { enabled: boolean; works
     if (!enabled) { clear(); return; }
 
     const onMsg = async (e: MessageEvent) => {
+      if (!isSameOriginMessage(e)) return;
       const d = e.data;
       if (d?.type === "attract_focus") {
         if (!COMMENTED.has(d.nodeType) || !d.id) { clear(); return; }

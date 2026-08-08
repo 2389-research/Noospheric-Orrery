@@ -100,12 +100,8 @@ export const api = {
       `/entities/${entityId}/cooccurrences`
     ),
   getCollectionSummary: (collectionId: string) =>
-    fetchAPI<{
-      collection: { id: string; name: string; kind: string; domain: string | null;
-                    document_count: number };
-      summary: string;
-      top_entities: { id: string; name: string; type: string; count: number }[];
-    }>(`/collections/${collectionId}/summary`),
+    fetchAPI<import("./types").CollectionSummaryResponse>(
+      `/collections/${encodeURIComponent(collectionId)}/summary`),
   getDocumentReader: (docId: string) =>
     fetchAPI<{
       document: { id: string; title: string; status: string; domains: string[] };

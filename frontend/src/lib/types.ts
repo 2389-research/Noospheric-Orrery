@@ -130,3 +130,37 @@ export interface Correction {
   created_at: string;
   resolved_at: string | null;
 }
+
+// ── Collections ─────────────────────────────────────────────────────────────
+// The API contract for a collection, defined once here rather than restated as
+// structural literals in api.ts and in the panel component — three copies of the
+// same shape drift silently, and the panel's copy is what the response is checked
+// against.
+
+export interface CollectionTopEntity {
+  id: string;
+  name: string;
+  type: string;
+  count: number;
+}
+
+/** A collection node's identity, as carried on the viz `node_selected` payload. */
+export interface CollectionPanelData {
+  id: string;
+  name: string;
+  document_count: number;
+  domain?: string | null;
+}
+
+/** GET /collections/{id}/summary */
+export interface CollectionSummaryResponse {
+  collection: {
+    id: string;
+    name: string;
+    kind: string;
+    domain: string | null;
+    document_count: number;
+  };
+  summary: string;
+  top_entities: CollectionTopEntity[];
+}

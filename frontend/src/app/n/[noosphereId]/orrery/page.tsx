@@ -10,6 +10,7 @@ import { useNoosphereId } from "@/lib/hooks/use-noosphere-id";
 import { useSearchParams } from "next/navigation";
 import { useScreensaverSettings } from "@/lib/screensaver-settings";
 import { useSearchBroadcast } from "@/lib/use-search-broadcast";
+import { isSameOriginMessage } from "@/lib/viz-message";
 import { MagosOverlay } from "@/components/magos-overlay";
 import { ScreensaverSettingsPanel } from "@/components/screensaver-settings-panel";
 
@@ -94,16 +95,16 @@ export default function VizPage() {
   // Current iframe ref
   const activeRef = viewMode === "star" ? starRef : viewMode === "collection" ? collectionRef : galaxyRef;
 
-  // Breadcrumbs
+  // Breadcrumbs — galaxy only.
+  //
+  // There were `star` and `collection` entries here, but the bar itself is hidden in
+  // exactly those two modes (see its `display` below), so they could never render. Each
+  // drill-in view draws its OWN `#nav` inside its iframe (star.html / collection.html),
+  // which is what actually shows the entity or collection name — so the fix is to drop
+  // the dead entries, not to reveal a second, competing breadcrumb.
   const breadcrumbs: Breadcrumb[] = [
     { label: "Galaxy", action: () => exitToGalaxy() },
   ];
-  if (viewMode === "star" && starEntityName) {
-    breadcrumbs.push({ label: starEntityName, action: () => {} });
-  }
-  if (viewMode === "collection" && collectionName) {
-    breadcrumbs.push({ label: collectionName, action: () => {} });
-  }
 
   // Enter star view with fade — refresh auth token first
   const enterStarView = useCallback(async (entityId: string, entityName: string) => {
@@ -188,6 +189,7 @@ export default function VizPage() {
   // Listen for postMessage events
   useEffect(() => {
     const handler = (e: MessageEvent) => {
+      if (!isSameOriginMessage(e)) return;
       if (e.data?.type === "node_selected") {
         if (e.data.nodeType === "document") {
           setSelectedDocId(e.data.data.id as string);
@@ -272,6 +274,7 @@ export default function VizPage() {
     const events: (keyof WindowEventMap)[] = ["mousemove", "mousedown", "wheel", "keydown", "touchstart"];
     events.forEach(ev => window.addEventListener(ev, onActivity, { passive: true }));
     const onMsg = (e: MessageEvent) => {
+      if (!isSameOriginMessage(e)) return;
       if (e.data?.type === "user_activity") bumpIdle();
       else if (e.data?.type === "trigger_sleep") startAttract();
       else if (e.data?.type === "enter_star" && attractRef.current) {

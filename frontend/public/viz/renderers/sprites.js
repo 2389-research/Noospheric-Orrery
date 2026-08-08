@@ -13,21 +13,35 @@
 // Glows are inherently soft, so the slight upscaling when a node is large/zoomed
 // is invisible.
 
-import { rgba, hexRGB, TAU, PI, min, sin, cos, clamp } from '../core/utils.js';
+import { rgba, hexRGB, canonicalHex, TAU, PI, min, sin, cos, clamp } from '../core/utils.js';
 
 const _cache = new Map();
+
+// Bounded, because the keys are not a closed set: entity colors are BLENDED per entity
+// from its domain mix, so a large graph can mint thousands of distinct colors, and each
+// sprite is a retained offscreen canvas (ENTITY_PX² × 4 bytes ≈ 65 KB at 128px). Left
+// unbounded that is tens of MB of canvases that are never released.
+//
+// A Map iterates in insertion order, so the first key is the oldest; re-inserting on hit
+// makes that least-recently-USED rather than merely oldest, which matters because the
+// working set is whatever is currently on screen.
+const _CACHE_MAX = 256;
 
 /** Return a cached offscreen canvas for `key`, rendering it via `render(cx, size)`
  *  on first request. `size` is the sprite's pixel dimension (square); the glow is
  *  centered at size/2. */
 export function getSprite(key, size, render) {
-  let cv = _cache.get(key);
-  if (cv) return cv;
-  cv = document.createElement('canvas');
-  cv.width = cv.height = size;
-  render(cv.getContext('2d'), size);
-  _cache.set(key, cv);
-  return cv;
+  const cv = _cache.get(key);
+  if (cv) {
+    _cache.delete(key); _cache.set(key, cv);   // mark most-recently-used
+    return cv;
+  }
+  const made = document.createElement('canvas');
+  made.width = made.height = size;
+  render(made.getContext('2d'), size);
+  _cache.set(key, made);
+  if (_cache.size > _CACHE_MAX) _cache.delete(_cache.keys().next().value);
+  return made;
 }
 
 // ---- Entity glow ---------------------------------------------------------------
@@ -43,9 +57,17 @@ export const SECTOR_BRIGHT = 1.3;
 const ENTITY_PX = ENTITY_BR0 * 10 + 8; // 128, small margin for the outermost stop
 
 export function entityGlowSprite(color) {
-  return getSprite('e:' + color, ENTITY_PX, (cx, S) => {
+  // Key on the canonical hex, not the raw string: entity colors arrive as blended
+  // `rgb(r,g,b)` and domain/leaf colors as `#rrggbb`, so the same color by two routes
+  // used to bake two sprites. Quantized to 4 levels per channel first — blended colors
+  // are continuous, so without it nearly every multi-domain entity mints its own sprite
+  // and thrashes the cache; a 4-unit step is imperceptible on a soft glow.
+  const [r0, g0, b0] = hexRGB(color);
+  const q = v => Math.round(v / 4) * 4;
+  const key = canonicalHex(`rgb(${q(r0)},${q(g0)},${q(b0)})`);
+  return getSprite('e:' + key, ENTITY_PX, (cx, S) => {
     const c = S / 2, bR = ENTITY_BR0, sectorBright = SECTOR_BRIGHT;
-    const [r, g, b] = hexRGB(color);
+    const [r, g, b] = hexRGB(key);
     const disc = (radius, stops) => {
       const grad = cx.createRadialGradient(c, c, 0, c, c, radius);
       for (const [at, a] of stops) grad.addColorStop(at, rgba(r, g, b, a));

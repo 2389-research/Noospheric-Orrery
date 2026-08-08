@@ -117,6 +117,12 @@ resize();
 camera.x = WORLD_W / 2;
 camera.y = WORLD_H / 2;
 
+// Same helper as collection.html / star.html. Every string reaching a tooltip below is
+// LLM-extracted from ingested documents — entity names, domain paths, collection names —
+// so it is attacker-influenced by anyone who can get a document ingested.
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
 // Load data
 const API_URL = new URLSearchParams(location.search).get('api') || window.API_URL || 'http://localhost:8100';
 const AUTH_TOKEN = new URLSearchParams(location.search).get('token') || '';
@@ -247,13 +253,13 @@ canvas.addEventListener('mousemove', e => {
     tt.style.left = Math.min(e.clientX + 14, W - 280) + 'px';
     tt.style.top = Math.min(e.clientY - 8, H - 100) + 'px';
     if (hit.kind === 'domain') {
-      tt.innerHTML = `<div class="tt-name">${hit.label}</div><div class="tt-sub">${hit.docCount} docs · maturity ${(hit.maturity * 100).toFixed(0)}%</div>`;
+      tt.innerHTML = `<div class="tt-name">${esc(hit.label)}</div><div class="tt-sub">${hit.docCount} docs · maturity ${(hit.maturity * 100).toFixed(0)}%</div>`;
     } else if (hit.kind === 'entity') {
-      tt.innerHTML = `<div class="tt-name">${hit.label}</div><div class="tt-sub">${hit.type} · ${hit.sourceCount} docs</div>`;
+      tt.innerHTML = `<div class="tt-name">${esc(hit.label)}</div><div class="tt-sub">${esc(hit.type)} · ${hit.sourceCount} docs</div>`;
     } else if (hit.kind === 'cluster') {
-      tt.innerHTML = `<div class="tt-name">${hit.domainPaths.length} domains</div><div class="tt-sub">${hit.domainPaths.map(p => p.split('/').pop()).join(', ')}</div>`;
+      tt.innerHTML = `<div class="tt-name">${hit.domainPaths.length} domains</div><div class="tt-sub">${esc(hit.domainPaths.map(p => p.split('/').pop()).join(', '))}</div>`;
     } else if (hit.kind === 'collection') {
-      tt.innerHTML = `<div class="tt-name">▣ ${hit.label}</div><div class="tt-sub">repo · ${hit.docCount} docs · ${hit.domainPath ? hit.domainPath.split('/').pop() : 'unbinned'}</div>`;
+      tt.innerHTML = `<div class="tt-name">▣ ${esc(hit.label)}</div><div class="tt-sub">repo · ${hit.docCount} docs · ${esc(hit.domainPath ? hit.domainPath.split('/').pop() : 'unbinned')}</div>`;
     }
   } else {
     tt.style.display = 'none';
@@ -312,7 +318,7 @@ canvas.addEventListener('dblclick', e => {
     }, '*');
   } else if (hit && hit.kind === 'collection') {
     window.parent.postMessage({
-      type: 'enter_collection', collectionId: hit.collectionId, repoName: hit.label,
+      type: 'enter_collection', collectionId: hit.collectionId, collectionName: hit.label,
     }, '*');
   } else if (hit && hit.kind === 'domain') {
     camera.flyTo(hit.x, hit.y, 0.6, 800);
