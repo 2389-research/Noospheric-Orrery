@@ -12,7 +12,11 @@ dependencies = [
     "umap-learn>=0.5.0",
     "numpy>=1.26.0,<2.1",
     "faiss-cpu>=1.7.0",
-    "mcp>=1.0.0",
+    # Capped below 2: `mcp.server.fastmcp` — what mcp_server.py imports — does not
+    # exist in 2.x, so an unbounded constraint resolves to a version this code cannot
+    # import at all. The lockfile pinned 1.x, which hid it everywhere except a fresh
+    # `uv pip install` from pyproject (i.e. CI).
+    "mcp>=1.0.0,<2",
     "Pillow>=10.0.0",
     "sentencepiece>=0.1.99",
     "protobuf>=3.20.0",
