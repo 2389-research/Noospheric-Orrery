@@ -208,13 +208,29 @@ The worker does **not** call `refine()` (the agentic loop). It runs the decompos
 
 ### SQLite WAL Mode
 
-Both orchestrator and worker write concurrently. Every connection opens with:
+Both orchestrator and worker write concurrently. Every connection opens with WAL plus
+a busy timeout, and **the two processes deliberately use different timeouts**:
+
 ```python
 conn.execute("PRAGMA journal_mode=WAL")
-conn.execute("PRAGMA busy_timeout=5000")
+conn.execute("PRAGMA busy_timeout=30000")   # orchestrator
+conn.execute("PRAGMA busy_timeout=5000")    # worker
 ```
 
-This is handled by `get_connection()` in `db.py` — always use that, never open SQLite directly.
+The orchestrator serves HTTP requests while contending with the worker's long write
+transactions, so it waits longer rather than failing a user request with
+`database is locked`. The worker is a background loop that can retry on the next poll,
+so it fails fast instead of holding a connection. Don't "unify" these to one number —
+the asymmetry is the point.
+
+Both come from `get_connection()` in `db.py` — always use that, never open SQLite
+directly, and don't re-specify the PRAGMAs at the call site.
+
+**Known gap:** `PRAGMA foreign_keys` is left at SQLite's default (OFF), so the
+`REFERENCES` clauses throughout the schema are documentation rather than enforcement.
+Turning it on is worth doing, but it is a repo-wide behavioural change — existing
+insert orders and delete paths would start failing — so it needs its own change with a
+full pass over those paths, not a quiet flip alongside unrelated work.
 
 ### Domain Spec Cascade
 

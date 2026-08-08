@@ -180,13 +180,95 @@ CREATE TABLE IF NOT EXISTS specs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     media_type TEXT DEFAULT 'text'
 );
+-- ── Graph read-model foundations ────────────────────────────────────────────
+-- Nothing reads these yet; they land ahead of the read layer so the schema and
+-- the code that uses it move in separate, revertible steps.
+
+-- Materialized `/graph` payload. The graph only changes when a job writes to it,
+-- so the payload is computed once and served cached; writers flip `dirty` and a
+-- background task rebuilds. One logical row, id='current'.
+CREATE TABLE IF NOT EXISTS graph_snapshot (
+    id TEXT PRIMARY KEY,
+    payload TEXT,
+    built_at TIMESTAMP,
+    entity_count INTEGER,
+    edge_count INTEGER,
+    dirty INTEGER DEFAULT 1
+);
+
+-- Materialized domain↔domain co-occurrence edges (domains sharing entities).
+-- Computing one domain's neighbours live costs seconds on a large domain because
+-- every entity-mention fans out to every document sharing that entity; the
+-- snapshot build already computes the whole edge set, so this stores what it
+-- found where a scoped read can seek it.
+CREATE TABLE IF NOT EXISTS domain_edges (
+    source TEXT NOT NULL,
+    target TEXT NOT NULL,
+    weight REAL,
+    PRIMARY KEY (source, target)
+);
+CREATE INDEX IF NOT EXISTS idx_domain_edges_source ON domain_edges(source);
+CREATE INDEX IF NOT EXISTS idx_domain_edges_target ON domain_edges(target);
+
+-- A COLLECTION is a labelled, hierarchical grouping of documents — a git repo, an
+-- agent run, anything whose documents arrived together. It sits BESIDE `domains`,
+-- not above or below: both are containers of documents, and they stay distinct
+-- because their provenance differs. A domain is inferred (LLM-classified,
+-- spec-cascaded); a collection is given (it is where the documents came from).
+--
+-- `kind` does not branch the schema. It selects which *asserted* edges an ingest
+-- path writes (see collection_edges.type); the DERIVED edge — co-occurrence over
+-- shared entities — comes free to every kind.
+CREATE TABLE IF NOT EXISTS collections (
+    id TEXT PRIMARY KEY,
+    name TEXT,
+    path TEXT UNIQUE,
+    root_path TEXT,
+    parent_path TEXT,
+    document_count INTEGER DEFAULT 0,
+    remote_url TEXT,
+    commit_sha TEXT,
+    kind TEXT DEFAULT 'git_repo',
+    pos_x REAL,
+    pos_y REAL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Membership + where the document sits in its collection's tree.
+--
+-- `role` and `emits_cooccurrence` are deliberately separate. Structural position
+-- and extraction behaviour are independent: a root or group summary mentions
+-- everything beneath it, so its co-occurrence is noise, but that is a default
+-- rather than a law. Deriving one from the other forces every new collection kind
+-- to impersonate a code repo to opt in.
+CREATE TABLE IF NOT EXISTS document_collections (
+    document_id TEXT NOT NULL REFERENCES documents(id),
+    collection_id TEXT NOT NULL REFERENCES collections(id),
+    parent_path TEXT,
+    role TEXT,                              -- 'root' | 'group' | 'leaf'
+    emits_cooccurrence INTEGER DEFAULT 1,   -- explicit, never inferred from role
+    PRIMARY KEY (document_id, collection_id)
+);
+CREATE INDEX IF NOT EXISTS idx_document_collections_collection
+    ON document_collections(collection_id);
+
+-- Asserted collection→collection edges. `type` distinguishes them and is part of
+-- the key: 'uses' (a declared dependency) and 'chain_next' (a trajectory).
+-- `source`/`target` rather than from_/to_ so this matches `domain_edges` — the two
+-- container kinds should not describe the same idea with different column names.
+CREATE TABLE IF NOT EXISTS collection_edges (
+    source TEXT NOT NULL REFERENCES collections(id),
+    target TEXT NOT NULL REFERENCES collections(id),
+    type TEXT NOT NULL,
+    weight REAL DEFAULT 1.0,
+    PRIMARY KEY (source, target, type)
+);
 """
 
 def init_db(db_path: str) -> None:
     os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    # One factory owns WAL + busy_timeout; init_db must not re-specify them.
+    conn = get_connection(db_path)
     conn.executescript(SCHEMA)
     # Migrate: add columns for image support if missing
     cols = {r[1] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
@@ -233,6 +315,19 @@ def init_db(db_path: str) -> None:
             conn.execute(f"ALTER TABLE normalization_log ADD COLUMN {col} {decl}")
     # Backfill: existing merge-log rows predate `action`
     conn.execute("UPDATE normalization_log SET action = 'merge' WHERE action IS NULL")
+
+    # entity_sources has no primary key, so without this the graph build's
+    # per-entity source_count and the trade-route self-joins scan the whole table
+    # — tens of seconds on a mid-size graph.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_sources_entity ON entity_sources(entity_id)")
+    # Any domain-scoped read (a domain's docs, its entities, its neighbours) filters
+    # on domain_path, but the only index is the composite PK (document_id,
+    # domain_path), which cannot be seeked by path — so the planner falls back to
+    # scanning.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_document_domains_path ON document_domains(domain_path)")
+    # Seed the single snapshot row (dirty, empty) so a writer can flip the bit with a
+    # plain UPDATE before the first build has ever run.
+    conn.execute("INSERT OR IGNORE INTO graph_snapshot (id, dirty) VALUES ('current', 1)")
     conn.commit()
     conn.close()
 
@@ -242,3 +337,13 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     return conn
+
+
+def mark_graph_dirty(conn) -> None:
+    """Flag the cached /graph snapshot for rebuild.
+
+    Call after any write that changes the graph. Deliberately a plain UPDATE on a
+    row seeded by init_db, so a writer never has to care whether a snapshot exists
+    yet. Cheap enough to call unconditionally.
+    """
+    conn.execute("UPDATE graph_snapshot SET dirty = 1 WHERE id = 'current'")
