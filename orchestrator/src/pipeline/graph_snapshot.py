@@ -91,7 +91,11 @@ def assign_domain_colors(domains: list[dict]) -> dict[str, str]:
     color_map = {}
     for top_name in top_level_names:
         range_start = top_level_hues[top_name]
-        family = sorted([p for p in paths if p.startswith(top_name)])
+        # Match on a path SEGMENT, not a character prefix: `startswith("ai")` also
+        # matches "aider/tools", so that path joined both families and the later loop
+        # overwrote its hue with one from a range it does not belong to.
+        family = sorted([p for p in paths
+                         if p == top_name or p.startswith(top_name + "/")])
         for i, path in enumerate(family):
             offset = ((i * GOLDEN_RATIO) % 1) * slice_size
             hue = (range_start + offset) % 360

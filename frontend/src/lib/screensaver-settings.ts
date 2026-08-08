@@ -25,12 +25,36 @@ export const DEFAULT_SCREENSAVER_SETTINGS: ScreensaverSettings = {
 const KEY = "orrery.screensaver";
 const CHANGE_EVENT = "orrery-screensaver-change";
 
+/** Coerce one stored field, falling back to the default when it is not the right type.
+ *
+ *  localStorage is user-writable and survives format changes, so a spread of raw JSON
+ *  trusts whatever is there. A string or null `idleMinutes` reaches
+ *  `Math.max(1, idleMinutes) * 60 * 1000` as NaN, setTimeout treats NaN as 0, and
+ *  attract mode starts instantly and cannot be escaped — the screensaver equivalent of
+ *  a crash loop. */
+function num(v: unknown, fallback: number): number {
+  const n = typeof v === "string" ? Number(v) : v;
+  return typeof n === "number" && Number.isFinite(n) ? n : fallback;
+}
+
+function bool(v: unknown, fallback: boolean): boolean {
+  return typeof v === "boolean" ? v : fallback;
+}
+
 export function loadScreensaverSettings(): ScreensaverSettings {
   if (typeof window === "undefined") return DEFAULT_SCREENSAVER_SETTINGS;
   try {
     const raw = window.localStorage.getItem(KEY);
     if (!raw) return DEFAULT_SCREENSAVER_SETTINGS;
-    return { ...DEFAULT_SCREENSAVER_SETTINGS, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw) as Partial<Record<keyof ScreensaverSettings, unknown>>;
+    const d = DEFAULT_SCREENSAVER_SETTINGS;
+    return {
+      idleMinutes: num(parsed.idleMinutes, d.idleMinutes),
+      beatSeconds: num(parsed.beatSeconds, d.beatSeconds),
+      scale: num(parsed.scale, d.scale),
+      magos: bool(parsed.magos, d.magos),
+      fps: bool(parsed.fps, d.fps),
+    };
   } catch {
     return DEFAULT_SCREENSAVER_SETTINGS;
   }

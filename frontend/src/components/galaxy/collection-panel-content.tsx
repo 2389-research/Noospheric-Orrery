@@ -23,22 +23,33 @@ export function CollectionPanelContent({ data, onNavigateEntity }: CollectionPan
   const [error, setError] = useState(false);
 
   // Fetch the grounded collection-level summary + top entities on selection.
+  //
+  // GalaxyPanel reuses this component across collections, so clicking B while A is
+  // still in flight would let A's late response overwrite B's state — the panel then
+  // shows one collection's title over another's summary. `cancelled` drops the stale
+  // resolution. `domain` is reset from props on every change for the same reason: it
+  // was only ever assigned when the response carried a truthy domain, so a collection
+  // without one silently kept the PREVIOUS collection's domain on screen.
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(false);
+    setDomain(data.domain ?? null);
     (async () => {
       try {
         const res = await api.getCollectionSummary(data.id);
+        if (cancelled) return;
         setSummary(res.summary ?? "");
         setTopEntities(res.top_entities ?? []);
         if (res.collection?.domain) setDomain(res.collection.domain);
       } catch {
-        setError(true);
+        if (!cancelled) setError(true);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
-  }, [data.id]);
+    return () => { cancelled = true; };
+  }, [data.id, data.domain]);
 
   const maxCount = topEntities.length > 0 ? topEntities[0].count : 1;
 

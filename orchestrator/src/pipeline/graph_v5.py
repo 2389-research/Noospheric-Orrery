@@ -258,8 +258,11 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
             "frame": {"space": "unit_square", "bounds": [0, 0, 1, 1]},
             "positions": {**domain_positions, **collection_positions},
             "palette": palette,
+            # "collection", not "repo" — the nodes this payload emits carry
+            # `"type": "collection"`, so declaring the level as "repo" left two
+            # vocabularies inside a single 5.1.0 payload.
             "hierarchies": [{"name": "cosmic",
-                             "levels": ["domain", "repo", "entity"], "default": True}],
+                             "levels": ["domain", "collection", "entity"], "default": True}],
             "generator": {"name": "umap-domain-anchors", "entity_positions": "client_derived"},
         },
     }

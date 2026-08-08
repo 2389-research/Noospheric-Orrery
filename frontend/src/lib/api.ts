@@ -102,6 +102,20 @@ export const api = {
   getCollectionSummary: (collectionId: string) =>
     fetchAPI<import("./types").CollectionSummaryResponse>(
       `/collections/${encodeURIComponent(collectionId)}/summary`),
+  /** Magos Lex commentary for a node, or null when none has been generated.
+   *
+   *  Returns null rather than throwing on 404: commentary is optional decoration and
+   *  a missing entry is the normal case, not an error. Takes an AbortSignal so the
+   *  caller can cancel a request superseded by the next focus.
+   */
+  getCommentary: async (nodeType: string, id: string, opts?: { signal?: AbortSignal }) => {
+    const res = await fetch(
+      `/api/commentary/${encodeURIComponent(nodeType)}/${encodeURIComponent(id)}`,
+      { headers: buildHeaders(), signal: opts?.signal },
+    );
+    if (!res.ok) return null;
+    return res.json() as Promise<{ comments: import("./types").MagosComment[] }>;
+  },
   getDocumentReader: (docId: string) =>
     fetchAPI<{
       document: { id: string; title: string; status: string; domains: string[] };

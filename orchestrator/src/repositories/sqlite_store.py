@@ -927,6 +927,12 @@ class SQLiteCollectionRepository:
 
         One join to `entities` filters both sides, since dc1 and dc2 reach the same
         entity_id — an invalidated entity contributes no routes.
+
+        `emits_cooccurrence` is honoured on BOTH sides. It is the explicit replacement
+        for the old `level == 'file'` test, and a derived read that ignores it silently
+        reinstates the behaviour the column was added to remove: a collection's rollup
+        and per-group summary documents mention everything under them, so letting them
+        contribute makes every collection look related to every other.
         """
         rows = self._conn.execute("""
             SELECT dc1.collection_id, dc2.collection_id, COUNT(*) as weight
@@ -935,18 +941,26 @@ class SQLiteCollectionRepository:
                                    AND es1.document_id != es2.document_id
             JOIN entities e ON e.id = es1.entity_id AND e.invalid_at IS NULL
             JOIN document_collections dc1 ON es1.document_id = dc1.document_id
+                                         AND dc1.emits_cooccurrence = 1
             JOIN document_collections dc2 ON es2.document_id = dc2.document_id
+                                         AND dc2.emits_cooccurrence = 1
             WHERE dc1.collection_id < dc2.collection_id
             GROUP BY dc1.collection_id, dc2.collection_id
         """).fetchall()
         return [{"source": r[0], "target": r[1], "weight": r[2]} for r in rows]
 
     def get_collection_weights(self):
-        """entity id -> {collection_id: normalized share of its mentions}."""
+        """entity id -> {collection_id: normalized share of its mentions}.
+
+        Same `emits_cooccurrence` opt-out as the routes above: a summary document
+        mentions everything beneath it, so counting it would pull every entity's mass
+        toward whichever collection has the wordiest rollup.
+        """
         rows = self._conn.execute("""
             SELECT es.entity_id, dc.collection_id, COUNT(*) as weight
             FROM entity_sources es
             JOIN document_collections dc ON es.document_id = dc.document_id
+                                        AND dc.emits_cooccurrence = 1
             JOIN entities e ON e.id = es.entity_id AND e.invalid_at IS NULL
             GROUP BY es.entity_id, dc.collection_id
         """).fetchall()

@@ -164,3 +164,10 @@ export interface CollectionSummaryResponse {
   summary: string;
   top_entities: CollectionTopEntity[];
 }
+
+/** One Magos Lex commentary line for a graph node. */
+export interface MagosComment {
+  kind: string;
+  text: string;
+  pose: string;
+}

@@ -9,6 +9,8 @@
 // so their focus just clears the overlay.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isSameOriginMessage } from "@/lib/viz-message";
+import { api } from "@/lib/api";
+import type { MagosComment } from "@/lib/types";
 
 const POSE_PNG: Record<string, string> = {
   reading: "reading.png", galxy: "galxy.png", pointing: "pointing.png",
@@ -22,7 +24,8 @@ const KIND_LABEL: Record<string, string> = {
 };
 const COMMENTED = new Set(["domain", "collection"]);
 
-interface Comment { kind: string; text: string; pose: string; }
+// Shared shape — defined in lib/types.ts so another consumer can reuse it.
+type Comment = MagosComment;
 
 export function MagosOverlay({ enabled, workspaceId }: { enabled: boolean; workspaceId: string }) {
   // One comment per node view — no rotation. A random one of the node's three is
@@ -51,15 +54,13 @@ export function MagosOverlay({ enabled, workspaceId }: { enabled: boolean; works
         const ctrl = new AbortController();
         fetchCtrl.current = ctrl;
         try {
-          const r = await fetch(
-            `/api/commentary/${encodeURIComponent(d.nodeType)}/${encodeURIComponent(d.id)}`,
-            { headers: { "X-Workspace-Id": workspaceId }, signal: ctrl.signal },
-          );
+          // Through the API client, not a bare fetch: it owns the workspace header,
+          // which the layout sets to this same noosphere id. Null means 404 — no
+          // commentary generated yet, which is the normal case, not an error.
+          const body = await api.getCommentary(d.nodeType, d.id, { signal: ctrl.signal });
           if (my !== reqId.current) return;
-          if (!r.ok) { setComment(null); return; }   // 404 / not generated yet → hide, no error
-          const body = await r.json();
-          if (my !== reqId.current) return;
-          const cs: Comment[] = body?.comments || [];
+          if (!body) { setComment(null); return; }
+          const cs: Comment[] = body.comments || [];
           if (!cs.length) { setComment(null); return; }
           setName(d.name || "");
           // One random comment for this node view; it stays until the next node.
