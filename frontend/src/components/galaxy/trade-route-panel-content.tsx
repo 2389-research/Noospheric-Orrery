@@ -2,11 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-
-const ENTITY_COLORS: Record<string, string> = {
-  Person: "#378ADD", Organization: "#7F77DD", Product: "#1D9E75",
-  Technology: "#BA7517", Event: "#D85A30", Concept: "#9c9a92", Location: "#5DCAA5",
-};
+import { ENTITY_COLORS } from "./entity-colors";
 
 export interface TradeRoutePanelData {
   source: string;

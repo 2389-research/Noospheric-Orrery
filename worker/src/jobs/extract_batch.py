@@ -5,7 +5,7 @@ import json
 import uuid
 from itertools import combinations
 from orrery_relay import Relay
-from ..db import get_connection
+from ..db import get_connection, mark_graph_dirty
 from ..config import get_settings
 
 async def run_extract_batch(job: dict, db_path: str) -> None:
@@ -134,4 +134,11 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
     except Exception as e:
         print(f"Normalization failed: {e}", flush=True)
     finally:
+        # New entities + co-occurrence edges (and any merges) changed the graph —
+        # flag the snapshot for rebuild. In the `finally` on purpose: a failed
+        # normalization still leaves the extracted entities behind, so the graph
+        # has changed either way and a clean-path-only flag would serve a stale
+        # snapshot until the next unrelated write.
+        mark_graph_dirty(norm_conn)
+        norm_conn.commit()
         norm_conn.close()

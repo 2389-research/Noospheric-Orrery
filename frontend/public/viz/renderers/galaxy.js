@@ -4,6 +4,7 @@
  */
 
 import { sin, cos, TAU, PI, hexRGB, rgba, colorAlpha, clamp, min, max } from '../core/utils.js';
+import { entityGlowSprite, ENTITY_BR0, repoCoreSprite, REPO_CORE0, SECTOR_BRIGHT, domainNebulaSprite, DOM_BR0, NEB_BAKE } from './sprites.js';
 
 /** Draw the background starfield + nebula clouds */
 export function drawBackground(ctx, W, H, tick) {
@@ -61,17 +62,59 @@ export function drawDomainNebula(ctx, dom, tick, camera, neighborhood) {
   const bR = dom.radius * clamp(dom.birthScale, 0, 1);
   const act = dom.activityGlow;
   const zoomBright = camera ? clamp((camera.zoom - 0.18) / 0.4, 0, 0.6) : 0;
-  // Dim non-neighborhood domains when something is selected
+  // Three-tier emphasis when a node is hovered/selected: the ACTIVE domain stays
+  // full, its CONNECTED neighbors sit at a reduced level (present but clearly
+  // secondary to the one you're on), and everything unrelated dims the most.
+  // (Previously neighbors matched the active domain at full brightness.)
   const hasNb = neighborhood && neighborhood.size > 0;
-  const dimFactor = hasNb && !neighborhood.has(dom.id) ? 0.3 : 1.0;
+  const isActiveDom = dom.id === dom._hoveredId || dom.id === dom._pinnedId;
+  const inNb = hasNb && neighborhood.has(dom.id);
+  const dimFactor = !hasNb ? 1.0 : isActiveDom ? 1.0 : inNb ? 0.55 : 0.3;
   const brightness = (1 + act * 2.2 + zoomBright) * dimFactor;
 
-  if (dom.simmering) {
-    _drawSimmering(ctx, dom, bR, r, g, b, tick, brightness);
-  } else if (dom.maturity > 0) {
-    _drawFormed(ctx, dom, bR, r, g, b, tick, brightness);
-  } else {
-    _drawUnformed(ctx, dom, bR, r, g, b, tick, brightness);
+  // The expensive cloud/halo/shadowBlur-star/spike stack is pre-baked per
+  // (color, state, maturity) into an offscreen sprite (see sprites.js) and
+  // drawImage'd here — scaled by radius, brightness applied via globalAlpha —
+  // instead of rebuilt every frame. This flattens the per-frame gradient/blur
+  // cost that used to peak (and drop FPS) in the mid-zoom band.
+  const state = dom.simmering ? 'simmering' : (dom.maturity > 0 ? 'formed' : 'unformed');
+  if (bR > 0) {
+    const sprite = domainNebulaSprite(dom.color, state, dom.maturity);
+    const half = (sprite.width * 0.5) * (bR / DOM_BR0);
+    const prevAlpha = ctx.globalAlpha;
+    // Sprite is baked at reference brightness NEB_BAKE; below that we scale down via
+    // globalAlpha. When brightness exceeds NEB_BAKE (activity pulse / zoom-in flare),
+    // a second additive drawImage pass re-brightens past the baked level so pulses
+    // still visibly flare instead of clamping flat.
+    const norm = brightness / NEB_BAKE;
+    ctx.globalAlpha = clamp(norm, 0, 1);
+    ctx.drawImage(sprite, dom.x - half, dom.y - half, half * 2, half * 2);
+    if (norm > 1) {
+      ctx.globalAlpha = clamp(norm - 1, 0, 1);
+      ctx.drawImage(sprite, dom.x - half, dom.y - half, half * 2, half * 2);
+    }
+    ctx.globalAlpha = prevAlpha;
+  }
+
+  // Simmering domains keep their animated amber cocoon + flickering core direct
+  // (only the static cloud layers are baked; there are just a handful of these).
+  if (dom.simmering && bR > 0) {
+    const pulse = 0.7 + 0.3 * sin(tick * 0.003);
+    const cocoon = ctx.createRadialGradient(dom.x, dom.y, 0, dom.x, dom.y, bR * 0.55);
+    cocoon.addColorStop(0, `rgba(255,160,60,${0.10 * pulse * brightness})`);
+    cocoon.addColorStop(0.5, `rgba(220,100,30,${0.05 * pulse * brightness})`);
+    cocoon.addColorStop(1, 'rgba(180,60,10,0)');
+    ctx.fillStyle = cocoon;
+    ctx.beginPath(); ctx.arc(dom.x, dom.y, bR * 0.55, 0, TAU); ctx.fill();
+
+    const flicker = 0.5 + 0.5 * sin(tick * 0.007 + sin(tick * 0.013));
+    const coreR = bR * 0.09 * (0.8 + 0.2 * flicker);
+    const core = ctx.createRadialGradient(dom.x, dom.y, 0, dom.x, dom.y, coreR);
+    core.addColorStop(0, `rgba(255,240,200,${0.65 * flicker})`);
+    core.addColorStop(0.5, `rgba(255,180,80,${0.40 * flicker})`);
+    core.addColorStop(1, 'rgba(255,120,40,0)');
+    ctx.fillStyle = core;
+    ctx.beginPath(); ctx.arc(dom.x, dom.y, coreR, 0, TAU); ctx.fill();
   }
 
   // Activity ring — visible when domain is hit by a pulse
@@ -84,10 +127,19 @@ export function drawDomainNebula(ctx, dom, tick, camera, neighborhood) {
     ctx.stroke();
   }
 
-  // Hover/selected ring — dashed outline so you know you're on one
-  const isActive = dom.id === dom._hoveredId || dom.id === dom._pinnedId;
-  if (isActive) {
-    ctx.strokeStyle = rgba(r, g, b, 0.35);
+  // Hover/selected ring — dashed outline so you know you're on one. A domain
+  // that's a NEIGHBOR of the active node (e.g. the domain a selected repo hangs
+  // off of) gets the same ring so it visibly lights up at the far end of the
+  // connection line — previously it only stayed bright while others dimmed, with
+  // no highlight of its own, because the ring was gated on the domain BEING the
+  // pinned node (a pinned repo's id never matches a domain id).
+  const isNeighbor = !isActiveDom && inNb;
+  if (isActiveDom || isNeighbor) {
+    // The dashed border ring dims with the SAME tier as the nebula (× dimFactor),
+    // so a connected domain's ring reads as secondary to the active domain's —
+    // active 1.0 → 0.35, connected 0.55 → ~0.19. (It was slightly brighter than
+    // the active ring before, which fought the 3-tier emphasis.)
+    ctx.strokeStyle = rgba(r, g, b, 0.35 * dimFactor);
     ctx.lineWidth = 1.5;
     ctx.setLineDash([6, 10]);
     ctx.beginPath();
@@ -108,82 +160,131 @@ export function drawDomainNebula(ctx, dom, tick, camera, neighborhood) {
   ctx.fillText(`${dom.docCount} docs`, dom.x, labelY + 30);
 }
 
-/** Compute neighborhood set for an active node */
+/** Find a node (entity | domain | repo) by its rendered id — O(1) via the maps.
+ *  entity ids are raw; domains are 'dom:'+path; collections are
+ *  'collection:'+collectionId (WorldState builds them with that prefix). */
+function _findNode(state, id) {
+  if (state.entities.has(id)) return state.entities.get(id);
+  if (id.startsWith('dom:')) return state.domains.get(id.slice(4)) || null;
+  if (id.startsWith('collection:')) return state.collections.get(id.slice(11)) || null;
+  return null;
+}
+
+/** Repo ids linked to `collectionId` — reads the adjacency index built at load. */
+function _connectedRepoIds(state, collectionId) {
+  return state.collectionNeighbors?.get(collectionId) || _EMPTY_SET;
+}
+const _EMPTY_SET = new Set();
+
+/** Compute the 1-hop neighborhood id set for the active (hovered/pinned) node:
+ *  entity → its domains + repos; domain → its entities + repos; repo → its
+ *  entities + connected repos + domain. Uses the reverse indexes so it's a
+ *  lookup, not a per-frame scan over all entities. */
 export function getNeighborhood(state) {
   const activeId = state.pinnedId ?? state.hoveredId;
   if (!activeId) return null;
+  const node = _findNode(state, activeId);
+  if (!node) return null;
 
   const ids = new Set([activeId]);
-
-  // Find active node
-  let activeNode = null;
-  for (const [, e] of state.entities) {
-    if (e.id === activeId) { activeNode = e; break; }
-  }
-  if (!activeNode) {
-    for (const [, d] of state.domains) {
-      if (d.id === activeId) { activeNode = d; break; }
+  if (node.kind === 'entity') {
+    for (const path of Object.keys(node.domainWeights || {})) {
+      const dom = state.domains.get(path); if (dom) ids.add(dom.id);
     }
-  }
-  if (!activeNode) return null;
-
-  if (activeNode.kind === 'entity') {
-    // Entity selected: neighborhood = its parent domains only
-    const dw = activeNode.domainWeights || {};
-    for (const path of Object.keys(dw)) {
-      const dom = state.domains.get(path);
-      if (dom) ids.add(dom.id);
+    for (const rid of Object.keys(node.collectionWeights || {})) {
+      const repo = state.collections.get(rid); if (repo) ids.add(repo.id);
     }
-  } else if (activeNode.kind === 'domain') {
-    // Add ALL entities in this domain — brightening shows the domain's reach
-    for (const [, e] of state.entities) {
-      if (e.domainWeights?.[activeNode.path]) ids.add(e.id);
+  } else if (node.kind === 'domain') {
+    for (const e of (state.domainEntities.get(node.path) || [])) ids.add(e.id);
+    for (const [, r] of state.collections) if (r.domainPath === node.path) ids.add(r.id);
+    // Connected domains via trade routes — but only the ones ABOVE the render
+    // threshold, i.e. the same strongest set drawTradeRoutes actually draws lines
+    // to (via _thinByWeight). Adding them lights them up (dashed ring, no dim) at
+    // the far end of each drawn route, the way a selected repo lights up its domain.
+    const routeLinks = [];
+    for (const route of state.tradeRoutes) {
+      if (route.source !== node.path && route.target !== node.path) continue;
+      const otherPath = route.source === node.path ? route.target : route.source;
+      const other = state.domains.get(otherPath);
+      if (other) routeLinks.push({ other, route });
     }
+    for (const { other } of _thinByWeight(routeLinks, l => l.route.weight)) ids.add(other.id);
+  } else if (node.kind === 'collection') {
+    for (const e of (state.collectionEntities.get(node.collectionId) || [])) ids.add(e.id);
+    for (const rid of _connectedRepoIds(state, node.collectionId)) {
+      const r = state.collections.get(rid); if (r) ids.add(r.id);
+    }
+    if (node.domainPath) { const d = state.domains.get(node.domainPath); if (d) ids.add(d.id); }
   }
-
   return ids;
 }
 
-/** Draw neighborhood highlight lines when entity/domain is selected. */
+/** Draw 1-hop neighborhood highlight lines from the hovered/selected node.
+ *  Bounded to a single node's neighbors — replaces the old always-on
+ *  entity→repo web (which stroked ~8k lines every frame at deep zoom). */
 export function drawNeighborhoodLines(ctx, state, camera) {
   const activeId = state.pinnedId ?? state.hoveredId;
   if (!activeId) return;
+  const node = _findNode(state, activeId);
+  if (!node) return;
 
-  let activeNode = null;
-  for (const [, e] of state.entities) {
-    if (e.id === activeId) { activeNode = e; break; }
-  }
-  if (!activeNode) {
-    for (const [, d] of state.domains) {
-      if (d.id === activeId) { activeNode = d; break; }
+  const line = (ax, ay, bx, by, color, w) => {
+    ctx.strokeStyle = color; ctx.lineWidth = w;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+  };
+
+  if (node.kind === 'entity') {
+    const anbrs = state.attractNeighbors;
+    if (anbrs && anbrs.size) {
+      // Attract: lines to the fetched co-occurring ENTITIES (2nd-order), which
+      // are what we framed — keeps the lines in-frame vs galaxy-wide domains.
+      for (const id of anbrs) {
+        if (id === node.id) continue;
+        const e = state.entities.get(id); if (!e) continue;
+        line(node.x, node.y, e.x, e.y, 'rgba(130,180,240,0.35)', 0.9);
+      }
+    } else {
+      // Hover/select: lines to its parent domains + its repos.
+      for (const path of Object.keys(node.domainWeights || {})) {
+        const dom = state.domains.get(path);
+        if (dom) line(node.x, node.y, dom.x, dom.y, 'rgba(100,160,220,0.3)', 0.8);
+      }
+      for (const rid of Object.keys(node.collectionWeights || {})) {
+        const repo = state.collections.get(rid);
+        if (repo) line(node.x, node.y, repo.x, repo.y, 'rgba(224,160,48,0.35)', 0.8);
+      }
     }
-  }
-  if (!activeNode) return;
-
-  if (activeNode.kind === 'entity') {
-    const dw = activeNode.domainWeights || {};
-
-    // Lines to parent domains only — entity↔entity belongs in star view
-    for (const [path] of Object.entries(dw)) {
-      const dom = state.domains.get(path);
-      if (!dom) continue;
-      ctx.strokeStyle = rgba(100, 160, 220, 0.3);
-      ctx.lineWidth = 0.8;
-      ctx.beginPath();
-      ctx.moveTo(activeNode.x, activeNode.y);
-      ctx.lineTo(dom.x, dom.y);
-      ctx.stroke();
+  } else if (node.kind === 'domain') {
+    // Its entities: draw a line to EVERY one — seeing a domain's full spread (how
+    // big its cluster is) is the point — but tier the opacity by strength so the
+    // core members stand out from the long tail. The top 20% by weight (the
+    // entity's share in THIS domain) render brighter; the rest stay light. All
+    // still light up, so the cluster's size/shape reads at a glance.
+    const ents = state.domainEntities.get(node.path) || [];
+    const wOf = e => (e.domainWeights && e.domainWeights[node.path]) || 0;
+    // 80th-percentile weight = the cutoff for the top 20% (sort primitives only;
+    // cheaper than sorting the entity objects, and ties at the cutoff read bright).
+    const sortedW = ents.map(wOf).sort((a, b) => b - a);
+    const cutoff = sortedW.length ? sortedW[Math.max(0, Math.ceil(sortedW.length * 0.2) - 1)] : 0;
+    for (const e of ents) {
+      const a = wOf(e) >= cutoff ? 0.22 : 0.06;    // top 20% brighter, tail lighter
+      line(node.x, node.y, e.x, e.y, rgba(100, 160, 220, a), 0.4);
     }
-  } else if (activeNode.kind === 'domain') {
-    // Lines to ALL entities in this domain — subtle since there are many
-    for (const [, e] of state.entities) {
-      if (!e.domainWeights?.[activeNode.path]) continue;
-      ctx.strokeStyle = rgba(100, 160, 220, 0.15);
-      ctx.lineWidth = 0.4;
-      ctx.beginPath();
-      ctx.moveTo(activeNode.x, activeNode.y);
-      ctx.lineTo(e.x, e.y);
-      ctx.stroke();
+    for (const [, r] of state.collections) {
+      if (r.domainPath === node.path) line(node.x, node.y, r.x, r.y, 'rgba(224,160,48,0.3)', 0.8);
+    }
+  } else if (node.kind === 'collection') {
+    // Its entities (gold, subtle) + connected repos + its domain.
+    for (const e of (state.collectionEntities.get(node.collectionId) || [])) {
+      line(node.x, node.y, e.x, e.y, 'rgba(224,160,48,0.18)', 0.5);
+    }
+    for (const rid of _connectedRepoIds(state, node.collectionId)) {
+      const r = state.collections.get(rid);
+      if (r) line(node.x, node.y, r.x, r.y, 'rgba(224,160,48,0.35)', 0.9);
+    }
+    if (node.domainPath) {
+      const d = state.domains.get(node.domainPath);
+      if (d) line(node.x, node.y, d.x, d.y, 'rgba(100,160,220,0.3)', 0.8);
     }
   }
 }
@@ -203,155 +304,82 @@ export function drawDomainSectorDetail(ctx, dom) {
   ctx.fillText(meta, dom.x, labelY + 30);
 }
 
-function _drawUnformed(ctx, dom, bR, r, g, b, tick, brightness) {
-  for (let i = 0; i < 4; i++) {
-    const angle = dom.rot * (1 - i * 0.15) + i * 1.4;
-    const lr = bR * (2.0 - i * 0.15);
-    const ox = cos(angle) * bR * 0.12, oy = sin(angle) * bR * 0.08;
-    const a = (0.022 - i * 0.004) * clamp(dom.birthScale, 0, 1) * brightness;
-    const gr = ctx.createRadialGradient(dom.x + ox, dom.y + oy, 0, dom.x + ox, dom.y + oy, lr);
-    gr.addColorStop(0, rgba(r, g, b, a * 2));
-    gr.addColorStop(0.4, rgba(r, g, b, a));
-    gr.addColorStop(1, rgba(r, g, b, 0));
-    ctx.fillStyle = gr;
-    ctx.beginPath();
-    ctx.arc(dom.x + ox, dom.y + oy, lr, 0, TAU);
-    ctx.fill();
+// Weight-threshold a dense edge web to cut its long tail. Sort strongest-first,
+// keep edges until they cover EDGE_COVERAGE of the total weight, but never more
+// than clamp(round(EDGE_CAP_FRAC · n), EDGE_CAP_MIN, EDGE_CAP_MAX) — so a bigger
+// web shows proportionally more, a small one shows few, and a runaway hub is
+// bounded. Returns the kept edge objects (unchanged). Applied to the two dense
+// domain↔domain / repo↔repo webs; the raw weights stay on state, only the
+// rendering is thinned.
+const EDGE_COVERAGE = 0.8;
+const EDGE_CAP_FRAC = 0.20, EDGE_CAP_MIN = 5, EDGE_CAP_MAX = 20;
+function _thinByWeight(edges, weightOf) {
+  const n = edges.length;
+  if (n <= EDGE_CAP_MIN) return edges.slice();
+  const cap = Math.max(EDGE_CAP_MIN, Math.min(EDGE_CAP_MAX, Math.round(EDGE_CAP_FRAC * n)));
+  const sorted = edges.slice().sort((a, b) => weightOf(b) - weightOf(a));
+  const total = sorted.reduce((s, e) => s + Math.max(0, weightOf(e)), 0);
+  const kept = [];
+  let cum = 0;
+  for (const e of sorted) {
+    kept.push(e);
+    cum += Math.max(0, weightOf(e));
+    if (kept.length >= cap) break;                       // hard ceiling
+    if (total > 0 && cum / total >= EDGE_COVERAGE) break;  // enough coverage
   }
-}
-
-function _drawSimmering(ctx, dom, bR, r, g, b, tick, brightness) {
-  // Cloud layers
-  for (let i = 0; i < 4; i++) {
-    const angle = dom.rot * (1 - i * 0.15) + i * 1.4;
-    const lr = bR * (1.8 - i * 0.10);
-    const ox = cos(angle) * bR * 0.10, oy = sin(angle) * bR * 0.08;
-    const a = (0.035 - i * 0.005) * clamp(dom.birthScale, 0, 1) * brightness;
-    const gr = ctx.createRadialGradient(dom.x + ox, dom.y + oy, 0, dom.x + ox, dom.y + oy, lr);
-    gr.addColorStop(0, rgba(r, g, b, a * 2));
-    gr.addColorStop(0.5, rgba(r, g, b, a));
-    gr.addColorStop(1, rgba(r, g, b, 0));
-    ctx.fillStyle = gr;
-    ctx.beginPath();
-    ctx.arc(dom.x + ox, dom.y + oy, lr, 0, TAU);
-    ctx.fill();
-  }
-
-  // Amber cocoon
-  const pulse = 0.7 + 0.3 * sin(tick * 0.003);
-  const cocoon = ctx.createRadialGradient(dom.x, dom.y, 0, dom.x, dom.y, bR * 0.55);
-  cocoon.addColorStop(0, `rgba(255,160,60,${0.10 * pulse * brightness})`);
-  cocoon.addColorStop(0.5, `rgba(220,100,30,${0.05 * pulse * brightness})`);
-  cocoon.addColorStop(1, 'rgba(180,60,10,0)');
-  ctx.fillStyle = cocoon;
-  ctx.beginPath();
-  ctx.arc(dom.x, dom.y, bR * 0.55, 0, TAU);
-  ctx.fill();
-
-  // Flickering core
-  const flicker = 0.5 + 0.5 * sin(tick * 0.007 + sin(tick * 0.013));
-  const coreR = bR * 0.09 * (0.8 + 0.2 * flicker);
-  const core = ctx.createRadialGradient(dom.x, dom.y, 0, dom.x, dom.y, coreR);
-  core.addColorStop(0, `rgba(255,240,200,${0.65 * flicker})`);
-  core.addColorStop(0.5, `rgba(255,180,80,${0.40 * flicker})`);
-  core.addColorStop(1, 'rgba(255,120,40,0)');
-  ctx.fillStyle = core;
-  ctx.beginPath();
-  ctx.arc(dom.x, dom.y, coreR, 0, TAU);
-  ctx.fill();
-}
-
-function _drawFormed(ctx, dom, bR, r, g, b, tick, brightness) {
-  const maturity = dom.maturity;
-  const bright = (0.5 + maturity * 0.5) * brightness;
-  const coreR = bR * (0.12 + maturity * 0.08);
-  const breathe = 0.94 + 0.06 * sin(tick * 0.001);
-
-  // Cloud with inner clearing
-  for (let i = 0; i < 4; i++) {
-    const angle = dom.rot * (1 - i * 0.15) + i * 1.4;
-    const lr = bR * (2.0 - i * 0.12);
-    const ox = cos(angle) * bR * 0.07, oy = sin(angle) * bR * 0.06;
-    const baseA = (0.045 + maturity * 0.02 - i * 0.005) * clamp(dom.birthScale, 0, 1) * brightness;
-    const gr = ctx.createRadialGradient(dom.x + ox, dom.y + oy, bR * 0.2, dom.x + ox, dom.y + oy, lr);
-    gr.addColorStop(0, rgba(r, g, b, 0));
-    gr.addColorStop(0.12, rgba(r, g, b, baseA * 1.8));
-    gr.addColorStop(0.5, rgba(r, g, b, baseA));
-    gr.addColorStop(1, rgba(r, g, b, 0));
-    ctx.fillStyle = gr;
-    ctx.beginPath();
-    ctx.arc(dom.x + ox, dom.y + oy, lr, 0, TAU);
-    ctx.fill();
-  }
-
-  // Wide halo
-  const wh = ctx.createRadialGradient(dom.x, dom.y, 0, dom.x, dom.y, bR * 0.8);
-  wh.addColorStop(0, rgba(r, g, b, 0.15 * bright));
-  wh.addColorStop(0.3, rgba(r, g, b, 0.06 * bright));
-  wh.addColorStop(1, rgba(r, g, b, 0));
-  ctx.fillStyle = wh;
-  ctx.beginPath();
-  ctx.arc(dom.x, dom.y, bR * 0.8, 0, TAU);
-  ctx.fill();
-
-  // Star point
-  ctx.shadowBlur = coreR * 2;
-  ctx.shadowColor = `rgba(255,255,255,${0.3 * bright})`;
-  const sg = ctx.createRadialGradient(dom.x, dom.y, 0, dom.x, dom.y, coreR);
-  sg.addColorStop(0, `rgba(255,255,255,${min(1.0, bright * breathe)})`);
-  sg.addColorStop(0.4, rgba(r, g, b, 0.8 * bright));
-  sg.addColorStop(1, rgba(r, g, b, 0));
-  ctx.fillStyle = sg;
-  ctx.beginPath();
-  ctx.arc(dom.x, dom.y, coreR, 0, TAU);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-
-  // Spikes
-  const spikeLen = bR * (0.5 + maturity * 1.5);
-  const spikeA = bright * 0.35 * breathe;
-  for (let s = 0; s < 4; s++) {
-    const a = s * PI / 2;
-    const x2 = dom.x + cos(a) * spikeLen, y2 = dom.y + sin(a) * spikeLen;
-    const spg = ctx.createLinearGradient(dom.x, dom.y, x2, y2);
-    spg.addColorStop(0, `rgba(255,255,255,${spikeA})`);
-    spg.addColorStop(0.3, rgba(r, g, b, spikeA * 0.5));
-    spg.addColorStop(1, rgba(r, g, b, 0));
-    ctx.strokeStyle = spg;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(dom.x, dom.y);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
-  }
+  return kept;
 }
 
 /** Draw trade routes + traveling pulses — only visible at sector zoom */
-export function drawTradeRoutes(ctx, state, camera) {
-  // Routes fade in starting at zoom 0.35, fully visible at 0.55
-  const routeAlpha = camera ? clamp((camera.zoom - 0.35) / 0.2, 0, 1) : 1;
-  if (routeAlpha <= 0 && !state.pulses.length) return;
+export function drawTradeRoutes(ctx, state, camera, W, H) {
+  // Static domain↔domain "trade routes" are drawn ONLY for the active (hovered or
+  // pinned) domain, and only its strongest routes (weight-thinned) — domains
+  // share entities so densely that even one hub domain has ~150 routes. Scoping
+  // to the selection + thinning the tail makes each remaining route legible.
+  // Traveling pulses (activity animations) below still play regardless.
+  const activeId = state.pinnedId ?? state.hoveredId;
+  const activeDomPath = (activeId && activeId.startsWith('dom:')) ? activeId.slice(4) : null;
 
-  const maxWeight = Math.max(1, ...state.tradeRoutes.map(r => r.weight));
+  // Trade routes are sector-level detail (per the JSDoc): fade them in across the
+  // galaxy→sector band so the zoomed-out overview stays clean — invisible below
+  // ~0.30, full by ~0.45. (Pulses below still animate at any zoom.)
+  const zoomFade = camera ? clamp((camera.zoom - 0.30) / 0.15, 0, 1) : 1;
 
-  // Draw route lines
-  for (const route of state.tradeRoutes) {
-    const srcDom = state.domains.get(route.source);
-    const tgtDom = state.domains.get(route.target);
-    if (!srcDom || !tgtDom) continue;
-
-    const normWeight = route.weight / maxWeight;
-    const a = (0.06 + normWeight * 0.12) * routeAlpha;
-    const lw = (0.6 + normWeight * 1.5) * routeAlpha;
-    if (a < 0.01) continue;
-
+  if (activeDomPath && zoomFade > 0) {
+    // Viewport bounds — skip routes whose whole segment is off one edge.
+    let vL = -Infinity, vR = Infinity, vT = -Infinity, vB = Infinity;
+    if (camera && W && H) {
+      const vhw = W / 2 / camera.zoom, vhh = H / 2 / camera.zoom;
+      vL = camera.x - vhw; vR = camera.x + vhw; vT = camera.y - vhh; vB = camera.y + vhh;
+    }
+    // Gather this domain's routes with on-map endpoints, then keep only the
+    // strongest (Pareto + cap). A hub domain's 150 routes collapse to ~16.
+    const mine = [];
+    for (const route of state.tradeRoutes) {
+      if (route.source !== activeDomPath && route.target !== activeDomPath) continue;
+      const srcDom = state.domains.get(route.source);
+      const tgtDom = state.domains.get(route.target);
+      if (srcDom && tgtDom) mine.push({ route, srcDom, tgtDom });
+    }
+    const kept = _thinByWeight(mine, m => m.route.weight);
+    // Normalize opacity within the KEPT set so the strongest shown route reads
+    // brightest (global max would leave a weakly-connected domain all-faint).
+    const localMax = Math.max(1, ...kept.map(m => m.route.weight));
     ctx.setLineDash([8, 16]);
-    ctx.strokeStyle = rgba(0, 200, 180, a);
-    ctx.lineWidth = lw;
-    ctx.beginPath();
-    ctx.moveTo(srcDom.x, srcDom.y);
-    ctx.lineTo(tgtDom.x, tgtDom.y);
-    ctx.stroke();
+    for (const { route, srcDom, tgtDom } of kept) {
+      if ((srcDom.x < vL && tgtDom.x < vL) || (srcDom.x > vR && tgtDom.x > vR) ||
+          (srcDom.y < vT && tgtDom.y < vT) || (srcDom.y > vB && tgtDom.y > vB)) continue;
+
+      const normWeight = route.weight / localMax;
+      const a = (0.18 + normWeight * 0.32) * zoomFade;
+      const lw = 0.8 + normWeight * 2.0;
+      ctx.strokeStyle = rgba(0, 200, 180, a);
+      ctx.lineWidth = lw;
+      ctx.beginPath();
+      ctx.moveTo(srcDom.x, srcDom.y);
+      ctx.lineTo(tgtDom.x, tgtDom.y);
+      ctx.stroke();
+    }
     ctx.setLineDash([]);
   }
 
@@ -430,10 +458,21 @@ export function drawTradeRoutes(ctx, state, camera) {
 /** Draw entity stars — LOD based on zoom, viewport culling, neighborhood highlight */
 export function drawEntityStars(ctx, state, camera, W, H, neighborhood) {
   const hasNeighborhood = neighborhood && neighborhood.size > 0;
+  // Attract mode marks the selected entity's fetched co-occurring entities so
+  // they render as visible stars (not dimmed) even when zoomed out — that's what
+  // makes a dispersed neighborhood legible.
+  const anbrs = state.attractNeighbors;
+  const hasAttract = anbrs && anbrs.size > 0;
   const galaxyZoom = camera.zoom < 0.35;
 
-  // At galaxy zoom with no selection, don't render entities
-  if (galaxyZoom && !hasNeighborhood) return;
+  // Entities belong to L2 (system+, zoom >= 0.75). Below that they fade rather
+  // than hard-cut, so a selection/attract neighborhood stays visible when zoomed
+  // out. With nothing selected, still skip them at galaxy zoom (perf + clutter).
+  if (camera.zoom < 0.75 && !hasNeighborhood && !hasAttract) return;
+
+  // Smooth zoom fade: full above 0.75, easing to a 0.35 floor at 0.35 so stars
+  // stay faintly visible when zoomed out instead of popping off.
+  const zoomFade = 0.35 + 0.65 * clamp((camera.zoom - 0.35) / 0.4, 0, 1);
 
   const sectorZoom = camera.zoom >= 0.5;
   const deepZoom = camera.zoom >= 0.75;
@@ -451,7 +490,7 @@ export function drawEntityStars(ctx, state, camera, W, H, neighborhood) {
   for (const [, e] of state.entities) {
     if (e.birthScale < 0.1) continue;
 
-    const inNeighborhood = hasNeighborhood && neighborhood.has(e.id);
+    const inNeighborhood = (hasNeighborhood && neighborhood.has(e.id)) || (hasAttract && anbrs.has(e.id));
 
     // LOD filter — but always render neighborhood members
     if (!inNeighborhood) {
@@ -461,57 +500,28 @@ export function drawEntityStars(ctx, state, camera, W, H, neighborhood) {
     }
 
     // Dim non-neighborhood when something is selected, brighten members
-    const dimFactor = hasNeighborhood && !inNeighborhood ? 0.15 : 1.0;
+    const dimFactor = (hasNeighborhood || hasAttract) && !inNeighborhood ? 0.15 : 1.0;
     const brightFactor = inNeighborhood ? 1.3 : 1.0;
 
     const act = e.activityGlow;
     const sizeBoost = (1 + zoomScale * 1.5) * brightFactor;
     const bR = (e.radius * 0.6 + act * 3) * e.birthScale * sizeBoost;
     const [r, g, b] = hexRGB(e.color);
-    const alpha = clamp((0.3 + act * 0.7 + zoomScale * 0.3) * dimFactor * brightFactor, 0, 1);
+    const alpha = clamp((0.3 + act * 0.7 + zoomScale * 0.3) * dimFactor * brightFactor * zoomFade, 0, 1);
 
     if (sectorZoom) {
-      // Multi-layer glow at sector zoom — 30% brighter than galaxy
-      const sectorBright = 1.3;
+      // Multi-layer glow at sector zoom — 30% brighter than galaxy. The three
+      // outer glow layers are pre-baked into a per-color sprite (see sprites.js);
+      // we drawImage it scaled by bR and modulated by alpha instead of rebuilding
+      // three gradients per entity per frame. Same look, a fraction of the cost.
+      const sectorBright = SECTOR_BRIGHT;
+      const sprite = entityGlowSprite(e.color);
+      const half = (sprite.width * 0.5) * (bR / ENTITY_BR0); // sprite spans 5×bR ⇒ haloR
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(sprite, e.x - half, e.y - half, half * 2, half * 2);
+      ctx.globalAlpha = 1;
 
-      // Layer 1: wide outer halo
-      const haloR = bR * 5;
-      const haloA = 0.08 * alpha * dimFactor * sectorBright;
-      const g1 = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, haloR);
-      g1.addColorStop(0, rgba(r, g, b, haloA));
-      g1.addColorStop(0.4, rgba(r, g, b, haloA * 0.3));
-      g1.addColorStop(1, rgba(r, g, b, 0));
-      ctx.fillStyle = g1;
-      ctx.beginPath();
-      ctx.arc(e.x, e.y, haloR, 0, TAU);
-      ctx.fill();
-
-      // Layer 2: inner glow — strong domain color
-      const innerR = bR * 2.5;
-      const innerA = 0.28 * alpha * sectorBright;
-      const g2 = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, innerR);
-      g2.addColorStop(0, rgba(r, g, b, innerA));
-      g2.addColorStop(0.5, rgba(r, g, b, innerA * 0.4));
-      g2.addColorStop(1, rgba(r, g, b, 0));
-      ctx.fillStyle = g2;
-      ctx.beginPath();
-      ctx.arc(e.x, e.y, innerR, 0, TAU);
-      ctx.fill();
-
-      // Layer 3: color bloom — domain color radiating from center
-      const bloomR = bR * 1.0;
-      const bloomA = alpha * sectorBright;
-      const bg = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, bloomR);
-      bg.addColorStop(0, rgba(r, g, b, 0.9 * bloomA));
-      bg.addColorStop(0.3, rgba(r, g, b, 0.5 * bloomA));
-      bg.addColorStop(0.7, rgba(r, g, b, 0.1 * bloomA));
-      bg.addColorStop(1, rgba(r, g, b, 0));
-      ctx.fillStyle = bg;
-      ctx.beginPath();
-      ctx.arc(e.x, e.y, bloomR, 0, TAU);
-      ctx.fill();
-
-      // Layer 4: tiny hot white core
+      // Layer 4: tiny hot white core — kept as a direct draw so it stays crisp.
       const coreR = bR * 0.25;
       ctx.fillStyle = `rgba(255,255,255,${min(1, 0.9 * alpha * sectorBright)})`;
       ctx.beginPath();
@@ -569,29 +579,169 @@ function _labelSlotsClear() {
   _labelGrid.clear();
 }
 
-/** Draw trade route weight labels — only on hover via state.hoveredId */
-export function drawRouteWeightLabels(ctx, state, camera) {
-  // Route weight labels only show when hovering a domain —
-  // shows weights on all routes connected to that domain
-  if (camera.zoom < 0.4) return;
-  if (!state.hoveredId) return;
+/**
+ * Repo layer — repo nodes binned inside their domain, repo↔repo edges,
+ * and repo→domain tethers. Visible at sector zoom and deeper (>= 0.35).
+ */
+export function drawCollections(ctx, state, camera, W, H) {
+  if (camera.zoom < 0.35) return;               // hidden at galaxy (L0)
+  if (!state.collections || state.collections.size === 0) return;
+  const fade = clamp((camera.zoom - 0.35) / 0.15, 0, 1);  // fade-in across the L0→L1 band
 
-  const hovDom = state.hoveredId.startsWith('dom:')
-    ? state.domains.get(state.hoveredId.replace('dom:', ''))
-    : null;
-  if (!hovDom) return;
+  // Viewport bounds (world space) for culling off-screen repo nodes below.
+  const vhw = W / 2 / camera.zoom, vhh = H / 2 / camera.zoom;
+  const vL = camera.x - vhw, vR = camera.x + vhw, vT = camera.y - vhh, vB = camera.y + vhh;
 
-  for (const route of state.tradeRoutes) {
-    if (route.source !== hovDom.path && route.target !== hovDom.path) continue;
-    const srcDom = state.domains.get(route.source);
-    const tgtDom = state.domains.get(route.target);
-    if (!srcDom || !tgtDom) continue;
+  const repoById = state.collections;
+  const get = id => repoById.get(id);
 
-    const mx = (srcDom.x + tgtDom.x) / 2;
-    const my = (srcDom.y + tgtDom.y) / 2;
-    ctx.fillStyle = 'rgba(0,200,180,0.45)';
-    ctx.font = "18px 'Courier New', monospace";
-    ctx.textAlign = 'center';
-    ctx.fillText(`${route.weight} shared`, mx, my - 10);
+  // repo→domain tethers (faint)
+  for (const [, repo] of state.collections) {
+    const dom = repo.domainPath ? state.domains.get(repo.domainPath) : null;
+    if (!dom) continue;
+    ctx.strokeStyle = rgba(224, 160, 48, 0.12 * fade);
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 6]);
+    ctx.beginPath();
+    ctx.moveTo(repo.x, repo.y);
+    ctx.lineTo(dom.x, dom.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // repo↔repo manifest co-usage (solid) + shared-entity (dashed)
+  const drawRepoEdge = (a, b, w, dashed) => {
+    const ra = get(a), rb = get(b);
+    if (!ra || !rb) return;
+    // Dim + soft, matching the domain trade-route aesthetic (faint, thin, long dash).
+    ctx.strokeStyle = rgba(224, 160, 48, (0.08 + Math.min(w / 20, 0.08)) * fade);
+    ctx.lineWidth = 0.8;
+    ctx.setLineDash(dashed ? [8, 16] : [10, 6]);
+    ctx.beginPath();
+    ctx.moveTo(ra.x, ra.y);
+    ctx.lineTo(rb.x, rb.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+  // Thin the repo↔repo web to its strongest edges (same Pareto + cap as the
+  // trade routes) so the always-on gold web reads as a backbone, not a full mesh.
+  const repoWeb = [
+    ...(state.collectionEdges || []).map(e => ({ e, dashed: false })),
+    ...(state.collectionRoutes || []).map(e => ({ e, dashed: true })),
+  ];
+  for (const { e, dashed } of _thinByWeight(repoWeb, x => x.e.weight || 1)) {
+    drawRepoEdge(e.source, e.target, e.weight || 1, dashed);
+  }
+
+  // repo nodes
+  const activeId = state.pinnedId ?? state.hoveredId;
+  for (const [, repo] of state.collections) {
+    const bs = repo.birthScale || 0;
+    if (bs < 0.05) continue;
+    const R = repo.radius * bs;
+    // Viewport cull — generous margin covers the outer cloud (~R*2.4), spikes,
+    // and the label (which can extend well past the radius) so nothing pops out
+    // at the edge.
+    const m = R * 3 + 140;
+    if (repo.x + m < vL || repo.x - m > vR || repo.y + m < vT || repo.y - m > vB) continue;
+    const [r, g, b] = hexRGB(repo.color);
+    const active = activeId === repo.id;
+    const a = fade * (active ? 1 : 0.9);
+
+    // Layered star effect — same construction as a domain nebula (offset
+    // clouds → wide halo → bright core → spikes), tinted gold so it still
+    // reads as a repo, so it matches the visual language of the graph.
+    const bright = (active ? 1.3 : 1.0) * a;
+    const breathe = 0.94 + 0.06 * sin(state.tick * 0.001 + repo.phase);
+    const rot = repo.phase;
+    const coreR = R * 0.4;
+
+    // offset cloud layers
+    for (let i = 0; i < 4; i++) {
+      const angle = rot * (1 - i * 0.15) + i * 1.4;
+      const lr = R * (2.4 - i * 0.15);
+      const ox = cos(angle) * R * 0.1, oy = sin(angle) * R * 0.08;
+      const baseA = (0.06 - i * 0.008) * bs * a;
+      const gr = ctx.createRadialGradient(repo.x + ox, repo.y + oy, R * 0.2, repo.x + ox, repo.y + oy, lr);
+      gr.addColorStop(0, rgba(r, g, b, 0));
+      gr.addColorStop(0.12, rgba(r, g, b, baseA * 1.8));
+      gr.addColorStop(0.5, rgba(r, g, b, baseA));
+      gr.addColorStop(1, rgba(r, g, b, 0));
+      ctx.fillStyle = gr;
+      ctx.beginPath(); ctx.arc(repo.x + ox, repo.y + oy, lr, 0, TAU); ctx.fill();
+    }
+
+    // wide halo
+    const wh = ctx.createRadialGradient(repo.x, repo.y, 0, repo.x, repo.y, R * 1.2);
+    wh.addColorStop(0, rgba(r, g, b, 0.2 * bright));
+    wh.addColorStop(0.3, rgba(r, g, b, 0.08 * bright));
+    wh.addColorStop(1, rgba(r, g, b, 0));
+    ctx.fillStyle = wh;
+    ctx.beginPath(); ctx.arc(repo.x, repo.y, R * 1.2, 0, TAU); ctx.fill();
+
+    // bright core (gold-white) — the shadowBlur glow is pre-baked into a sprite
+    // (see sprites.js) and drawImage'd, scaled by coreR and pulsed via globalAlpha,
+    // instead of running a Gaussian blur per repo per frame. Same gold glow, far
+    // cheaper. (The breathing spikes below stay direct — they animate in shape.)
+    const rcSprite = repoCoreSprite(repo.color);
+    const rcHalf = (rcSprite.width * 0.5) * (coreR / REPO_CORE0);
+    ctx.globalAlpha = min(1, bright * breathe);
+    ctx.drawImage(rcSprite, repo.x - rcHalf, repo.y - rcHalf, rcHalf * 2, rcHalf * 2);
+    ctx.globalAlpha = 1;
+
+    // spikes (light rays)
+    const spikeLen = R * 1.6, spikeA = bright * 0.4 * breathe;
+    for (let s = 0; s < 4; s++) {
+      const ang = s * PI / 2;
+      const x2 = repo.x + cos(ang) * spikeLen, y2 = repo.y + sin(ang) * spikeLen;
+      const spg = ctx.createLinearGradient(repo.x, repo.y, x2, y2);
+      spg.addColorStop(0, `rgba(255,240,210,${spikeA})`);
+      spg.addColorStop(0.3, rgba(r, g, b, spikeA * 0.5));
+      spg.addColorStop(1, rgba(r, g, b, 0));
+      ctx.strokeStyle = spg;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(repo.x, repo.y); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+
+    // dashed ring only when active/hovered (matches domain behavior)
+    if (active) {
+      ctx.strokeStyle = rgba(255, 220, 150, 0.4);
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 10]);
+      ctx.beginPath(); ctx.arc(repo.x, repo.y, R * 1.6, 0, TAU); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // label
+    if (camera.zoom >= 0.4) {
+      ctx.fillStyle = rgba(255, 235, 190, a);
+      ctx.font = `14px 'Courier New', monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText('▣ ' + repo.label, repo.x, repo.y - R * 1.8 - 8);
+      ctx.textAlign = 'start';
+    }
+  }
+}
+
+/**
+ * Entity→repo tethers — faint lines from each entity to the repo it belongs to.
+ * L2 only (zoom >= 0.75), so entities visibly hang off their repo, not the domain.
+ */
+export function drawEntityRepoTethers(ctx, state, camera) {
+  if (camera.zoom < 0.75) return;
+  const activeId = state.pinnedId ?? state.hoveredId;
+  for (const [, e] of state.entities) {
+    const rw = e.collectionWeights || {};
+    for (const [rid, w] of Object.entries(rw)) {
+      const repo = state.collections.get(rid);
+      if (!repo) continue;
+      const hot = activeId === e.id || activeId === repo.id;
+      ctx.strokeStyle = rgba(224, 160, 48, (hot ? 0.4 : 0.10) * Math.min(1, w + 0.3));
+      ctx.lineWidth = hot ? 1.4 : 0.6;
+      ctx.beginPath();
+      ctx.moveTo(e.x, e.y);
+      ctx.lineTo(repo.x, repo.y);
+      ctx.stroke();
+    }
   }
 }

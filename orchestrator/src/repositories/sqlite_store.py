@@ -57,6 +57,25 @@ class SQLiteDocumentRepository(DocumentRepository):
             thumbnail_path=row["thumbnail_path"] if "thumbnail_path" in row.keys() else None,
         )
 
+    def get_titles(self, ids):
+        """Map doc_id -> {title, content_type} for the given ids. Lets a caller
+        label a set of documents (e.g. an entity's source docs) without joining
+        against the paginated `list()` — which only returns the first page, so
+        callers were falling back to showing raw doc-id hashes. Batched to stay
+        under SQLite's bound-parameter limit (an entity can cite thousands)."""
+        out = {}
+        ids = list(dict.fromkeys(ids))  # de-dupe, preserve order
+        for i in range(0, len(ids), 900):
+            batch = ids[i:i + 900]
+            placeholders = ",".join("?" * len(batch))
+            rows = self._conn.execute(
+                f"SELECT id, title, content_type FROM documents WHERE id IN ({placeholders})",
+                batch,
+            ).fetchall()
+            for r in rows:
+                out[r["id"]] = {"title": r["title"], "content_type": r["content_type"] or "text"}
+        return out
+
     def list(self, limit=50, offset=0):
         rows = self._conn.execute(
             "SELECT d.*, GROUP_CONCAT(dd.domain_path) as domains FROM documents d "

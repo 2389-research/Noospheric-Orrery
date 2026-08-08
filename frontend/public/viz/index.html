@@ -24,24 +24,94 @@ canvas:active { cursor: grabbing; }
   position: fixed; bottom: 12px; right: 12px; z-index: 10;
   font-size: 9px; color: rgba(100,180,255,0.3);
 }
+#fps {
+  position: fixed; bottom: 28px; right: 12px; z-index: 30;
+  font-size: 11px; color: rgba(120,230,150,0.9); display: none;
+}
+#layer-selector {
+  position: fixed; top: 12px; left: 14px; z-index: 30;
+  display: flex; gap: 4px; font-size: 10px;
+}
+#layer-selector button {
+  background: rgba(6,13,34,0.9); color: rgba(140,200,255,0.7);
+  border: 1px solid rgba(100,180,255,0.2); border-radius: 4px;
+  padding: 5px 9px; cursor: pointer; font-family: 'Courier New', monospace;
+}
+#layer-selector button:hover { border-color: rgba(100,180,255,0.5); color: #eef0f8; }
+#layer-selector button.active { background: rgba(224,160,48,0.25); border-color: #e0a030; color: #ffe6b0; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="tooltip"></div>
+<div id="layer-selector">
+  <button data-layer="0">L0 · domains</button>
+  <button data-layer="1">L1 · + repos</button>
+  <button data-layer="2">L2 · + entities</button>
+  <button data-layer="auto" class="active">auto</button>
+</div>
 <div id="hud"></div>
 <div id="zoom-level"></div>
+<div id="fps"></div>
 
 <script type="module">
 import { Camera } from './core/camera.js';
 import { WorldState } from './core/state.js';
 import { getCurrentLevel, WORLD_W, WORLD_H } from './core/utils.js';
-import { drawBackground, drawClusterCloud, drawDomainNebula, drawDomainSectorDetail, drawTradeRoutes, drawEntityStars, drawRouteWeightLabels, drawNeighborhoodLines, getNeighborhood } from './renderers/galaxy.js';
+import { drawBackground, drawClusterCloud, drawDomainNebula, drawDomainSectorDetail, drawTradeRoutes, drawEntityStars, drawNeighborhoodLines, getNeighborhood, drawCollections } from './renderers/galaxy.js';
 
 const canvas = document.getElementById('c');
 const camera = new Camera();
 const state = new WorldState();
 let W, H, ctx;
+
+// Debug hook — lets tooling drive the camera / inspect state (e.g. Playwright
+// perf measurement). Read-only refs; no effect on normal use.
+window.__viz = { camera, state };
+
+// FPS meter — hidden by default. Toggle with the 'f' key, or start it visible
+// with ?fps=1 (handy for the kiosk display). Purely a measurement overlay.
+const fpsEl = document.getElementById('fps');
+let fpsOn = new URLSearchParams(location.search).get('fps') === '1';
+let _fpsCount = 0, _fpsSince = 0;
+fpsEl.style.display = fpsOn ? 'block' : 'none';
+window.addEventListener('keydown', e => {
+  if (e.repeat) return;   // ignore key auto-repeat — one toggle per press
+  if (e.key === 'f' || e.key === 'F') {
+    fpsOn = !fpsOn;
+    fpsEl.style.display = fpsOn ? 'block' : 'none';
+    _fpsSince = 0; _fpsCount = 0;   // reset the sampling window on re-enable
+  }
+});
+
+// Render resolution. Defaults to the device's devicePixelRatio (crisp). Override
+// with ?scale=<n> to render fewer pixels for smoother frames on a weak GPU driving
+// a big/high-res display — e.g. ?scale=0.66 on a 4K TV. Imperceptible from across a
+// room, but cuts per-frame fill cost proportionally.
+const _scaleParam = parseFloat(new URLSearchParams(location.search).get('scale'));
+// Clamp to a sane, usable range; fall back to the device pixel ratio for a
+// missing/invalid/out-of-range value so a bad ?scale can't break the canvas.
+const renderScale = Number.isFinite(_scaleParam) && _scaleParam > 0
+  ? Math.min(Math.max(_scaleParam, 0.25), 4)
+  : (window.devicePixelRatio || 1);
+
+// Size the canvas backing store — ONCE at startup and on window resize, never per
+// frame. Reassigning canvas.width/height reallocates and zeroes the entire pixel
+// buffer (~33 MB at 4K) and resets all context state; doing it every frame was the
+// main cause of stutter on large/high-res displays. The opaque drawBackground()
+// fill already clears each frame, so no per-frame realloc is needed.
+function resize() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = Math.round(W * renderScale);
+  canvas.height = Math.round(H * renderScale);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx = canvas.getContext('2d');
+  ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
 
 // Center camera on world
 camera.x = WORLD_W / 2;
@@ -51,9 +121,11 @@ camera.y = WORLD_H / 2;
 const API_URL = new URLSearchParams(location.search).get('api') || window.API_URL || 'http://localhost:8100';
 const AUTH_TOKEN = new URLSearchParams(location.search).get('token') || '';
 const WORKSPACE_ID = new URLSearchParams(location.search).get('workspace') || '';
-// Use ?layout=umap to test UMAP positions
-const layoutParam = new URLSearchParams(location.search).get('layout');
-const graphUrl = layoutParam === 'umap' ? `${API_URL}/graph/umap` : `${API_URL}/graph`;
+// (The old ?layout=umap toggle is gone. It A/B'd UMAP against circular positions
+// back when circular was the default; /graph is now UMAP itself —
+// layout.generator.name === 'umap-domain-anchors' — so the flag pointed at a
+// second, un-migrated v4 payload builder that this v5 client could not parse.)
+const graphUrl = `${API_URL}/graph`;
 const fetchHeaders = {};
 if (AUTH_TOKEN && AUTH_TOKEN !== 'noop') fetchHeaders['Authorization'] = `Bearer ${AUTH_TOKEN}`;
 if (WORKSPACE_ID) fetchHeaders['X-Workspace-Id'] = WORKSPACE_ID;
@@ -62,7 +134,9 @@ fetch(graphUrl, { headers: fetchHeaders }).then(r => r.json()).then(data => {
   console.log(`Loaded: ${state.domains.size} domains, ${state.entities.size} entities, ${state.clusters.length} clusters`);
   updateHUD();
 
-  // Fit camera to show all domains
+  // Fit camera to show all domains AND repos (repos are UMAP-placed by their
+  // own summary, so they can sit far from any domain — include them or they
+  // fall off-screen).
   if (state.domains.size > 0) {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const [, d] of state.domains) {
@@ -70,6 +144,12 @@ fetch(graphUrl, { headers: fetchHeaders }).then(r => r.json()).then(data => {
       maxX = Math.max(maxX, d.x + d.radius);
       minY = Math.min(minY, d.y - d.radius);
       maxY = Math.max(maxY, d.y + d.radius);
+    }
+    for (const [, r] of state.collections) {
+      minX = Math.min(minX, r.x - r.radius);
+      maxX = Math.max(maxX, r.x + r.radius);
+      minY = Math.min(minY, r.y - r.radius);
+      maxY = Math.max(maxY, r.y + r.radius);
     }
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
@@ -93,16 +173,17 @@ window.addEventListener('message', e => {
   }
   // Fly to a specific entity or domain (from search results click)
   if (e.data?.type === 'fly_to_entity') {
-    for (const [, ent] of state.entities) {
-      if (ent.id === e.data.entityId) {
-        camera.flyTo(ent.x, ent.y, 0.8, 1000);
-        state.pinnedId = ent.id;
-        window.parent.postMessage({
-          type: 'node_selected', nodeType: 'entity',
-          data: { id: ent.id, name: ent.label, entityType: ent.type, source_count: ent.sourceCount, domain_weights: ent.domainWeights }
-        }, '*');
-        break;
-      }
+    // Resolve through the full node index: clicking a search result must work for
+    // nodes outside the rendered top-N too (this used to scan the render set and
+    // silently do nothing).
+    const ent = state.hydrateEntity(e.data.entityId);
+    if (ent) {
+      camera.flyTo(ent.x, ent.y, 0.8, 1000);
+      state.pinnedId = ent.id;
+      window.parent.postMessage({
+        type: 'node_selected', nodeType: 'entity',
+        data: { id: ent.id, name: ent.label, entityType: ent.type, source_count: ent.sourceCount, domain_weights: ent.domainWeights }
+      }, '*');
     }
   }
   if (e.data?.type === 'fly_to_domain') {
@@ -134,6 +215,16 @@ window.addEventListener('message', e => {
     camera.flyTo(cx, cy, fitZoom, 1200);
     state.pinnedId = null;
   }
+  // FPS meter toggled from the shell's screensaver settings (also: ?fps=1 / the 'f' key).
+  if (e.data?.type === 'set_fps') {
+    fpsOn = !!e.data.on;
+    fpsEl.style.display = fpsOn ? 'block' : 'none';
+    _fpsSince = 0; _fpsCount = 0;
+  }
+  // Idle attract mode — the shell (orrery/page.tsx) drives the beat.
+  if (e.data?.type === 'attract_start') attractActive = true;
+  else if (e.data?.type === 'attract_hop') attractHop();
+  else if (e.data?.type === 'attract_stop') { attractActive = false; camera.flying = false; attractAbort(); if (coFetchCtrl) coFetchCtrl.abort(); }
 });
 
 // Input handling
@@ -141,8 +232,8 @@ canvas.addEventListener('mousedown', e => camera.handleMouseDown(e));
 canvas.addEventListener('mousemove', e => {
   if (camera.handleMouseDrag(e)) return;
 
-  W = canvas.width / devicePixelRatio;
-  H = canvas.height / devicePixelRatio;
+  W = canvas.width / renderScale;
+  H = canvas.height / renderScale;
   const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
 
   // Hit test
@@ -161,6 +252,8 @@ canvas.addEventListener('mousemove', e => {
       tt.innerHTML = `<div class="tt-name">${hit.label}</div><div class="tt-sub">${hit.type} · ${hit.sourceCount} docs</div>`;
     } else if (hit.kind === 'cluster') {
       tt.innerHTML = `<div class="tt-name">${hit.domainPaths.length} domains</div><div class="tt-sub">${hit.domainPaths.map(p => p.split('/').pop()).join(', ')}</div>`;
+    } else if (hit.kind === 'collection') {
+      tt.innerHTML = `<div class="tt-name">▣ ${hit.label}</div><div class="tt-sub">repo · ${hit.docCount} docs · ${hit.domainPath ? hit.domainPath.split('/').pop() : 'unbinned'}</div>`;
     }
   } else {
     tt.style.display = 'none';
@@ -172,8 +265,8 @@ canvas.addEventListener('mouseup', e => {
   camera.handleMouseUp();
 
   if (!wasDrag) {
-    W = canvas.width / devicePixelRatio;
-    H = canvas.height / devicePixelRatio;
+    W = canvas.width / renderScale;
+    H = canvas.height / renderScale;
     const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
     const hit = hitTest(w.x, w.y);
 
@@ -193,6 +286,8 @@ canvas.addEventListener('mouseup', e => {
           payload.data = { id: pinnedNode.id, name: pinnedNode.label, entityType: pinnedNode.type, source_count: pinnedNode.sourceCount, domain_weights: pinnedNode.domainWeights };
         } else if (pinnedNode.kind === 'domain') {
           payload.data = { path: pinnedNode.path, name: pinnedNode.label, document_count: pinnedNode.docCount };
+        } else if (pinnedNode.kind === 'collection') {
+          payload.data = { id: pinnedNode.collectionId, name: pinnedNode.label, document_count: pinnedNode.docCount, domain: pinnedNode.domainPath };
         }
         window.parent.postMessage(payload, '*');
       } else {
@@ -207,13 +302,17 @@ canvas.addEventListener('mouseup', e => {
 
 // Double-click: domain → fly to it, entity → enter star view
 canvas.addEventListener('dblclick', e => {
-  W = canvas.width / devicePixelRatio;
-  H = canvas.height / devicePixelRatio;
+  W = canvas.width / renderScale;
+  H = canvas.height / renderScale;
   const w = camera.screenToWorld(e.clientX, e.clientY, W, H);
   const hit = hitTest(w.x, w.y);
   if (hit && hit.kind === 'entity') {
     window.parent.postMessage({
       type: 'enter_star', entityId: hit.id, entityName: hit.label,
+    }, '*');
+  } else if (hit && hit.kind === 'collection') {
+    window.parent.postMessage({
+      type: 'enter_collection', collectionId: hit.collectionId, repoName: hit.label,
     }, '*');
   } else if (hit && hit.kind === 'domain') {
     camera.flyTo(hit.x, hit.y, 0.6, 800);
@@ -225,29 +324,302 @@ canvas.addEventListener('dblclick', e => {
 
 canvas.addEventListener('wheel', e => camera.handleWheel(e), { passive: false });
 
+// Layer selector — forces the camera into a tier's zoom range so the
+// zoom-gated rendering (domains / +repos / +entities) is deterministic for testing.
+// L0=galaxy(<0.35), L1=sector(0.35-0.75), L2=system(>=0.75). "auto" = free zoom.
+const LAYER_ZOOM = { '0': 0.30, '1': 0.55, '2': 1.00 };
+// Per-layer framing: L0 centers on domains, L1 on domains+repos, L2 on the
+// repo+entity clusters (where the entities now live — they're UMAP-placed on
+// their repo, which can sit far from the domain).
+function layerCentroid(layer) {
+  const pts = [];
+  const add = m => { for (const [, n] of m) pts.push(n); };
+  if (layer === '0') add(state.domains);
+  else if (layer === '1') { add(state.domains); add(state.collections); }
+  else { add(state.collections); add(state.entities); }
+  if (!pts.length) return { x: camera.x, y: camera.y };
+  let x = 0, y = 0;
+  for (const p of pts) { x += p.x; y += p.y; }
+  return { x: x / pts.length, y: y / pts.length };
+}
+document.querySelectorAll('#layer-selector button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#layer-selector button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const layer = btn.dataset.layer;
+    if (layer === 'auto') return;                 // release control to free zoom
+    const c = layerCentroid(layer);
+    camera.flyTo(c.x, c.y, LAYER_ZOOM[layer], 600);
+  });
+});
+
+// ── ATTRACT MODE (idle "screensaver") ──────────────────────────────────────
+// The shell owns the 5-min idle timer + the beat; this viz flies the camera
+// (camera.flyTo already eases) and selects nodes, reusing the click payload.
+// ~20% of hops dive into an entity's star system via the existing enter_star.
+let attractActive = false;
+const ATTRACT_STAR_RATIO = 0.2;
+let _lastActivityPing = 0;
+let coFetchCtrl = null;   // aborts the in-flight co-occurrence fetch on stop / next hop
+
+// Real user input → cancel any attract fly and ping the shell (resets its idle
+// timer). Throttled; background/API work never calls this.
+function notifyActivity() {
+  camera.flying = false;
+  const now = performance.now();
+  if (now - _lastActivityPing < 400) return;
+  _lastActivityPing = now;
+  try { window.parent.postMessage({ type: 'user_activity' }, '*'); } catch (_) {}
+}
+canvas.addEventListener('mousedown', notifyActivity);
+canvas.addEventListener('mousemove', notifyActivity);
+canvas.addEventListener('wheel', notifyActivity, { passive: true });
+window.addEventListener('keydown', notifyActivity);
+window.addEventListener('touchstart', notifyActivity, { passive: true });
+
+// Programmatic selection — same payload a real click emits.
+function emitSelect(node) {
+  state.pinnedId = node.id;
+  const payload = { type: 'node_selected', nodeType: node.kind };
+  if (node.kind === 'entity') payload.data = { id: node.id, name: node.label, entityType: node.type, source_count: node.sourceCount, domain_weights: node.domainWeights };
+  else if (node.kind === 'domain') payload.data = { path: node.path, name: node.label, document_count: node.docCount };
+  else if (node.kind === 'collection') payload.data = { id: node.collectionId, name: node.label, document_count: node.docCount, domain: node.domainPath };
+  try { window.parent.postMessage(payload, '*'); } catch (_) {}
+}
+
+const pickRandom = arr => (arr && arr.length) ? arr[(Math.random() * arr.length) | 0] : null;
+const entityPool = () => [...state.entities.values()].filter(e => (e.sourceCount || 0) >= 2);
+
+// Tell the shell which node attract mode just settled on, so it can show the
+// Magos Lex commentary overlay. node_id differs by kind (entity=id, repo=collectionId,
+// domain=path) — matches the /commentary/{type}/{id} contract. Distinct message
+// type from node_selected so it never fires on a real click.
+function emitAttractFocus(kind, node) {
+  const id = kind === 'collection' ? node.collectionId : kind === 'domain' ? node.path : node.id;
+  try { window.parent.postMessage({ type: 'attract_focus', nodeType: kind, id, name: node.label }, '*'); } catch (_) {}
+}
+
+// Balance the roam across kinds — entities outnumber domains/repos ~12:1, so a
+// flat random pool would only ever show entities. Pick a KIND first (weighted),
+// then a node within it, so big domain nebulae and repos get airtime too.
+function pickAttractNode() {
+  const r = Math.random();
+  let pool = null;
+  if (r < 0.35) pool = [...state.domains.values()];
+  else if (r < 0.55) pool = [...state.collections.values()];
+  else pool = entityPool();
+  if (!pool || !pool.length) pool = [...state.domains.values(), ...entityPool()];
+  return pickRandom(pool);
+}
+
+// Domain/repo framing: they have a meaningful footprint (nebula size / repo
+// radius), so size the zoom so the node fills a consistent fraction of the view.
+// Setting pinnedId turns the highlight on during the fly-in.
+function framedView(node) {
+  state.pinnedId = node.id;
+  state.attractNeighbors = null;   // clear any entity co-occurrence highlight
+  const minEdge = Math.min(window.innerWidth, window.innerHeight);
+  const r = node.radius || 40;
+  const fill = node.kind === 'domain' ? 0.6 : 0.4;
+  let zoom = (fill * minEdge) / (2 * r);
+  zoom = Math.max(node.kind === 'collection' ? 0.55 : 0.28, Math.min(zoom, 2.5));
+  return { cx: node.x, cy: node.y, zoom };
+}
+
+// Entity framing — GRAPH-connected, not spatial. Entity dots are uniform, and
+// the client has no entity-edges loaded, so we fetch the entity's real
+// co-occurring entities and size the zoom to how spatially spread out THOSE are.
+// A hub whose co-occurrences sprawl across the galaxy zooms out to show that
+// reach; a leaf with a tight local cluster zooms in. 80th percentile of the
+// connected-neighbor distances so a couple of far ones don't force a big
+// zoom-out ("most of it"). Falls back to a fixed closeup if the fetch fails or
+// too few connections are on-map.
+async function entityFrame(ent) {
+  state.pinnedId = ent.id;   // highlight now (during the fly-in)
+  let co = [];
+  // Abort any earlier in-flight fetch (superseded by this hop) and cancel this
+  // one if attract stops — so a stopped/stale request doesn't finish in the bg.
+  if (coFetchCtrl) coFetchCtrl.abort();
+  coFetchCtrl = new AbortController();
+  try {
+    const resp = await fetch(`${API_URL}/entities/${encodeURIComponent(ent.id)}/cooccurrences?limit=20`, { headers: fetchHeaders, signal: coFetchCtrl.signal });
+    if (resp.ok) co = await resp.json();
+  } catch (_) {}   // AbortError (or network) → fall through with co = []
+  // Mark the real co-occurring entities so the renderer draws them as visible
+  // stars (not dimmed) — that's what makes a dispersed neighborhood legible when
+  // we zoom out to fit it.
+  state.attractNeighbors = new Set([ent.id, ...(co || []).map(c => c.id)]);
+  // Build the box around the entity + its on-map co-occurring entities, then
+  // trim the farthest 20% (outliers) so a couple of distant connections don't
+  // dominate — "most of it", per the ask.
+  const pts = [ent];
+  for (const c of (co || [])) {
+    const e = state.entities.get(c.id);
+    if (e && e !== ent) pts.push(e);
+  }
+  if (pts.length < 4) return { cx: ent.x, cy: ent.y, zoom: 1.8 };
+  let mx = 0, my = 0;
+  for (const p of pts) { mx += p.x; my += p.y; }
+  mx /= pts.length; my /= pts.length;
+  const kept = pts
+    .map(p => ({ p, d: Math.hypot(p.x - mx, p.y - my) }))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, Math.max(3, Math.floor(pts.length * 0.8)))
+    .map(o => o.p);
+  // Fit the entity + its co-occurring cluster TOGETHER so both always stay on
+  // screen, then bias the center toward the cluster — but only within the
+  // leftover on-screen margin, so nothing ever gets cropped. Net effect: the
+  // cluster sits prominently and the entity leans off toward an edge (no wasted
+  // dead-center space), without the risk of shoving either off-frame.
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of kept) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+  const bcx = (minX + maxX) / 2, bcy = (minY + maxY) / 2;
+  const spanX = (maxX - minX) + 250, spanY = (maxY - minY) + 250;
+  let zoom = Math.min(window.innerWidth / spanX, window.innerHeight / spanY) * 0.72;
+  zoom = Math.max(0.5, Math.min(zoom, 3));
+  // Centroid of the co-occurring entities (the cluster), excluding the selected one.
+  let ax = 0, ay = 0, n = 0;
+  for (const p of kept) if (p !== ent) { ax += p.x; ay += p.y; n++; }
+  ax = n ? ax / n : bcx; ay = n ? ay / n : bcy;
+  const slackX = Math.max(0, (window.innerWidth / zoom) / 2 - (maxX - minX) / 2 - 40);
+  const slackY = Math.max(0, (window.innerHeight / zoom) / 2 - (maxY - minY) / 2 - 40);
+  const cx = bcx + Math.max(-slackX, Math.min(slackX, ax - bcx));
+  const cy = bcy + Math.max(-slackY, Math.min(slackY, ay - bcy));
+  return { cx, cy, zoom };
+}
+
+// Attract mode became inactive mid-fetch — drop the highlight that entityFrame
+// eagerly set so it doesn't linger after the user takes over.
+function attractAbort() { state.pinnedId = null; state.attractNeighbors = null; }
+
+// Glide to the framed view, then run cb after it settles — but only if attract
+// is still active (the user may have taken over during the glide).
+function flyThen(v, zoom, duration, delay, cb) {
+  camera.flyTo(v.cx, v.cy, zoom, duration);
+  setTimeout(() => { if (attractActive) cb(); }, delay);
+}
+
+// One attract step (the shell pulses this on its beat while in the galaxy view).
+async function attractHop() {
+  if (!attractActive) return;
+  if (Math.random() < ATTRACT_STAR_RATIO) {
+    const ent = pickRandom(entityPool());
+    if (ent) {
+      const v = await entityFrame(ent);
+      if (!attractActive) return attractAbort();
+      emitAttractFocus('entity', ent);
+      flyThen(v, Math.max(v.zoom, 1.0), 1600, 1700, () => {
+        try { window.parent.postMessage({ type: 'enter_star', entityId: ent.id, entityName: ent.label }, '*'); } catch (_) {}
+      });
+      return;
+    }
+  }
+  const n = pickAttractNode();
+  if (!n) return;
+  const v = (n.kind === 'entity') ? await entityFrame(n) : framedView(n);
+  if (!attractActive) return attractAbort();
+  emitAttractFocus(n.kind, n);
+  flyThen(v, v.zoom, 1500, 1500, () => emitSelect(n));
+}
+
+// The name card (label text) is far bigger and easier to click than the node
+// glyph itself — especially small repo cores. These helpers add the rendered
+// label's TEXT bounding box as a hit target so clicking a domain's or repo's
+// name selects it. Courier New is monospace (advance ≈ 0.6em), so text width is
+// estimated from character count; the box geometry mirrors the label placement
+// in galaxy.js (drawDomainNebula / drawCollections).
+//
+// Crucially the box is sized to the TEXT ONLY — NOT floored to the node radius.
+// The glyph is already its own (larger) hit region, and flooring the label width
+// to the radius would balloon a domain's card to the whole nebula and swallow
+// every entity sitting under it (~600 of 3000 in the live graph).
+function _labelHalfWidth(text, fontSize) {
+  return (text.length * fontSize * 0.6) / 2 + 10;
+}
+function _bScale(n) {
+  return n.birthScale != null ? Math.max(0, Math.min(1, n.birthScale)) : 1;
+}
+// Domain name card: name + "N docs" lines, centered under the nebula.
+function _inDomainLabel(dom, wx, wy) {
+  const bR = dom.radius * _bScale(dom);
+  const fs = dom.isSubdomain ? 28 : 36;
+  const name = dom.label.split('/').pop();
+  const hw = _labelHalfWidth(name, fs);
+  const baseY = dom.y + bR * 1.1 + 12;   // name baseline (see drawDomainNebula)
+  return wx >= dom.x - hw && wx <= dom.x + hw && wy >= baseY - fs && wy <= baseY + 40;
+}
+// Repo name card sits ABOVE the repo core (see drawCollections).
+function _inRepoLabel(repo, wx, wy) {
+  const R = repo.radius * _bScale(repo);
+  const hw = _labelHalfWidth('▣ ' + repo.label, 14);
+  const baseY = repo.y - R * 1.8 - 8;
+  return wx >= repo.x - hw && wx <= repo.x + hw && wy >= baseY - 18 && wy <= baseY + 6;
+}
+
+// Pick what the pointer is over. Entities are dense and pile up on/around the
+// bigger nodes, so a naive "nearest anything" (or entity-first) order makes the
+// node underneath almost unclickable. We resolve overlaps by the PRECEDENCE the
+// user actually intends:
+//   1. a repo (its core glyph OR name card)
+//   2. an individual entity (nearest wins — the field is dense)
+//   3. a domain (its diffuse body OR name card)
+//   4. a cluster (galaxy view only)
+// Only REPOS jump above entities: they're compact and get piled on, so they'd be
+// unclickable otherwise — that's the overlap the user hits. DOMAINS are big
+// diffuse nebulae that entities live *inside*, and their body is already an easy
+// target, so they stay BELOW entities (as before); the name card just extends
+// that same below-entity target onto the label text. Flooring the domain body
+// above entities would swallow the ~400 dots sitting under long name labels.
+// First tier with a hit returns; within a tier the nearest candidate wins.
 function hitTest(wx, wy) {
   const level = camera.level;
   const sectorZoom = camera.zoom >= 0.5;
   const deepZoom = camera.zoom >= 0.75;
   const minSource = deepZoom ? 1 : sectorZoom ? 3 : 5;
 
-  // Entities (only at sector zoom+, only visible ones)
-  if (camera.zoom >= 0.35) {
-    for (const [, e] of state.entities) {
-      if (e.sourceCount < minSource && e.activityGlow < 0.1) continue;
-      const dist = Math.hypot(wx - e.x, wy - e.y);
-      const hitR = e.radius * 1.2 + 8;
-      if (dist < hitR) return e;
+  // Nearest candidate within a tier, given a (node → hit-distance | null) test.
+  const nearest = (map, test) => {
+    let best = null, bestD = Infinity;
+    for (const [, n] of map) {
+      const d = test(n);
+      if (d != null && d < bestD) { bestD = d; best = n; }
     }
+    return best;
+  };
+
+  // Tier 1 — repos (core glyph OR name card). Visible at sector zoom+.
+  // Wins over the entities that cluster on top of the little gold core.
+  if (camera.zoom >= 0.35) {
+    const repo = nearest(state.collections, r => {
+      const d = Math.hypot(wx - r.x, wy - r.y);
+      return (d < r.radius * 1.2 + 6 || _inRepoLabel(r, wx, wy)) ? d : null;
+    });
+    if (repo) return repo;
   }
 
-  // Domains
-  for (const [, d] of state.domains) {
-    const dist = Math.hypot(wx - d.x, wy - d.y);
-    if (dist < d.radius * 1.5) return d;
+  // Tier 2 — entities (system zoom+ = L2, visible ones). Nearest to the pointer
+  // wins so a dense field is still individually clickable.
+  if (camera.zoom >= 0.75) {
+    const ent = nearest(state.entities, e => {
+      if (e.sourceCount < minSource && e.activityGlow < 0.1) return null;
+      const dist = Math.hypot(wx - e.x, wy - e.y);
+      return dist < e.radius * 1.2 + 8 ? dist : null;
+    });
+    if (ent) return ent;
   }
 
-  // Clusters (galaxy view only)
+  // Tier 3 — a domain: its diffuse body OR its name card. Both below entities,
+  // so dots inside the nebula / under the label stay clickable; clicking empty
+  // nebula space or the name text still selects the domain.
+  {
+    const dom = nearest(state.domains, d => {
+      const dist = Math.hypot(wx - d.x, wy - d.y);
+      return (dist < d.radius * 1.5 || _inDomainLabel(d, wx, wy)) ? dist : null;
+    });
+    if (dom) return dom;
+  }
+
+  // Tier 4 — clusters (galaxy view only)
   if (level === 'galaxy') {
     for (const c of state.clusters) {
       const dist = Math.hypot(wx - c.centroidX, wy - c.centroidY);
@@ -264,15 +636,19 @@ function updateHUD() {
 }
 
 // Main render loop
-function frame() {
-  W = window.innerWidth;
-  H = window.innerHeight;
-  canvas.width = W * devicePixelRatio;
-  canvas.height = H * devicePixelRatio;
-  canvas.style.width = W + 'px';
-  canvas.style.height = H + 'px';
-  ctx = canvas.getContext('2d');
-  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+function frame(now) {
+  // Canvas sizing/transform live in resize() — see the note there. The opaque
+  // drawBackground() fill below clears the previous frame.
+
+  // FPS meter (only when toggled on) — rolling count over ~500ms windows.
+  if (fpsOn) {
+    if (!_fpsSince) _fpsSince = now;
+    _fpsCount++;
+    if (now - _fpsSince >= 500) {
+      fpsEl.textContent = Math.round((_fpsCount * 1000) / (now - _fpsSince)) + ' fps';
+      _fpsCount = 0; _fpsSince = now;
+    }
+  }
 
   // Update
   camera.update();
@@ -294,11 +670,19 @@ function frame() {
   }
 
   // Trade routes (faint at galaxy, stronger at sector)
-  drawTradeRoutes(ctx, state, camera);
+  drawTradeRoutes(ctx, state, camera, W, H);
 
-  // Domain nebulae — brighter at sector zoom, dim when not in neighborhood
+  // Domain nebulae — brighter at sector zoom, dim when not in neighborhood.
+  // Viewport-cull off-screen domains: the big win when zoomed in — otherwise all
+  // ~145 render every frame (nebula + shadowBlur + labels + sector detail) even
+  // when far off-screen. Margin = 2× radius covers the nebula glow + the label.
+  const _vhw = W / 2 / camera.zoom, _vhh = H / 2 / camera.zoom;
+  const _vL = camera.x - _vhw, _vR = camera.x + _vhw;
+  const _vT = camera.y - _vhh, _vB = camera.y + _vhh;
   const activeId = state.pinnedId ?? state.hoveredId;
   for (const [, dom] of state.domains) {
+    const m = dom.radius * 2 + 220;   // + label allowance (labels extend below the radius)
+    if (dom.x + m < _vL || dom.x - m > _vR || dom.y + m < _vT || dom.y - m > _vB) continue;
     dom._hoveredId = state.hoveredId;
     dom._pinnedId = state.pinnedId;
     drawDomainNebula(ctx, dom, state.tick, camera, neighborhood);
@@ -307,11 +691,19 @@ function frame() {
     }
   }
 
+  // (Entity→repo tethers are no longer an always-on web — that was ~8k
+  // strokes/frame at deep zoom. Connections now light up per node on
+  // hover/select via drawNeighborhoodLines below.)
+
+  // Repo layer — visible at sector+ (L1/L2)
+  drawCollections(ctx, state, camera, W, H);
+
   // Neighborhood highlight lines (when entity/domain selected)
   drawNeighborhoodLines(ctx, state, camera);
 
-  // Route weight labels (sector zoom)
-  drawRouteWeightLabels(ctx, state, camera);
+  // (The per-route "N shared" weight labels were removed — with this many
+  // domain↔domain routes they were unreadable clutter. The route weights are
+  // still tracked on state.tradeRoutes; we just don't render the numbers.)
 
   // Entity stars — neighborhood members always visible, non-members dim
   drawEntityStars(ctx, state, camera, W, H, neighborhood);

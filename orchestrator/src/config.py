@@ -25,6 +25,13 @@ class Settings:
     db_path: str = "/data/orrery.db"
     documents_dir: str = "/data/documents"
     specs_dir: str = "/data/specs"
+    # Graph payload: the render cap is a *rendering* bound, not a data bound —
+    # `meta.counts` always reports the true totals so a capped payload is visible
+    # as capped rather than silently truncated.
+    graph_render_max_nodes: int = 3000
+    # Seconds between background sweeps that rebuild dirty graph snapshots.
+    # 0 disables the loop (the inline build in /graph still covers correctness).
+    graph_snapshot_rebuild_interval: int = 20
 
 
 def _xdg_data_dir() -> str:

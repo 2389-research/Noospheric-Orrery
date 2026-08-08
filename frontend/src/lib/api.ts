@@ -92,13 +92,20 @@ export const api = {
       id: string;
       canonical_name: string;
       type: string;
-      sources: { document_id: string; chunk_id: string; extraction_pass: string; spec_version: number | null; job_id: string | null }[];
+      sources: { document_id: string; chunk_id: string; extraction_pass: string; spec_version: number | null; job_id: string | null; title: string | null; content_type: string }[];
       merge_history: string[];
     }>(`/entities/${entityId}`),
   getEntityCooccurrences: (entityId: string) =>
     fetchAPI<{ id: string; canonical_name: string; type: string; weight: number }[]>(
       `/entities/${entityId}/cooccurrences`
     ),
+  getCollectionSummary: (collectionId: string) =>
+    fetchAPI<{
+      collection: { id: string; name: string; kind: string; domain: string | null;
+                    document_count: number };
+      summary: string;
+      top_entities: { id: string; name: string; type: string; count: number }[];
+    }>(`/collections/${collectionId}/summary`),
   getDocumentReader: (docId: string) =>
     fetchAPI<{
       document: { id: string; title: string; status: string; domains: string[] };

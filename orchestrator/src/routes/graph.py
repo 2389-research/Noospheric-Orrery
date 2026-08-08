@@ -1,406 +1,260 @@
-"""Serve graph data in cosmic_data_v4 format for the visualization."""
+"""Serve the graph payload (contract v5) for the visualization.
 
-import math
-import numpy as np
-from collections import defaultdict
+`GET /graph` serves a materialized, cached snapshot (see
+`pipeline/graph_snapshot.py`); it no longer recomputes the payload per request.
+"""
+
 from fastapi import APIRouter, Depends
-from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
-from ..repositories.factory import get_store
 
 router = APIRouter()
 
-GOLDEN_RATIO = 0.618033988749895
-BASE_SATURATION = 65
-BASE_LIGHTNESS = 62
-DESAT_PER_LEVEL = 8
 
-
-def _assign_domain_colors(domains: list[dict]) -> dict[str, str]:
-    """Hierarchy-aware golden ratio color distribution.
-
-    Top-level domains each own an equal slice of the hue wheel.
-    Within each slice, subdomains are spaced using the golden ratio
-    for maximum perceptual distance. Deeper domains desaturate slightly.
-    """
-    paths = [d["path"] for d in domains]
-    if not paths:
-        return {}
-
-    # Find top-level domains (the level where paths actually branch)
-    parts_list = [p.split("/") for p in paths]
-    # Find branching level
-    branch_level = 0
-    for level in range(min(len(p) for p in parts_list)):
-        values = set(p[level] for p in parts_list)
-        if len(values) > 1:
-            break
-        branch_level = level + 1
-
-    # Group by the branching segment
-    top_level_names = sorted(set(
-        "/".join(p.split("/")[:branch_level + 1]) for p in paths
-    ))
-
-    # Divide hue wheel evenly among top-level groups
-    top_level_hues = {}
-    for i, name in enumerate(top_level_names):
-        top_level_hues[name] = (i / max(len(top_level_names), 1)) * 360
-
-    slice_size = 360 / max(len(top_level_names), 1)
-
-    # Assign colors within each slice using golden ratio
-    color_map = {}
-    for top_name in top_level_names:
-        range_start = top_level_hues[top_name]
-
-        # All domains in this family, sorted for determinism
-        family = sorted([p for p in paths if p.startswith(top_name)])
-
-        for i, path in enumerate(family):
-            offset = ((i * GOLDEN_RATIO) % 1) * slice_size
-            hue = (range_start + offset) % 360
-
-            # Depth-based desaturation
-            depth = path.count("/") - branch_level
-            saturation = max(30, BASE_SATURATION - depth * DESAT_PER_LEVEL)
-
-            color_map[path] = _hsl_to_hex(hue, saturation, BASE_LIGHTNESS)
-
-    return color_map
-
-
-def _hsl_to_hex(h: float, s: float, l: float) -> str:
-    """Convert HSL (h: 0-360, s: 0-100, l: 0-100) to hex color."""
-    s /= 100
-    l /= 100
-    c = (1 - abs(2 * l - 1)) * s
-    x = c * (1 - abs((h / 60) % 2 - 1))
-    m = l - c / 2
-
-    if h < 60:
-        r, g, b = c, x, 0
-    elif h < 120:
-        r, g, b = x, c, 0
-    elif h < 180:
-        r, g, b = 0, c, x
-    elif h < 240:
-        r, g, b = 0, x, c
-    elif h < 300:
-        r, g, b = x, 0, c
-    else:
-        r, g, b = c, 0, x
-
-    r, g, b = int((r + m) * 255), int((g + m) * 255), int((b + m) * 255)
-    return f"#{r:02x}{g:02x}{b:02x}"
-
-
-def _layout_domains(domains: list[dict]) -> dict[str, dict]:
-    """Layout domains in a hierarchy. Top-level parents in a circle,
-    children orbit near their parent.
-
-    Finds the "branching level" — the depth where domains actually diverge.
-    For a corpus where everything is under business/, the branching happens
-    at level 2 (fundraising, operations, product_development, venture_capital).
-    """
-    positions = {}
-    if not domains:
-        return positions
-
-    paths = [d["path"] for d in domains]
-
-    # Find the branching level — deepest common prefix
-    # e.g., all paths start with "business/" so level 0 is shared
-    parts = [p.split("/") for p in paths]
-    branch_level = 0
-    for level in range(min(len(p) for p in parts)):
-        values_at_level = set(p[level] for p in parts)
-        if len(values_at_level) > 1:
-            break
-        branch_level = level + 1
-
-    # Group by the branching segment
-    groups: dict[str, list[dict]] = {}
-    for d in domains:
-        segs = d["path"].split("/")
-        if len(segs) > branch_level:
-            group_key = "/".join(segs[:branch_level + 1])
-        else:
-            group_key = d["path"]
-        groups.setdefault(group_key, []).append(d)
-
-    # Place groups in a circle
-    group_keys = sorted(groups.keys())
-    n = max(len(group_keys), 1)
-    for i, gk in enumerate(group_keys):
-        angle = (2 * math.pi * i) / n - math.pi / 2  # start from top
-        gx = 0.5 + 0.32 * math.cos(angle)
-        gy = 0.5 + 0.32 * math.sin(angle)
-
-        members = groups[gk]
-        if len(members) == 1:
-            positions[members[0]["path"]] = {"x": gx, "y": gy}
-        else:
-            # Place group members in a small cluster
-            for j, d in enumerate(members):
-                sub_angle = angle + (j - len(members) / 2) * 0.3
-                dist = 0.32 + 0.04 * (j % 3) + 0.02
-                positions[d["path"]] = {
-                    "x": 0.5 + dist * math.cos(sub_angle),
-                    "y": 0.5 + dist * math.sin(sub_angle),
-                }
-
-    return positions
+def _chunked(seq, size=900):
+    """Yield slices of `seq` — keeps `IN (?, ?, …)` clauses under SQLite's
+    bound-parameter limit (SQLITE_MAX_VARIABLE_NUMBER, historically 999)."""
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
 
 
 @router.get("/graph")
 def get_graph_data(auth: AuthStore = Depends(get_auth_store)):
-    """Return graph data in cosmic_data_v4 format.
+    """Return the graph payload (contract v5) from the cached snapshot.
 
-    Computes domain positions via UMAP (or circular fallback).
+    Materialized once and served cached (O(1)); writers flip `graph_snapshot.dirty`
+    and the orchestrator's background task rebuilds. Only a missing — or pre-v5 —
+    snapshot triggers an inline build here. See `pipeline/graph_snapshot.py` and
+    docs/superpowers/specs/2026-08-05-graph-contract-design.md.
+
+    The `?format` parameter is gone with the v4 adapter: there is one format now.
+    """
+    from ..pipeline.graph_snapshot import get_or_build
+    store = auth.store
+    try:
+        return get_or_build(store)
+    finally:
+        store.close()
+
+
+def _collection_with_domain(conn, collection_id: str) -> dict:
+    """Fetch a collection + its dominant domain (by doc count), as
+    {id, name, kind, domain, document_count}. Raises 404 if it does not exist.
+    Shared by the collection-structure and collection-summary endpoints."""
+    from fastapi import HTTPException
+    coll = conn.execute(
+        "SELECT id, name, path, document_count, kind FROM collections WHERE id = ?", (collection_id,)
+    ).fetchone()
+    if not coll:
+        raise HTTPException(status_code=404, detail="collection not found")
+    dom = conn.execute(
+        "SELECT dd.domain_path, COUNT(*) c FROM document_collections dc "
+        "JOIN document_domains dd ON dc.document_id = dd.document_id "
+        "WHERE dc.collection_id = ? GROUP BY dd.domain_path "
+        "ORDER BY c DESC, dd.domain_path ASC LIMIT 1",
+        (collection_id,),
+    ).fetchone()
+    return {"id": coll["id"], "name": coll["name"], "kind": coll["kind"],
+            "domain": dom["domain_path"] if dom else None,
+            "document_count": coll["document_count"]}
+
+
+@router.get("/collections/{collection_id}/structure")
+def get_collection_structure(collection_id: str, max_files: int = 400, auth: AuthStore = Depends(get_auth_store)):
+    """A collection's internal tree, for the collection drill-in viz:
+    collection -> groups (with entity counts) -> leaves (summary, source_path, entities).
+    Code itself is NOT returned; source_path stands in as a placeholder.
+
+    Only the top `max_files` files by entity count are returned as render nodes —
+    the same top-N-by-degree strategy the main graph uses (`render_node_count`).
+    A 7k-leaf collection is both unrenderable and a multi-MB payload; the response
+    reports `total_files`/`rendered_files` so the client can show the cap.
+
+    Connected collections reuse the precomputed collection↔collection routes from the cached graph
+    snapshot (what /graph already ships) rather than recomputing an entity_sources
+    self-join per request — that join was O(seconds→minutes) on large collections.
     """
     store = auth.store
+    try:
+        return _collection_structure(store, collection_id, max_files)
+    finally:
+        store.close()
 
-    # Get all domains with docs
-    domain_objs = store.domains.list(min_doc_count=1)
-    domains = [{"id": d.id, "path": d.path, "parent_path": d.parent_path,
-                "doc_count": d.document_count, "spec_version": d.spec_version} for d in domain_objs]
 
-    # Domain positions via UMAP (ensure_layout handles fallback)
-    from ..pipeline.domain_layout import ensure_layout
-    domain_positions = ensure_layout(store)
+def _collection_structure(store, collection_id: str, max_files: int) -> dict:
+    conn = store.conn
+    collection_info = _collection_with_domain(conn, collection_id)
 
-    domain_doc_counts = {d["path"]: d["doc_count"] for d in domains}
-    region_colors = _assign_domain_colors(domains)
-    for d in domains:
-        region = d["path"].split("/")[0]
-        if region not in region_colors:
-            region_colors[region] = region_colors.get(d["path"], "#81d4fa")
+    docs = conn.execute(
+        "SELECT d.id, d.title, d.content, d.source_path, dc.role, dc.parent_path "
+        "FROM documents d JOIN document_collections dc ON d.id = dc.document_id "
+        "WHERE dc.collection_id = ?",
+        (collection_id,),
+    ).fetchall()
 
-    subdomains = [d["path"] for d in domains if d["path"].count("/") >= 2]
+    all_file_ids = [d["id"] for d in docs if d["role"] == "leaf"]
+    total_files = len(all_file_ids)
 
-    # Entities with domain weights — single batch query instead of N+1
-    all_entities = store.entities.list(limit=5000)
-    weight_rows = store.conn.execute("""
-        SELECT es.entity_id, dd.domain_path, COUNT(*) as weight
-        FROM entity_sources es
-        JOIN document_domains dd ON es.document_id = dd.document_id
-        GROUP BY es.entity_id, dd.domain_path
-    """).fetchall()
+    # Rank files by entity count (cheap per-file aggregate — one row each) and keep
+    # only the top `max_files`, mirroring the main graph rendering only its top-N
+    # nodes by degree. Full structure for every leaf on a huge collection is unrenderable
+    # and a multi-MB payload.
+    counts: dict = {}
+    for chunk in _chunked(all_file_ids):
+        qc = ("SELECT es.document_id AS did, COUNT(*) c FROM entity_sources es "
+              "JOIN entities e ON e.id = es.entity_id AND e.invalid_at IS NULL "
+              "WHERE es.document_id IN (%s) GROUP BY es.document_id"
+              % ",".join("?" * len(chunk)))
+        for r in conn.execute(qc, chunk).fetchall():
+            counts[r["did"]] = r["c"]
+    # Deterministic top-N: most entities first, ties broken by doc id, so the same
+    # files survive the cap across requests (a bare count sort left ties unstable).
+    render_ids = sorted(all_file_ids, key=lambda i: (-counts.get(i, 0), i))[:max(0, max_files)]
+    render_set = set(render_ids)
 
-    # Build per-entity raw weights
-    raw_weights: dict[str, dict[str, int]] = defaultdict(dict)
-    for r in weight_rows:
-        raw_weights[r[0]][r[1]] = r[2]
+    # Full entity lists only for the rendered files (bounds the fetch + payload).
+    ents_by_doc: dict = {}
+    for chunk in _chunked(render_ids):
+        q = ("SELECT es.document_id, e.id AS eid, e.canonical_name, e.type FROM entity_sources es "
+             "JOIN entities e ON e.id = es.entity_id AND e.invalid_at IS NULL "
+             "WHERE es.document_id IN (%s)" % ",".join("?" * len(chunk)))
+        for r in conn.execute(q, chunk).fetchall():
+            ents_by_doc.setdefault(r["document_id"], []).append(
+                {"id": r["eid"], "name": r["canonical_name"], "type": r["type"]})
 
-    # Normalize to fractions
-    entity_domain_weights: dict[str, dict[str, float]] = {}
-    for eid, dw in raw_weights.items():
-        total = sum(dw.values())
-        if total > 0:
-            entity_domain_weights[eid] = {dp: round(w / total, 3) for dp, w in dw.items()}
+    def file_dict(d):
+        ents = ents_by_doc.get(d["id"], [])
+        return {"id": d["id"], "title": d["title"], "path": d["title"],
+                "summary": d["content"], "source_path": d["source_path"],
+                "entity_count": len(ents), "entities": ents}
 
-    entities = []
-    for e in all_entities:
-        dw = entity_domain_weights.get(e.id, {})
-        if not dw:
+    # Only the rendered (top-N) files are attached to their modules.
+    files_by_parent: dict = {}
+    for f in (d for d in docs if d["role"] == "leaf" and d["id"] in render_set):
+        files_by_parent.setdefault(f["parent_path"] or ".", []).append(f)
+
+    modules = []
+    seen = set()
+    for m in (d for d in docs if d["role"] == "group"):
+        mpath = m["title"]
+        seen.add(mpath)
+        mfiles = [file_dict(f) for f in files_by_parent.get(mpath, [])]
+        # `id` is the module-level code_intent doc — lets the viz open the module's
+        # grounded summary in the same doc reader it uses for files.
+        modules.append({"id": m["id"], "path": mpath, "summary": m["content"],
+                        "entity_count": sum(f["entity_count"] for f in mfiles),
+                        "files": mfiles})
+
+    # Leaves whose parent is no group — for a git repo that is the checkout root, since
+    # codesum gives root-level files `parent_path = '.'` (its REPO_PATH sentinel) and
+    # group buckets are keyed by module title, which '.' never matches.
+    #
+    # The collection's OWN document is the summary for that bucket. This used to
+    # invent `{"id": None, "summary": ""}` while the root document sat unused in the
+    # same `docs` result set — so, unlike every real group, the viz could not open it
+    # in the doc reader and showed no summary.
+    root_doc = next((d for d in docs if d["role"] == "root"), None)
+    root_files = []
+    for parent, fs in files_by_parent.items():
+        if parent in seen:
             continue
-        entities.append({
-            "entityId": e.id, "name": e.canonical_name, "type": e.type,
-            "videoCount": e.source_count, "domainWeights": dw,
-        })
+        root_files.extend(file_dict(f) for f in fs)
+    if root_files:
+        modules.append({"id": root_doc["id"] if root_doc else None,
+                        "path": "(root)",
+                        "summary": root_doc["content"] if root_doc else "",
+                        "entity_count": sum(f["entity_count"] for f in root_files),
+                        "files": root_files})
 
-    # Trade routes
-    trade_routes = store.relationships.get_trade_routes()
+    # Connected collections — manifest-import edges from the (cheap) collection_edges table,
+    # plus shared-entity links read from the precomputed graph snapshot. Replaces the
+    # old per-request entity_sources self-join, which was the dominant cost on large
+    # collections.
+    connected: dict = {}
+    for r in conn.execute(
+        "SELECT target AS cid FROM collection_edges WHERE source = ? "
+        "UNION SELECT source AS cid FROM collection_edges WHERE target = ?",
+        (collection_id, collection_id),
+    ).fetchall():
+        connected.setdefault(r["cid"], {"via": set(), "weight": 0})["via"].add("import")
+    try:
+        from ..pipeline.graph_snapshot import get_or_build
+        # v5: what v4 exposed as a top-level `repo_routes` key is now a typed entry in
+        # the single `edges` collection. Reading the old key silently yielded [] — the
+        # collection tier kept working but lost every shared-entity link, which the v5 golden
+        # could not catch because this endpoint is not part of the migrated contract.
+        routes = [e for e in get_or_build(store).get("edges", ())
+                  if e.get("type") == "cooccurrence" and e.get("scope") == "collection"]
+    except Exception:
+        routes = []
+    for rt in routes:
+        src, tgt = rt.get("source"), rt.get("target")
+        other = tgt if src == collection_id else (src if tgt == collection_id else None)
+        if not other:
+            continue
+        c = connected.setdefault(other, {"via": set(), "weight": 0})
+        c["via"].add("shared_entity")
+        c["weight"] = max(c["weight"], rt.get("weight", 0) or 0)
 
-    # Recent documents
-    recent_docs = store.documents.get_recent(limit=50)
-    videos = [{"id": d.id, "title": d.title, "domains": d.domains,
-               "primary": d.domains[0] if d.domains else None,
-               "content_type": getattr(d, "content_type", "text")} for d in recent_docs]
-
-    # Domain specs
-    domain_specs = {}
-    for d in domains:
-        if d["spec_version"]:
-            domain_specs[d["path"]] = {"spec_version": d["spec_version"]}
-        else:
-            domain_specs[d["path"]] = None
-
-    # Active simmers
-    running_jobs = store.jobs.list(status_filter="running")
-    active_simmers = [j.target for j in running_jobs if j.type.startswith("simmer_")]
-
-    store.close()
+    # Strongest links first (matches the main graph's degree-ordered rendering).
+    ranked = sorted(connected.items(), key=lambda kv: kv[1]["weight"], reverse=True)
+    connected_collections = []
+    for cid, meta in ranked:
+        rr = conn.execute("SELECT id, name, kind FROM collections WHERE id = ?", (cid,)).fetchone()
+        if rr:
+            connected_collections.append({"id": rr["id"], "name": rr["name"],
+                                          "kind": rr["kind"], "via": sorted(meta["via"])})
 
     return {
-        "domain_positions": domain_positions,
-        "domain_video_counts": domain_doc_counts,
-        "domain_specs": domain_specs,
-        "active_simmers": active_simmers,
-        "region_colors": region_colors,
-        "subdomains": subdomains,
-        "videos": videos,
-        "entities": entities,
-        "v3_entities": [],
-        "trade_routes": trade_routes,
+        "collection": collection_info,
+        "modules": modules,
+        "connected_collections": connected_collections,
+        "total_files": total_files,
+        "rendered_files": len(render_set),
     }
 
 
-def _layout_domains_umap(domains: list[dict], conn) -> dict[str, dict]:
-    """Layout domains using UMAP on semantic embeddings.
-
-    Each domain is embedded as: domain_path + top doc titles + top entity names.
-    UMAP reduces to 2D. Domains that share content cluster together.
-    """
-    from sentence_transformers import SentenceTransformer
-    import umap
-
-    if len(domains) < 3:
-        # UMAP needs at least 3 points; fall back to circular
-        return _layout_domains(domains)
-
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-
-    # Build embedding input for each domain
-    texts = []
-    for d in domains:
-        path = d["path"]
-
-        # Top doc titles for this domain
-        doc_titles = conn.execute("""
-            SELECT d.title FROM documents d
-            JOIN document_domains dd ON d.id = dd.document_id
-            WHERE dd.domain_path = ?
-            ORDER BY d.created_at DESC LIMIT 6
-        """, (path,)).fetchall()
-        titles = [r[0] for r in doc_titles if r[0]]
-
-        # Top entity names for this domain
-        entity_names = conn.execute("""
-            SELECT e.canonical_name FROM entities e
-            JOIN entity_sources es ON e.id = es.entity_id
-            JOIN document_domains dd ON es.document_id = dd.document_id
-            WHERE dd.domain_path = ? AND e.invalid_at IS NULL
-            GROUP BY e.id
-            ORDER BY COUNT(*) DESC LIMIT 12
-        """, (path,)).fetchall()
-        entities = [r[0] for r in entity_names]
-
-        # Concat: path + titles + entities
-        text = f"{path.replace('/', ' ')}. {' '.join(titles[:6])}. {' '.join(entities[:12])}"
-        texts.append(text)
-
-    # Embed
-    embeddings = model.encode(texts, normalize_embeddings=True)
-
-    # UMAP to 2D
-    n_neighbors = min(15, len(domains) - 1)
-    reducer = umap.UMAP(
-        n_components=2,
-        n_neighbors=n_neighbors,
-        min_dist=0.15,
-        spread=2.5,
-        metric="cosine",
-        random_state=42,
-    )
-    coords = reducer.fit_transform(embeddings)
-
-    # Normalize to 0-1 range
-    mins = coords.min(axis=0)
-    maxs = coords.max(axis=0)
-    ranges = maxs - mins
-    ranges[ranges == 0] = 1  # avoid division by zero
-
-    positions = {}
-    for i, d in enumerate(domains):
-        positions[d["path"]] = {
-            "x": float((coords[i, 0] - mins[0]) / ranges[0]),
-            "y": float((coords[i, 1] - mins[1]) / ranges[1]),
-        }
-
-    return positions
-
-
-@router.get("/graph/umap")
-def get_graph_data_umap(auth: AuthStore = Depends(get_auth_store)):
-    """Same as /graph but with UMAP-based domain positions."""
-    settings = get_settings()
+@router.get("/collections/{collection_id}/summary")
+def get_collection_summary(collection_id: str, limit: int = 8, auth: AuthStore = Depends(get_auth_store)):
+    """Side-panel payload for a collection node: its grounded root-level LLM summary
+    (what the collection is / does) plus its top entities by mention. Cheap — two
+    aggregate queries. See the root document produced by the ingest job
+    (dc.role == 'root')."""
     store = auth.store
+    try:
+        return _collection_summary(store, collection_id, limit)
+    finally:
+        store.close()
+
+
+def _collection_summary(store, collection_id: str, limit: int) -> dict:
     conn = store.conn
+    collection_info = _collection_with_domain(conn, collection_id)
 
-    domains_raw = conn.execute(
-        "SELECT id, path, parent_path, document_count, spec_version FROM domains WHERE document_count > 0 ORDER BY path"
+    # Grounded root-level summary — the LLM's description of the whole collection,
+    # stored as the repo-level code_intent document by the ingest_repo job.
+    summ = conn.execute(
+        "SELECT d.content FROM documents d "
+        "JOIN document_collections dc ON dc.document_id = d.id "
+        "WHERE dc.collection_id = ? AND dc.role = 'root' "
+        "AND d.content_type = 'code_intent' LIMIT 1",
+        (collection_id,),
+    ).fetchone()
+
+    # Top entities by mention count across this collection's documents.
+    top = conn.execute(
+        "SELECT e.id, e.canonical_name, e.type, COUNT(*) c FROM entity_sources es "
+        "JOIN entities e ON e.id = es.entity_id AND e.invalid_at IS NULL "
+        "JOIN document_collections dc ON dc.document_id = es.document_id "
+        "WHERE dc.collection_id = ? GROUP BY e.id "
+        "ORDER BY c DESC, e.canonical_name ASC, e.id ASC LIMIT ?",
+        (collection_id, limit),
     ).fetchall()
-    domains = [{"id": r[0], "path": r[1], "parent_path": r[2], "doc_count": r[3], "spec_version": r[4]} for r in domains_raw]
-
-    # UMAP positions instead of circular
-    domain_positions = _layout_domains_umap(domains, conn)
-
-    # Everything else same as /graph
-    domain_doc_counts = {d["path"]: d["doc_count"] for d in domains}
-    region_colors = _assign_domain_colors(domains)
-    for d in domains:
-        region = d["path"].split("/")[0]
-        if region not in region_colors:
-            region_colors[region] = region_colors.get(d["path"], "#81d4fa")
-
-    subdomains = [d["path"] for d in domains if d["path"].count("/") >= 2]
-
-    entities_raw = conn.execute("""
-        SELECT e.id, e.canonical_name, e.type,
-               (SELECT COUNT(*) FROM entity_sources es WHERE es.entity_id = e.id) as source_count
-        FROM entities e WHERE e.invalid_at IS NULL ORDER BY source_count DESC
-    """).fetchall()
-
-    entities = []
-    for e in entities_raw:
-        domain_weights_raw = conn.execute("""
-            SELECT dd.domain_path, COUNT(*) as weight
-            FROM entity_sources es
-            JOIN document_domains dd ON es.document_id = dd.document_id
-            WHERE es.entity_id = ?
-            GROUP BY dd.domain_path
-        """, (e[0],)).fetchall()
-        if not domain_weights_raw:
-            continue
-        total = sum(r[1] for r in domain_weights_raw)
-        domain_weights = {r[0]: round(r[1] / total, 3) for r in domain_weights_raw}
-        entities.append({
-            "entityId": e[0], "name": e[1], "type": e[2],
-            "videoCount": e[3], "domainWeights": domain_weights,
-        })
-
-    shared = conn.execute("""
-        SELECT dd1.domain_path, dd2.domain_path, COUNT(*) as weight
-        FROM entity_sources es1
-        JOIN entity_sources es2 ON es1.entity_id = es2.entity_id AND es1.document_id != es2.document_id
-        JOIN entities e ON e.id = es1.entity_id AND e.invalid_at IS NULL
-        JOIN document_domains dd1 ON es1.document_id = dd1.document_id
-        JOIN document_domains dd2 ON es2.document_id = dd2.document_id
-        WHERE dd1.domain_path < dd2.domain_path
-        GROUP BY dd1.domain_path, dd2.domain_path
-    """).fetchall()
-    trade_routes = [{"source": r[0], "target": r[1], "weight": r[2]} for r in shared]
-
-    domain_specs = {}
-    for d in domains:
-        domain_specs[d["path"]] = {"spec_version": d["spec_version"]} if d["spec_version"] else None
-
-    active_jobs = conn.execute(
-        "SELECT target FROM jobs WHERE type LIKE 'simmer_%' AND status = 'running'"
-    ).fetchall()
-    active_simmers = [r[0] for r in active_jobs]
-
-    store.close()
 
     return {
-        "domain_positions": domain_positions,
-        "domain_video_counts": domain_doc_counts,
-        "domain_specs": domain_specs,
-        "active_simmers": active_simmers,
-        "region_colors": region_colors,
-        "subdomains": subdomains,
-        "entities": entities,
-        "trade_routes": trade_routes,
+        "collection": collection_info,
+        "summary": (summ["content"] if summ else "") or "",
+        "top_entities": [
+            {"id": r["id"], "name": r["canonical_name"], "type": r["type"], "count": r["c"]}
+            for r in top
+        ],
     }
