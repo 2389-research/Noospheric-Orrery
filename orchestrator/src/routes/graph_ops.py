@@ -20,6 +20,25 @@ def _one_of(preferred, fallback):
     return value
 
 
+def _resolve_arg(store, preferred, fallback):
+    """Resolve an entity from either spelling, releasing the store if it raises.
+
+    `get_auth_store()` hands back a real SQLiteDataStore with no dependency teardown, so
+    every early exit has to close it or the connection leaks. Both steps here raise on
+    ordinary input — `_one_of` a 422 when neither spelling is supplied, `_resolve_entity`
+    a 404 for an unknown name — and both happen BEFORE the handler's own close.
+
+    A try/finally around the whole handler would be the blunter fix, but these handlers
+    close deliberately EARLY, before `await broadcast_search(...)`, so as not to hold a
+    connection across an await. This keeps that and adds only the missing error path.
+    """
+    try:
+        return _resolve_entity(store, _one_of(preferred, fallback))
+    except Exception:
+        store.close()
+        raise
+
+
 def _resolve_entity(store, name_or_id: str):
     """Look up an entity by ID or case-insensitive name.
 
@@ -94,7 +113,7 @@ async def get_neighborhood(
     """
     store = auth.store
     conn = store._conn if hasattr(store, '_conn') else store.entities._conn
-    entity = _resolve_entity(store, _one_of(name, entity_id_or_name))
+    entity = _resolve_arg(store, name, entity_id_or_name)
     seed_id = entity.id
 
     # BFS expansion
@@ -176,8 +195,8 @@ async def get_shared_context(
     """Find shared context between two entities: shared documents, shared neighbors, shared domains."""
     store = auth.store
     conn = store._conn if hasattr(store, '_conn') else store.entities._conn
-    ea = _resolve_entity(store, _one_of(a, entity_a))
-    eb = _resolve_entity(store, _one_of(b, entity_b))
+    ea = _resolve_arg(store, a, entity_a)
+    eb = _resolve_arg(store, b, entity_b)
 
     # Shared documents
     docs_a = set()
@@ -268,8 +287,8 @@ async def find_paths(
     """Find shortest path(s) between two entities through co-occurrence edges."""
     store = auth.store
     conn = store._conn if hasattr(store, '_conn') else store.entities._conn
-    ea = _resolve_entity(store, _one_of(a, entity_a))
-    eb = _resolve_entity(store, _one_of(b, entity_b))
+    ea = _resolve_arg(store, a, entity_a)
+    eb = _resolve_arg(store, b, entity_b)
 
     if ea.id == eb.id:
         store.close()

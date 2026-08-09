@@ -220,6 +220,13 @@ def apply_rename(conn, entity_id, new_name, *, actor="human", reason=None,
          actor=actor, reason=reason, model_verdict=model_verdict, model_confidence=model_confidence, reviewer=reviewer)
     if commit:
         conn.commit()
+        # A direct rename must mark the index itself. Only `resolve_correction` owns the
+        # commit=False path and marks after its own commit, so without this a rename
+        # called directly cleared the embedding, committed, and left the index READY —
+        # still serving the old vector, with nothing scheduled to replace it. Clearing
+        # the embedding made this MORE important, not less: the stored data is now
+        # correct and only a rebuild propagates it.
+        _mark_search_index_stale()
     return {"before": row[0], "after": new_name}
 
 

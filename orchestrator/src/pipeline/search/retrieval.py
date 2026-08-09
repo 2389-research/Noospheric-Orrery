@@ -161,7 +161,7 @@ def search_entities_semantic(query_embedding: np.ndarray, top_k: int = 20) -> li
     k = min(top_k, index.ntotal)
     scores, indices = index.search(query_embedding.reshape(1, -1), k)
     results = []
-    for rank, (score, idx) in enumerate(zip(scores[0], indices[0])):
+    for rank, (score, idx) in enumerate(zip(scores[0], indices[0], strict=True)):
         if idx < 0 or idx >= len(ids):
             continue
         results.append(ScoredEntity(
@@ -179,7 +179,7 @@ def search_chunks_semantic(query_embedding: np.ndarray, top_k: int = 20) -> list
     k = min(top_k, index.ntotal)
     scores, indices = index.search(query_embedding.reshape(1, -1), k)
     results = []
-    for rank, (score, idx) in enumerate(zip(scores[0], indices[0])):
+    for rank, (score, idx) in enumerate(zip(scores[0], indices[0], strict=True)):
         if idx < 0 or idx >= len(ids):
             continue
         results.append(ScoredChunk(

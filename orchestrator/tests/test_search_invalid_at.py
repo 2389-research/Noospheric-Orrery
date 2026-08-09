@@ -266,3 +266,22 @@ def test_renaming_an_entity_drops_its_stored_embedding(test_store):
     assert after[1] is None, (
         "the embedding still encodes the old name; the next rebuild would index it "
         "unchanged and the entity would be searchable only under its former name")
+
+
+def test_a_direct_rename_marks_the_search_index_stale(test_store):
+    """`resolve_correction` is not the only caller.
+
+    It owns the commit=False path and marks after its own commit, so the mark inside
+    apply_* is what covers a DIRECT call. Without it a direct rename cleared the
+    embedding, committed, and left the index ready — still serving the old vector, with
+    nothing scheduled to replace it. Clearing the embedding makes this worse, not
+    better: the stored data is now right and only a rebuild propagates it.
+    """
+    from src.pipeline import graph_repair
+    from src.pipeline.search import pipeline as search_pipeline
+
+    _seed(test_store)
+    search_pipeline._indexes_ready = True
+    graph_repair.apply_rename(test_store.conn, "e1", "renamed widget")
+
+    assert search_pipeline._indexes_ready is False
