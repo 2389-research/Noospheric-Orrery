@@ -185,16 +185,20 @@ def test_the_index_is_marked_stale_only_after_the_write_is_durable(test_db, monk
     different connection, which under WAL sees only committed data. If the mark fires
     first, the correction is not visible there yet and this fails.
     """
-    import sqlite3
+    from src.db import get_connection
     from src.pipeline import graph_repair
 
-    conn = sqlite3.connect(test_db)
+    # get_connection, not sqlite3.connect: it applies WAL and busy_timeout, and this
+    # test turns on exactly those semantics — a SECOND connection seeing the committed
+    # row is what a rebuild racing the mark would see. Raw connections would test a
+    # journal mode the running system never uses.
+    conn = get_connection(test_db)
     _seed_entity_with_edge(conn)
 
     seen = {}
 
     def _probe():
-        other = sqlite3.connect(test_db)
+        other = get_connection(test_db)
         try:
             seen["invalid_at"] = other.execute(
                 "SELECT invalid_at FROM entities WHERE id='e1'").fetchone()[0]
@@ -222,11 +226,11 @@ def _resolve_and_report_index_flag(test_db, action, **kwargs):
     commit, and these are the only tests covering that arrangement: every other staleness
     test calls apply_* directly with the default `commit=True`.
     """
-    import sqlite3
+    from src.db import get_connection
     from src.pipeline.graph_repair import propose_correction, resolve_correction
     from src.pipeline.search import pipeline as search_pipeline
 
-    conn = sqlite3.connect(test_db)
+    conn = get_connection(test_db)
     try:
         _seed_entity_with_edge(conn)
         iid = propose_correction(conn, action=action, entity="panopticon", **kwargs)["issue_id"]

@@ -175,16 +175,18 @@ async def get_entity(name: str) -> str:
     # Resolve server-side. This used to fetch `?limit=500` and scan here, so an entity
     # past position 500 was reported "not found" — on a 94k-node graph, almost all of
     # them. /neighborhood resolves by name in SQL and returns the node it matched.
-    # safe="" because `name` is an LLM-supplied argument interpolated into a PATH.
-    # quote's default safe="/" leaves separators intact, so a name like "../../stats"
-    # survives into the URL and httpx normalises the dot segments away — the MCP server
-    # then calls a DIFFERENT orchestrator endpoint and reports its body as this entity.
+    # The name goes in a QUERY parameter, not a path segment, because a path cannot
+    # carry it faithfully. Two independent failures, both measured rather than assumed:
     #
-    # Note this does NOT make "/"-containing names resolve: uvicorn percent-decodes the
-    # path before Starlette routes it, so %2F becomes "/" again and the extra segment
-    # still misses `{entity_id_or_name}`. Serving those needs a `:path` converter or the
-    # name moved off the URL entirely.
-    seed = await call_api(f"/graph/neighborhood/{quote(name, safe='')}?depth=1&max_nodes=1")
+    #  - 2.3% of names in a real graph (1331 of 57155) contain "/". The server
+    #    percent-decodes the path before routing, so %2F becomes a separator again and
+    #    the lookup 404s for an entity that plainly exists.
+    #  - `name` is LLM-supplied, and a value of ".." is a dot segment that httpx
+    #    normalises away CLIENT-side: `/graph/neighborhood/..` leaves as `/graph`, so
+    #    the tool would report the entire graph payload as this entity's neighborhood.
+    #
+    # A query value is opaque to both — no path normalisation, no re-splitting.
+    seed = await call_api(f"/graph/neighborhood?name={quote(name, safe='')}&depth=1&max_nodes=1")
     if "detail" in seed:
         # Only a genuine 404 means "no such entity". Reporting a 500 or a connection
         # failure as "not found" tells the caller the graph lacks something it may well
@@ -279,7 +281,7 @@ async def get_neighborhood(entity_name: str, depth: int = 1, max_nodes: int = 20
     """Expand the neighborhood around an entity. Returns connected entities within N hops.
     Use depth=1 for immediate neighbors, depth=2 to see friends-of-friends.
     This is the primary graph exploration tool — start here after search."""
-    result = await call_api(f"/graph/neighborhood/{quote(entity_name, safe='')}?depth={depth}&max_nodes={max_nodes}")
+    result = await call_api(f"/graph/neighborhood?name={quote(entity_name, safe='')}&depth={depth}&max_nodes={max_nodes}")
     if "detail" in result:
         return f"Error: {result['detail']}"
     seed = result["seed"]
@@ -302,7 +304,7 @@ async def get_neighborhood(entity_name: str, depth: int = 1, max_nodes: int = 20
 async def get_shared_context(entity_a: str, entity_b: str) -> str:
     """Find what two entities have in common: shared documents, shared neighbors, shared domains.
     Use this to understand WHY two entities are related or to discover non-obvious connections."""
-    result = await call_api(f"/graph/shared-context/{quote(entity_a, safe='')}/{quote(entity_b, safe='')}")
+    result = await call_api(f"/graph/shared-context?a={quote(entity_a, safe='')}&b={quote(entity_b, safe='')}")
     if "detail" in result:
         return f"Error: {result['detail']}"
     ea, eb = result["entity_a"], result["entity_b"]
@@ -328,7 +330,7 @@ async def get_shared_context(entity_a: str, entity_b: str) -> str:
 async def find_paths(entity_a: str, entity_b: str, max_depth: int = 4) -> str:
     """Find shortest path(s) between two entities through co-occurrence edges.
     Shows HOW two entities connect through the graph — useful for discovering indirect relationships."""
-    result = await call_api(f"/graph/paths/{quote(entity_a, safe='')}/{quote(entity_b, safe='')}?max_depth={max_depth}")
+    result = await call_api(f"/graph/paths?a={quote(entity_a, safe='')}&b={quote(entity_b, safe='')}&max_depth={max_depth}")
     if "detail" in result:
         return f"Error: {result['detail']}"
     ea, eb = result["entity_a"], result["entity_b"]

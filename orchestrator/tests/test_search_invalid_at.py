@@ -65,8 +65,11 @@ def test_invalidated_entity_never_enters_the_index(test_store, monkeypatch):
     monkeypatch.setattr(retrieval, "_get_model", _no_model)
 
     retrieval.build_indexes(test_store.conn)
-    assert "e1" not in (retrieval._entity_ids or [])
-    assert {"e0", "e2"} <= set(retrieval._entity_ids or [])
+    # The index and its ids are published as one tuple, so read the pair — that is also
+    # what every reader does, making this an assertion about what searches actually see.
+    _index, entity_ids = retrieval._entity_view
+    assert "e1" not in entity_ids
+    assert {"e0", "e2"} <= set(entity_ids)
 
 
 def test_lexical_lookup_hides_invalidated_entities(test_store):
@@ -234,3 +237,32 @@ def test_the_search_package_is_not_shadowed_by_a_module(test_store):
         "pipeline/search.py is shadowed by pipeline/search/ and can never run — "
         "edits to it are silently inert")
     assert (pipeline_dir / "search" / "retrieval.py").exists()
+
+
+def test_renaming_an_entity_drops_its_stored_embedding(test_store):
+    """Marking the index stale is not enough on its own.
+
+    `build_indexes` re-embeds only rows whose `embedding` is NULL and reuses every other
+    one verbatim, so a rebuild after a rename would faithfully re-index the vector for
+    the OLD name — the entity stays findable by what it used to be called and is not
+    findable by what it now is. Worse than a stale index, because the rebuild ran and
+    everything looks current.
+
+    Asserts the stored embedding is gone, which is the precondition the next build needs;
+    the re-embed itself is `build_indexes`' existing behaviour for a NULL.
+    """
+    from src.pipeline import graph_repair
+
+    _seed(test_store)
+    before = test_store.conn.execute(
+        "SELECT embedding FROM entities WHERE id='e1'").fetchone()[0]
+    assert before is not None, "precondition: the seed stores an embedding"
+
+    graph_repair.apply_rename(test_store.conn, "e1", "renamed widget")
+
+    after = test_store.conn.execute(
+        "SELECT canonical_name, embedding FROM entities WHERE id='e1'").fetchone()
+    assert after[0] == "renamed widget"
+    assert after[1] is None, (
+        "the embedding still encodes the old name; the next rebuild would index it "
+        "unchanged and the entity would be searchable only under its former name")

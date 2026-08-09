@@ -202,7 +202,20 @@ def apply_rename(conn, entity_id, new_name, *, actor="human", reason=None,
     row = conn.execute("SELECT canonical_name FROM entities WHERE id = ?", (entity_id,)).fetchone()
     if row is None:
         raise ValueError(f"entity not found: {entity_id!r}")
-    conn.execute("UPDATE entities SET canonical_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (new_name, entity_id))
+    # Drop the stored embedding in the SAME transaction as the rename.
+    #
+    # Marking the index stale forces a rebuild, but `build_indexes` re-embeds only rows
+    # whose embedding is NULL and reuses every other one as-is — so a rebuild after a
+    # rename faithfully re-indexes the vector for the OLD name. The entity stays
+    # searchable by what it used to be called and is not findable by what it now is,
+    # which is worse than a stale index because everything looks freshly built.
+    #
+    # NULL rather than re-encoding here: this is a request path that must not load the
+    # embedding model, and the next build already knows how to fill a NULL.
+    conn.execute("UPDATE entities SET canonical_name = ?, embedding = NULL, "
+                 "updated_at = CURRENT_TIMESTAMP WHERE id = ?", (new_name, entity_id))
+    # Same reasoning for the side table the normalizer reads.
+    conn.execute("DELETE FROM entity_embeddings WHERE entity_id = ?", (entity_id,))
     _log(conn, action="rename", before_value=row[0], after_value=new_name, from_entity_id=entity_id,
          actor=actor, reason=reason, model_verdict=model_verdict, model_confidence=model_confidence, reviewer=reviewer)
     if commit:
