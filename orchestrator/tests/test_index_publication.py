@@ -8,6 +8,13 @@ the match: not a ranking error, a WRONG ANSWER, with no error raised anywhere.
 The fix is that the pair is published as a single tuple, and readers bind it once.
 These tests pin both halves of that, because either alone is insufficient — an atomic
 publish that readers ignore, or careful readers with a torn publish, both fail.
+
+On isolation: `test_store` IS the tmp_path fixture — see conftest, `def test_store(
+tmp_path)` building its database at `tmp_path / "test.db"`. Requesting it is how a test
+here gets a per-test, file-backed SQLite database with WAL enabled. It is not a shared
+or in-memory store, and `:memory:` could not work in its place: it is per-connection, so
+`SQLiteDataStore`'s `init_db()` and `get_connection()` would land on two different empty
+databases, and `PRAGMA journal_mode=WAL` silently returns "memory".
 """
 
 import threading
@@ -73,10 +80,12 @@ def test_a_search_never_observes_a_half_swapped_index(test_store):
 
     threads = [threading.Thread(target=_writer)] + [
         threading.Thread(target=_reader) for _ in range(3)]
-    for t in threads: t.start()
+    for t in threads:
+        t.start()
     stop.wait(0.5)
     stop.set()
-    for t in threads: t.join(timeout=5)
+    for t in threads:
+        t.join(timeout=5)
 
     retrieval._entity_view = small   # module global; restore for later tests
     assert not torn, f"observed {len(torn)} torn reads, e.g. {torn[:3]}"
