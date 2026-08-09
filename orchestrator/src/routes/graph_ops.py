@@ -12,6 +12,33 @@ from ..repositories.graph_reads import (_chunks, domain_neighbours, entities_in_
 router = APIRouter(prefix="/graph")
 
 
+def _one_of(preferred, fallback):
+    """The query-parameter spelling wins; the path form is the compatibility path."""
+    value = preferred if preferred is not None else fallback
+    if value is None:
+        raise HTTPException(status_code=422, detail="an entity id or name is required")
+    return value
+
+
+def _resolve_arg(store, preferred, fallback):
+    """Resolve an entity from either spelling, releasing the store if it raises.
+
+    `get_auth_store()` hands back a real SQLiteDataStore with no dependency teardown, so
+    every early exit has to close it or the connection leaks. Both steps here raise on
+    ordinary input — `_one_of` a 422 when neither spelling is supplied, `_resolve_entity`
+    a 404 for an unknown name — and both happen BEFORE the handler's own close.
+
+    A try/finally around the whole handler would be the blunter fix, but these handlers
+    close deliberately EARLY, before `await broadcast_search(...)`, so as not to hold a
+    connection across an await. This keeps that and adds only the missing error path.
+    """
+    try:
+        return _resolve_entity(store, _one_of(preferred, fallback))
+    except Exception:
+        store.close()
+        raise
+
+
 def _resolve_entity(store, name_or_id: str):
     """Look up an entity by ID or case-insensitive name.
 
@@ -65,17 +92,28 @@ def _get_adjacency(conn, entity_ids: list[str]) -> dict[str, list[dict]]:
     return adj
 
 
+@router.get("/neighborhood", name="neighborhood_by_query")
 @router.get("/neighborhood/{entity_id_or_name}")
 async def get_neighborhood(
-    entity_id_or_name: str,
+    entity_id_or_name: str | None = None,
+    name: str | None = Query(None, description="Entity id or name; prefer this over the path form."),
     depth: int = Query(1, ge=1, le=3),
     max_nodes: int = Query(30, ge=1, le=100),
     auth: AuthStore = Depends(get_auth_store),
 ):
-    """Multi-hop neighborhood around an entity. Returns nodes and edges within `depth` hops."""
+    """Multi-hop neighborhood around an entity. Returns nodes and edges within `depth` hops.
+
+    Two spellings, and `?name=` is the correct one. A path segment cannot carry an
+    entity name faithfully: 2.3% of names in a real graph contain `/`, and the server
+    percent-DECODES the path before routing, so `%2F` becomes a separator again and the
+    lookup 404s for an entity that exists. Dot segments are worse than useless — a name
+    of `..` normalizes client-side into a request for a DIFFERENT endpoint.
+
+    The path form stays for existing callers and ids, which have neither problem.
+    """
     store = auth.store
     conn = store._conn if hasattr(store, '_conn') else store.entities._conn
-    entity = _resolve_entity(store, entity_id_or_name)
+    entity = _resolve_arg(store, name, entity_id_or_name)
     seed_id = entity.id
 
     # BFS expansion
@@ -145,17 +183,20 @@ async def get_neighborhood(
     return result
 
 
+@router.get("/shared-context", name="shared_context_by_query")
 @router.get("/shared-context/{entity_a}/{entity_b}")
 async def get_shared_context(
-    entity_a: str,
-    entity_b: str,
+    entity_a: str | None = None,
+    entity_b: str | None = None,
+    a: str | None = Query(None, description="First entity id or name; prefer this."),
+    b: str | None = Query(None, description="Second entity id or name; prefer this."),
     auth: AuthStore = Depends(get_auth_store),
 ):
     """Find shared context between two entities: shared documents, shared neighbors, shared domains."""
     store = auth.store
     conn = store._conn if hasattr(store, '_conn') else store.entities._conn
-    ea = _resolve_entity(store, entity_a)
-    eb = _resolve_entity(store, entity_b)
+    ea = _resolve_arg(store, a, entity_a)
+    eb = _resolve_arg(store, b, entity_b)
 
     # Shared documents
     docs_a = set()
@@ -233,18 +274,21 @@ async def get_shared_context(
     return result
 
 
+@router.get("/paths", name="paths_by_query")
 @router.get("/paths/{entity_a}/{entity_b}")
 async def find_paths(
-    entity_a: str,
-    entity_b: str,
+    entity_a: str | None = None,
+    entity_b: str | None = None,
+    a: str | None = Query(None, description="First entity id or name; prefer this."),
+    b: str | None = Query(None, description="Second entity id or name; prefer this."),
     max_depth: int = Query(4, ge=1, le=6),
     auth: AuthStore = Depends(get_auth_store),
 ):
     """Find shortest path(s) between two entities through co-occurrence edges."""
     store = auth.store
     conn = store._conn if hasattr(store, '_conn') else store.entities._conn
-    ea = _resolve_entity(store, entity_a)
-    eb = _resolve_entity(store, entity_b)
+    ea = _resolve_arg(store, a, entity_a)
+    eb = _resolve_arg(store, b, entity_b)
 
     if ea.id == eb.id:
         store.close()

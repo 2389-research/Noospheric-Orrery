@@ -11,12 +11,20 @@ import numpy as np
 from .models import ScoredEntity, ScoredChunk
 from .config import SearchConfig
 
-# Lazy-loaded model + indexes
+# Lazy-loaded model + indexes.
+#
+# An index and its id list are ONE value, published as a tuple, because they are only
+# meaningful together: a FAISS position means nothing except as an offset into the id
+# list built alongside it. Held as two globals they could be swapped independently, so a
+# search running during a rebuild could take positions from one build and ids from
+# another and return entities that were never the match — wrong answers, silently.
+#
+# Rebinding a name is a single bytecode, so a reader that grabs the tuple ONCE sees
+# either the whole old pair or the whole new one, never a mix. That is the entire
+# protocol: writers assign the tuple last, readers bind it to a local first.
 _model = None
-_entity_index = None
-_chunk_index = None
-_entity_ids: list[str] = []
-_chunk_ids: list[str] = []
+_entity_view: tuple = (None, [])   # (faiss index | None, ids)
+_chunk_view: tuple = (None, [])
 
 
 def _get_model():
@@ -38,7 +46,7 @@ def embed_text(text: str | list[str]) -> np.ndarray:
 def build_indexes(conn: sqlite3.Connection) -> dict:
     """Build FAISS indexes from stored embeddings, or embed if missing. SQLite only."""
     import faiss
-    global _entity_index, _chunk_index, _entity_ids, _chunk_ids
+    global _entity_view, _chunk_view
 
     # NOT `model = _get_model()` up front. That instantiates (and, on a cold host,
     # DOWNLOADS) all-MiniLM-L6-v2 on every index build — including the common case
@@ -51,7 +59,7 @@ def build_indexes(conn: sqlite3.Connection) -> dict:
         "SELECT id, canonical_name, embedding FROM entities "
         "WHERE invalid_at IS NULL ORDER BY canonical_name").fetchall()
     if entities:
-        _entity_ids = [e[0] for e in entities]
+        entity_ids = [e[0] for e in entities]
         # Use stored embeddings if available, otherwise compute
         embeddings = []
         needs_embed = []
@@ -73,16 +81,17 @@ def build_indexes(conn: sqlite3.Connection) -> dict:
             conn.commit()
 
         entity_matrix = np.stack([e for e in embeddings if e is not None])
-        _entity_index = faiss.IndexFlatIP(entity_matrix.shape[1])
-        _entity_index.add(entity_matrix)
+        entity_index = faiss.IndexFlatIP(entity_matrix.shape[1])
+        entity_index.add(entity_matrix)
     else:
-        _entity_index = None
-        _entity_ids = []
+        entity_index, entity_ids = None, []
+    # Published as one value, AFTER it is fully built — see `_entity_view`.
+    _entity_view = (entity_index, entity_ids)
 
     # Chunk index
     chunks = conn.execute("SELECT id, text, embedding FROM chunks ORDER BY id").fetchall()
     if chunks:
-        _chunk_ids = [c[0] for c in chunks]
+        chunk_ids = [c[0] for c in chunks]
         embeddings = []
         needs_embed = []
         for i, c in enumerate(chunks):
@@ -103,13 +112,13 @@ def build_indexes(conn: sqlite3.Connection) -> dict:
             conn.commit()
 
         chunk_matrix = np.stack([e for e in embeddings if e is not None])
-        _chunk_index = faiss.IndexFlatIP(chunk_matrix.shape[1])
-        _chunk_index.add(chunk_matrix)
+        chunk_index = faiss.IndexFlatIP(chunk_matrix.shape[1])
+        chunk_index.add(chunk_matrix)
     else:
-        _chunk_index = None
-        _chunk_ids = []
+        chunk_index, chunk_ids = None, []
+    _chunk_view = (chunk_index, chunk_ids)
 
-    return {"entities": len(_entity_ids), "chunks": len(_chunk_ids)}
+    return {"entities": len(entity_ids), "chunks": len(chunk_ids)}
 
 
 def embed_new_entities(conn: sqlite3.Connection):
@@ -144,16 +153,19 @@ def embed_new_chunks(conn: sqlite3.Connection):
 
 def search_entities_semantic(query_embedding: np.ndarray, top_k: int = 20) -> list[ScoredEntity]:
     """Channel A: FAISS entity search."""
-    if _entity_index is None or _entity_index.ntotal == 0:
+    # Bind the pair ONCE: a rebuild between these statements would otherwise pair this
+    # index's positions with the next build's ids.
+    index, ids = _entity_view
+    if index is None or index.ntotal == 0:
         return []
-    k = min(top_k, _entity_index.ntotal)
-    scores, indices = _entity_index.search(query_embedding.reshape(1, -1), k)
+    k = min(top_k, index.ntotal)
+    scores, indices = index.search(query_embedding.reshape(1, -1), k)
     results = []
-    for rank, (score, idx) in enumerate(zip(scores[0], indices[0])):
-        if idx < 0 or idx >= len(_entity_ids):
+    for rank, (score, idx) in enumerate(zip(scores[0], indices[0], strict=True)):
+        if idx < 0 or idx >= len(ids):
             continue
         results.append(ScoredEntity(
-            entity_id=_entity_ids[idx], name="", entity_type="",
+            entity_id=ids[idx], name="", entity_type="",
             score=float(score), rank=rank, source="semantic",
         ))
     return results
@@ -161,16 +173,17 @@ def search_entities_semantic(query_embedding: np.ndarray, top_k: int = 20) -> li
 
 def search_chunks_semantic(query_embedding: np.ndarray, top_k: int = 20) -> list[ScoredChunk]:
     """Channel B: FAISS chunk search."""
-    if _chunk_index is None or _chunk_index.ntotal == 0:
+    index, ids = _chunk_view
+    if index is None or index.ntotal == 0:
         return []
-    k = min(top_k, _chunk_index.ntotal)
-    scores, indices = _chunk_index.search(query_embedding.reshape(1, -1), k)
+    k = min(top_k, index.ntotal)
+    scores, indices = index.search(query_embedding.reshape(1, -1), k)
     results = []
-    for rank, (score, idx) in enumerate(zip(scores[0], indices[0])):
-        if idx < 0 or idx >= len(_chunk_ids):
+    for rank, (score, idx) in enumerate(zip(scores[0], indices[0], strict=True)):
+        if idx < 0 or idx >= len(ids):
             continue
         results.append(ScoredChunk(
-            chunk_id=_chunk_ids[idx], text="", document_id="", document_title="",
+            chunk_id=ids[idx], text="", document_id="", document_title="",
             score=float(score), rank=rank, source="semantic",
         ))
     return results
