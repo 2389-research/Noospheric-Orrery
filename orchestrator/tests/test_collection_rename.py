@@ -302,13 +302,24 @@ def test_a_failure_part_way_through_rolls_the_whole_migration_back(repo_era_db):
                 raise sqlite3.OperationalError("simulated mid-migration failure")
             return self._conn.execute(sql, *args)
 
+        def __getattr__(self, name):
+            # Proxy everything else (in_transaction, rollback, commit, ...). Overriding
+            # only `execute` made the double break as soon as the code under test used
+            # any other part of the connection API — a property of the double, not of
+            # the behaviour being tested.
+            return getattr(self._conn, name)
+
     conn = sqlite3.connect(repo_era_db)
     before = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
               for t in ("repos", "document_repos", "repo_edges")}
 
-    # Fail on the 4th execute: SAVEPOINT, the table scan, the first rename, then boom.
+    # Fail on the 5th execute: BEGIN IMMEDIATE, SAVEPOINT, the table scan, the FIRST
+    # rename, then boom. The count matters — the point is to fail with one rename
+    # already applied, so the rollback has something to undo. At 4 the failure lands on
+    # the first rename instead of after it, nothing is half-applied, and the assertions
+    # below pass while testing nothing.
     with pytest.raises(sqlite3.OperationalError, match="simulated"):
-        db.migrate_to_collections(FailOnce(conn, 4))
+        db.migrate_to_collections(FailOnce(conn, 5))
 
     after = _tables(conn)
     assert _OLD <= after, "every legacy table must still be there"

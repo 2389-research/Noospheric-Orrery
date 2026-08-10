@@ -121,6 +121,88 @@ def test_a_legacy_table_without_level_still_gets_the_new_columns(tmp_path):
     assert {"role", "emits_cooccurrence"} <= cols
 
 
+def test_a_later_edit_survives_the_next_initialization(tmp_path):
+    """The backfill must not keep re-deriving from `level`.
+
+    `level` stays populated on legacy rows forever, so a backfill gated only on
+    `level IS NOT NULL` re-runs on every open and RESETS both columns from the stale
+    legacy value — silently reverting whatever was written since. `emits_cooccurrence`
+    exists specifically so it can be set independently of structural role, so a legacy
+    row would be pinned to the level-derived value permanently, undoing an operator fix
+    or a re-ingest at the next process start.
+    """
+    db = str(tmp_path / "legacy.db")
+    _legacy_db(db)
+    init_db(db)
+
+    # Something changes its mind after the migration: a group opts INTO co-occurrence,
+    # and a role is corrected. Both are legitimate writes on a legacy row.
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE document_collections SET emits_cooccurrence = 1 WHERE document_id = 'd2'")
+    conn.execute("UPDATE document_collections SET role = 'leaf' WHERE document_id = 'd1'")
+    conn.commit()
+    conn.close()
+
+    from src import db as db_mod
+    db_mod._initialized.discard(db)      # a second process opens the same file
+    init_db(db)
+
+    conn = sqlite3.connect(db)
+    emits = dict(conn.execute(
+        "SELECT document_id, emits_cooccurrence FROM document_collections").fetchall())
+    roles = dict(conn.execute(
+        "SELECT document_id, role FROM document_collections").fetchall())
+    conn.close()
+
+    assert emits["d2"] == 1, "re-derived emits_cooccurrence from the stale `level`"
+    assert roles["d1"] == "leaf", "re-derived role from the stale `level`"
+    # Untouched rows keep their derived values — the backfill is not reverted either.
+    assert roles["d3"] == "leaf" and emits["d3"] == 1
+
+
+def test_two_concurrent_processes_can_open_a_legacy_database(tmp_path):
+    """The orchestrator and the worker really do both open every workspace.
+
+    With a DEFERRED transaction both processes could read the legacy schema before
+    either took the write lock, and the loser would get SQLITE_BUSY_SNAPSHOT upgrading
+    its stale snapshot — which `busy_timeout` cannot rescue, because waiting does not
+    make an outdated snapshot current. Real subprocesses, not threads: the per-process
+    `_initialized` memo and SQLite's per-connection locking are exactly what is under
+    test, and threads in one process would share both.
+    """
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+
+    db = str(tmp_path / "legacy.db")
+    _legacy_db(db)
+
+    orchestrator_dir = Path(__file__).resolve().parents[1]   # .../orchestrator
+    script = textwrap.dedent(f"""
+        import sys
+        sys.path.insert(0, {str(orchestrator_dir)!r})
+        from src.db import init_db
+        init_db({db!r})
+        print("ok")
+    """)
+    procs = [subprocess.Popen([sys.executable, "-c", script],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+             for _ in range(4)]
+    results = [(p.wait(timeout=90), *p.communicate()) for p in procs]
+
+    failed = [(rc, out, err) for rc, out, err in results if rc != 0]
+    assert not failed, "concurrent init_db failed:\n" + "\n".join(
+        f"rc={rc}\n{err[-1500:]}" for rc, _, err in failed)
+
+    # And the database is correctly migrated exactly once, not partially or twice.
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM collections").fetchone()[0] == 1
+    roles = dict(conn.execute("SELECT document_id, role FROM document_collections").fetchall())
+    conn.close()
+    assert roles == {"d1": "root", "d2": "group", "d3": "leaf", "d4": "leaf"}
+
+
 def test_the_migration_is_idempotent_across_processes(tmp_path):
     """init_db memoizes per process, so a second *process* re-runs the whole thing.
 

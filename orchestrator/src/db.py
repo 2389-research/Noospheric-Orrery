@@ -317,15 +317,36 @@ def migrate_to_collections(conn) -> None:
     savepoint: a failure part-way through would otherwise leave one table renamed and
     the next not — exactly the half-migrated state the preflight below refuses to
     start from, reached by a different route and with no way to retry out of it.
+
+    The write lock is taken UP FRONT with BEGIN IMMEDIATE, not lazily. The orchestrator
+    and the worker both open every workspace, so they genuinely race on a legacy
+    database's first open. A deferred transaction would let both read the legacy schema,
+    and the second one to attempt a write would get SQLITE_BUSY_SNAPSHOT when upgrading
+    its now-stale read snapshot — a failure `busy_timeout` cannot rescue, because
+    waiting does not make an outdated snapshot current. BEGIN IMMEDIATE makes the
+    contention happen at the lock instead, where busy_timeout does apply, so the loser
+    waits and then observes the migrated schema rather than failing.
     """
+    # If a transaction is already open (a caller mid-write), the savepoint alone is
+    # correct — and BEGIN would raise. Only take the lock when we are the outermost.
+    started = not conn.in_transaction
+    if started:
+        conn.execute("BEGIN IMMEDIATE")
     conn.execute("SAVEPOINT collections_migration")
     try:
         _migrate_to_collections(conn)
     except Exception:
         conn.execute("ROLLBACK TO collections_migration")
         conn.execute("RELEASE collections_migration")
+        if started:
+            conn.rollback()
         raise
     conn.execute("RELEASE collections_migration")
+    if started:
+        # Commit here rather than leaving the write open: init_db keeps running
+        # (executescript, ALTERs) and holding the lock across all of it would widen
+        # the window the other process has to wait through.
+        conn.commit()
 
 
 def _migrate_to_collections(conn) -> None:
@@ -428,28 +449,44 @@ def _migrate_collection_columns(conn) -> None:
     # unrelated jobs: structural position, a co-occurrence switch (`level == 'file'`),
     # and the lookup key for a collection's own summary doc.
     dc_cols = {r[1] for r in conn.execute("PRAGMA table_info(document_collections)").fetchall()}
+    added: list[str] = []
     if "role" not in dc_cols:
         conn.execute("ALTER TABLE document_collections ADD COLUMN role TEXT")
+        added.append("role")
     if "emits_cooccurrence" not in dc_cols:
         conn.execute("ALTER TABLE document_collections ADD COLUMN emits_cooccurrence INTEGER DEFAULT 1")
+        added.append("emits_cooccurrence")
     # Only a MIGRATED table has `level`; this schema never creates it, so the backfill
     # is guarded on the column's presence rather than assuming it (the fork's version
     # could assume it — its schema still declared the column — and copying that
     # verbatim would raise "no such column: level" on every fresh database).
-    if "level" in dc_cols:
-        # Scoped to `level IS NOT NULL`, which is exactly the legacy rows: writers on
-        # this schema set role/emits_cooccurrence and never write `level`. Idempotent,
-        # and it cannot overwrite a value a current writer chose. It CANNOT be gated on
-        # `emits_cooccurrence IS NULL` instead — ADD COLUMN ... DEFAULT 1 backfills
-        # existing rows with 1, so there is no NULL sentinel left to detect.
-        conn.execute("""UPDATE document_collections SET
-                            role = CASE level
-                                WHEN 'repo' THEN 'root'
-                                WHEN 'module' THEN 'group'
-                                WHEN 'file' THEN 'leaf'
-                            END,
-                            emits_cooccurrence = CASE WHEN level = 'file' THEN 1 ELSE 0 END
-                        WHERE level IS NOT NULL""")
+    # Derive ONLY the columns this call actually added. `level` stays populated on
+    # legacy rows forever, so a backfill gated on `level IS NOT NULL` alone would re-run
+    # on every open and RESET these two columns from the stale legacy value — silently
+    # reverting anything written since. That is not hypothetical: `emits_cooccurrence`
+    # exists precisely so it can be set independently of structural role, and a legacy
+    # row would have been pinned to the level-derived value permanently, undoing an
+    # operator fix or a re-ingest on the next process start.
+    #
+    # Running only for freshly-added columns also makes this a true one-shot: after the
+    # first open the columns exist, `added` is empty, and no UPDATE runs at all.
+    _CASE = {
+        "role": """CASE level
+                       WHEN 'repo' THEN 'root'
+                       WHEN 'module' THEN 'group'
+                       WHEN 'file' THEN 'leaf'
+                   END""",
+        # `level == 'file'` is what the old co-occurrence guard tested.
+        "emits_cooccurrence": "CASE WHEN level = 'file' THEN 1 ELSE 0 END",
+    }
+    # Only a MIGRATED table has `level`; this schema never creates it, so this is guarded
+    # on the column's presence rather than assuming it (the fork's version could assume
+    # it — its schema still declared the column — and copying that verbatim raises
+    # "no such column: level" on every fresh database).
+    if added and "level" in dc_cols:
+        sets = ", ".join(f"{col} = {_CASE[col]}" for col in added)
+        conn.execute(f"UPDATE document_collections SET {sets} WHERE level IS NOT NULL")
+
 
 def init_db(db_path: str) -> None:
     # Fast path: skip migrations if we've already initialized this DB in this process.
