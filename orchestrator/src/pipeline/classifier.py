@@ -43,8 +43,12 @@ Worked examples:
 
 Now classify the document in the next message, reusing an existing-taxonomy path ONLY when it is the SAME topic."""
 
+# Title lives in the DYNAMIC half, with the excerpt: it varies per document, so
+# putting it in the cached static block would invalidate the cache every call.
 CLASSIFICATION_PROMPT_DYNAMIC = """Existing taxonomy (already in this graph — reuse a path from here ONLY when it is the SAME topic; it is NOT a preference, and a graph full of software paths must not pull unrelated content toward software):
 {taxonomy}
+
+Title: {title}
 
 Document:
 {excerpt}"""
@@ -59,6 +63,17 @@ CLASSIFICATION_SCHEMA = {
             "type": "string",
             "description": "Primary domain path (region/parent/subdomain)",
         },
+        # The list caps are enforced in code (see _clamp_lists), NOT with `maxItems`
+        # here. Measured against gemma4:26b, `maxItems` in a schema Ollama compiles to
+        # a decoding grammar is unreliable in both directions: on a single-property
+        # schema it capped the array by force — truncating a string mid-token into
+        # malformed JSON in one run, and in others cramming ten values into one
+        # element ("_RUBY_SWIFT_KOTLIN_RUST_GO_...") to fit the limit — while on THIS
+        # schema it was ignored outright and returned 12 subdomains against a cap of 8.
+        # A constraint that sometimes corrupts the payload and sometimes does nothing
+        # is worse than no constraint, so the counts stay advisory here (stated in the
+        # prompt, which is where a model can comply gracefully) and binding after the
+        # parse, where it is deterministic on every backend.
         "secondary_domains": {
             "type": "array",
             "items": {"type": "string"},
@@ -87,6 +102,40 @@ CLASSIFICATION_SCHEMA = {
 # thing the reference vocabulary exists to prevent) are the only symptom.
 _OLLAMA_OPTIONS = {"num_ctx": 16384}
 
+# Binding caps for the list facets, applied after the parse. The prompt asks for these
+# counts and a healthy call respects them; this is the backstop for when it does not.
+# It is not hypothetical: every secondary domain becomes a `document_domains` row, so an
+# unbounded list writes unbounded graph edges. A left-truncated local call — where the
+# sentence stating "0-3" is the part Ollama dropped — returned 74 of them.
+_MAX_SECONDARY_DOMAINS = 3
+_MAX_SUBDOMAINS = 8
+
+
+def _clamp_lists(result: dict) -> dict:
+    """Trim the list facets to their documented maxima, tolerating a malformed payload.
+
+    Defensive about types rather than trusting the schema: a local model can return a
+    bare string or a null where an array was declared, and this sits directly upstream
+    of code that iterates the value. Clamps in place and returns the same dict, so a
+    caller reading `result` still sees the trimmed lists.
+    """
+    # A JSON array or scalar parses successfully but is not a classification, and every
+    # caller indexes this by key — return the empty dict the callers already handle.
+    if not isinstance(result, dict):
+        return {}
+    for key, cap in (("secondary_domains", _MAX_SECONDARY_DOMAINS),
+                     ("subdomains", _MAX_SUBDOMAINS)):
+        value = result.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            result[key] = []
+            continue
+        # Keep only genuine strings; order is preserved, so trimming keeps the model's
+        # own ranking rather than an arbitrary subset.
+        result[key] = [v for v in value if isinstance(v, str)][:cap]
+    return result
+
 
 async def classify_document(
     relay: Relay,
@@ -99,8 +148,9 @@ async def classify_document(
     taxonomy_str = "\n".join(f"  - {d}" for d in existing_taxonomy) if existing_taxonomy else "  (empty — propose new domains)"
 
     static = CLASSIFICATION_PROMPT_STATIC.format(reference_vocab=reference_vocab_text())
-    dynamic = CLASSIFICATION_PROMPT_DYNAMIC.format(taxonomy=taxonomy_str, excerpt=excerpt)
-    return await relay.complete_structured(
+    dynamic = CLASSIFICATION_PROMPT_DYNAMIC.format(
+        taxonomy=taxonomy_str, title=title, excerpt=excerpt)
+    result = await relay.complete_structured(
         model=model, max_tokens=1024,
         messages=[{"role": "user", "content": [
             # Cache breakpoint: the static instructions + reference vocab (+ tool
@@ -113,6 +163,7 @@ async def classify_document(
         tool_description="Classify a document into domain paths for the knowledge graph",
         ollama_options=_OLLAMA_OPTIONS,
     )
+    return _clamp_lists(result)
 
 
 IMAGE_CLASSIFICATION_PROMPT = """You are a classifier for a knowledge graph system. Look at this image and classify it into domain paths.

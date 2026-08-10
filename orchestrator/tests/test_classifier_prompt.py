@@ -20,7 +20,8 @@ def _sent(mock) -> dict:
     return mock.complete_structured.await_args.kwargs
 
 
-async def _classify(taxonomy=("software/backend/rest-api",), excerpt="a summary") -> dict:
+async def _classify(taxonomy=("software/backend/rest-api",), excerpt="a summary",
+                    title="t") -> dict:
     mock = AsyncMock()
     mock.complete_structured = AsyncMock(return_value={
         "primary_domain": "software/backend/rest-api",
@@ -28,7 +29,7 @@ async def _classify(taxonomy=("software/backend/rest-api",), excerpt="a summary"
         "confidence": 0.9,
     })
     await classify_document(
-        relay=mock, title="t", excerpt=excerpt,
+        relay=mock, title=title, excerpt=excerpt,
         existing_taxonomy=list(taxonomy), model="claude-sonnet-4-6",
     )
     return _sent(mock)
@@ -118,6 +119,76 @@ async def test_subdomains_are_requested_so_files_can_be_placed_individually():
     # Optional on purpose: a plain document has none, and requiring it would force
     # the model to invent facets for a one-page note.
     assert "subdomains" not in CLASSIFICATION_SCHEMA["required"]
+
+
+@pytest.mark.asyncio
+async def test_the_title_is_sent_and_lands_in_the_uncached_half():
+    """`title` was accepted and then dropped on the floor.
+
+    It carries real signal — for an upload it is the filename, and repo ingest passes
+    the repo name. The evidence it mattered is that the fork's repo ingest worked
+    around the loss by pasting "Repository: <name>" into the excerpt itself. It has to
+    go in the DYNAMIC half: it varies per document, so a title in the cached block
+    would invalidate the cache on every call.
+    """
+    sentinel = "zzz-unique-title-marker"
+    blocks = (await _classify(title=sentinel))["messages"][0]["content"]
+    assert sentinel not in blocks[0]["text"], "the title leaked into the cached block"
+    assert sentinel in blocks[1]["text"], "the title never reached the model at all"
+
+
+@pytest.mark.parametrize("field,cap", [("secondary_domains", 3), ("subdomains", 8)])
+def test_the_list_facets_are_capped_after_the_parse_not_in_the_schema(field, cap):
+    """Where the cap lives is the point, so both halves are asserted.
+
+    The prompt asks for the counts and a healthy call obeys; this is the backstop.
+    It must be enforced in code rather than with `maxItems`, because `maxItems` in a
+    schema Ollama compiles into a decoding grammar was measured to be unreliable in
+    both directions — sometimes forcing the array shut mid-string (malformed JSON) or
+    cramming many values into one element to fit, and sometimes ignored outright. A
+    constraint that can corrupt the payload is worse than one that merely asks.
+
+    This matters downstream rather than cosmetically: every secondary domain becomes a
+    `document_domains` row, so an unbounded list writes unbounded graph edges.
+    """
+    prop = CLASSIFICATION_SCHEMA["properties"][field]
+    assert "maxItems" not in prop, (
+        "maxItems is unreliable on Ollama's grammar path — cap in _clamp_lists instead")
+    # No floor either: a plain document has no secondaries and no subdomains, and a
+    # minItems would force the model to invent them over an honest empty list.
+    assert "minItems" not in prop
+
+    over = {"primary_domain": "a/b/c", field: [f"x/y/z-{i}" for i in range(cap + 5)]}
+    assert len(classifier._clamp_lists(over)[field]) == cap
+    # Order preserved, so trimming keeps the model's own ranking.
+    assert classifier._clamp_lists(
+        {"primary_domain": "a/b/c", field: [f"x/y/z-{i}" for i in range(cap + 5)]}
+    )[field] == [f"x/y/z-{i}" for i in range(cap)]
+
+
+@pytest.mark.parametrize("payload,expected", [
+    ({"secondary_domains": None}, None),                    # null stays null, not []
+    ({"secondary_domains": "a/b/c"}, []),                   # a bare string is not a list
+    ({"secondary_domains": ["a/b/c", 7, None, "d/e/f"]}, ["a/b/c", "d/e/f"]),
+    ({}, None),                                             # absent stays absent
+])
+def test_clamping_tolerates_a_malformed_payload(payload, expected):
+    """A local model returns the wrong shape often enough to matter.
+
+    This sits directly upstream of code that iterates the value, so a bare string
+    would otherwise be iterated character by character into one domain per letter.
+    """
+    assert classifier._clamp_lists(dict(payload)).get("secondary_domains") == expected
+
+
+def test_clamping_survives_a_response_that_is_not_an_object():
+    """`complete_structured` returns whatever parsed — a bare JSON array parses fine.
+
+    Every caller indexes the result by key, so a list here would raise AttributeError
+    deep in the pipeline rather than at the boundary.
+    """
+    assert classifier._clamp_lists(["not", "a", "classification"]) == {}
+    assert classifier._clamp_lists({}) == {}
 
 
 def test_the_two_prompt_halves_compose_into_the_back_compat_constant():
