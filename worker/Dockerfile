@@ -7,8 +7,9 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Mirror repo layout so ../packages/orrery-relay resolves from pyproject.toml
+# Mirror repo layout so the ../packages/* path sources resolve from pyproject.toml
 COPY packages/orrery-relay/ /app/packages/orrery-relay/
+COPY packages/orrery-codesum/ /app/packages/orrery-codesum/
 
 WORKDIR /app/worker
 

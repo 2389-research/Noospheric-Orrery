@@ -902,6 +902,21 @@ class SQLiteCollectionRepository:
         self._conn.commit()
         return id
 
+    def get_by_path(self, path):
+        """Look up a collection by its unique `path` key, or None.
+
+        `collections.path` is UNIQUE, so callers that create a collection from a
+        user-supplied name need to check first — otherwise a repeat ingest surfaces as
+        an IntegrityError and a 500 rather than a conflict the caller can act on.
+        """
+        row = self._conn.execute(
+            "SELECT id, name, path, root_path, kind FROM collections WHERE path = ?", (path,)
+        ).fetchone()
+        if not row:
+            return None
+        return {"id": row["id"], "name": row["name"], "path": row["path"],
+                "root_path": row["root_path"], "kind": row["kind"]}
+
     def link_document(self, document_id, collection_id, *, parent_path=None,
                       role=None, emits_cooccurrence=None):
         """Attach a document to a collection at a position in its tree.

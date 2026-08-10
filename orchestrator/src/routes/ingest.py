@@ -11,7 +11,7 @@ from orrery_relay import Relay
 
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
-from ..models import IngestResult, DirectoryIngestRequest
+from ..models import IngestResult, DirectoryIngestRequest, RepoIngestRequest
 from ..pipeline.chunker import chunk_document
 from ..pipeline.excerpt import build_classification_excerpt
 from ..pipeline.classifier import classify_document
@@ -38,6 +38,7 @@ def _load_general_spec(name: str) -> str:
 
 GENERAL_TEXT_SPEC = _load_general_spec("general_text")
 GENERAL_IMAGE_SPEC = _load_general_spec("general_image")
+GENERAL_CODE_SPEC = _load_general_spec("general_code")
 
 
 def _unique_title(store, title: str) -> str:
@@ -409,3 +410,57 @@ async def ingest_directory(request: DirectoryIngestRequest, auth: AuthStore = De
         store.close()
 
     return {"documents": results, "total": len(results)}
+
+
+@router.post("/ingest/repo", status_code=status.HTTP_202_ACCEPTED)
+async def ingest_repo(request: RepoIngestRequest, auth: AuthStore = Depends(get_auth_store)):
+    """Summarize a git checkout into a collection of code_intent documents.
+
+    Returns 202 and does no model work inline: summarizing a repo is many LLM calls,
+    so this only creates the collection row and enqueues the phase-1 worker job. The
+    worker then enqueues phase 2 (extract_batch, scope=code_intent) itself.
+    """
+    dir_path = Path(request.path)
+    if not dir_path.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {request.path}")
+
+    store = auth.store
+    try:
+        # `collections.path` is UNIQUE, so a repeat ingest of the same name would
+        # otherwise surface as an IntegrityError and a 500. Report the conflict with
+        # the existing id so the caller can decide (re-ingest under a new name, or go
+        # look at what is already there).
+        existing = store.collections.get_by_path(request.name)
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Collection '{request.name}' already exists (id {existing['id']})")
+
+        # Reuse the existing general spec if the workspace has one, else seed the
+        # built-in general_code spec. Extraction is spec-driven, so a workspace with a
+        # simmered spec must keep using it rather than being reset by a repo ingest.
+        spec = store.specs.get_general()
+        if spec:
+            spec_id = spec.id
+        else:
+            spec_id = str(uuid.uuid4())
+            store.specs.create(spec_id, None, 1, GENERAL_CODE_SPEC)
+
+        # Classification is deliberately NOT done here. It happens in the worker, on
+        # the grounded repo-level summary (read the code, then decide) rather than on a
+        # README excerpt — which works for undocumented repos too, and aligns the
+        # domain with the vocabulary the extraction actually produces.
+        collection_id = str(uuid.uuid4())
+        store.collections.create(collection_id, request.name, request.name, request.path)
+
+        job_id = str(uuid.uuid4())
+        store.jobs.create(job_id, "ingest_repo", collection_id, {
+            "root_path": request.path,
+            "collection_id": collection_id,
+            "collection_name": request.name,
+            "spec_id": spec_id,
+        })
+    finally:
+        store.close()
+
+    return {"job_id": job_id, "collection_id": collection_id}

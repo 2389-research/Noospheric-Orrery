@@ -94,14 +94,20 @@ CLASSIFICATION_SCHEMA = {
     "required": ["primary_domain", "secondary_domains", "confidence"],
 }
 
-# Ollama context window for classification. The rendered prompt is ~2.4k tokens of
-# static instructions + reference vocabulary, PLUS an existing-taxonomy block that
-# grows with the graph (a few hundred domains is another ~2-4k), so it clears the
-# 4096 default and keeps climbing. Ollama truncates from the LEFT and says nothing,
-# which would silently discard the instructions and the vocabulary and leave the
-# model answering from the excerpt alone — the classification still looks
-# well-formed, it is just ungrounded, and near-duplicate domain paths (the exact
-# thing the reference vocabulary exists to prevent) are the only symptom.
+# Ollama context window for classification. This is a CAP, not a floor — a correction
+# to what this comment previously claimed. Measured on the current Ollama: with num_ctx
+# UNSET the context is sized to the prompt (a 15k-token prompt was counted in full), and
+# truncation happens only when num_ctx is explicitly set BELOW the prompt — at 4096 a
+# 5.1k-token prompt was counted as 2051, silently discarding the instructions and the
+# reference vocabulary from the head and leaving the model answering from the excerpt
+# alone. So the value here has to stay comfortably ABOVE the largest prompt this
+# function can build, or it becomes the bug it was meant to prevent.
+#
+# It is set at all for portability: older Ollama releases default to 2048/4096 rather
+# than auto-sizing, and this runs against whatever Ollama the user has. Headroom check:
+# ~2.4k static instructions + vocabulary, plus an existing-taxonomy block that grows
+# with the graph (~2.3k at 145 domains). If a deployment's taxonomy ever approaches
+# ~12k tokens, raise this — do not remove the num_ctx and hope the default auto-sizes.
 _OLLAMA_OPTIONS = {"num_ctx": 16384}
 
 # Binding caps for the list facets, applied after the parse. The prompt asks for these

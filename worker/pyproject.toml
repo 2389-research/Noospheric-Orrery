@@ -9,6 +9,7 @@ dependencies = [
     # simmer-sdk: install from PyPI or local path (see worker/Dockerfile)
     # "simmer-sdk>=0.2.0",
     "orrery-relay",
+    "orrery-codesum",
 ]
 
 [project.optional-dependencies]
@@ -19,6 +20,7 @@ dev = [
 
 [tool.uv.sources]
 orrery-relay = { path = "../packages/orrery-relay" }
+orrery-codesum = { path = "../packages/orrery-codesum" }
 torch = { index = "pytorch-cpu" }
 
 [[tool.uv.index]]

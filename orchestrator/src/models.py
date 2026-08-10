@@ -69,3 +69,14 @@ class IngestResult(BaseModel):
 
 class DirectoryIngestRequest(BaseModel):
     path: str
+
+
+class RepoIngestRequest(BaseModel):
+    """A git checkout to summarize into a collection of code_intent documents.
+
+    `path` is a server-side directory, not an upload: the repo is read where it sits
+    and only the SUMMARIES are stored (the graph is a map over the code, not a copy
+    of it). `name` becomes the collection's name and its unique `path` key.
+    """
+    path: str
+    name: str

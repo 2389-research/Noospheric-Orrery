@@ -353,11 +353,78 @@ class Relay:
 
         return {}
 
+    def _complete_ollama_sync(
+        self, model: str, messages: list[dict], max_tokens: int,
+        system: str | None = None, temperature: float | None = None,
+        **kwargs: Any,
+    ) -> RelayResponse:
+        """Synchronous Ollama completion via the native /api/chat endpoint.
+
+        Sync twin of `_complete_ollama`, and required rather than cosmetic. Ollama does
+        serve an Anthropic-compatible /v1/messages endpoint, so the SDK sync client can
+        reach it — but that shim leaves THINKING ENABLED. Measured on gemma4:e4b: a
+        one-word request finishes reasoning and emits a text block, while any
+        substantive prompt spends the entire max_tokens budget inside a `thinking`
+        block (stop_reason=max_tokens) and returns NO text block at all, so `.text` is
+        empty. That is the same failure `_complete_ollama` avoids with `think: False`,
+        and it silently produced blank output rather than an error.
+
+        This matters because orrery-codesum summarizes a repository through
+        `complete_sync` exclusively (its traversal is synchronous), so on the shim every
+        file summary would come back empty.
+        """
+        import httpx
+
+        ollama_messages, _ = _anthropic_to_ollama_messages(messages, system)
+        if system:
+            ollama_messages.insert(0, {"role": "system", "content": system})
+        has_images = any("images" in m for m in ollama_messages)
+
+        body: dict[str, Any] = {
+            "model": model, "messages": ollama_messages, "stream": False,
+            "think": False,   # the whole reason this path exists — see the docstring
+        }
+        if not has_images:
+            body["options"] = {"num_predict": max_tokens}
+        if temperature is not None:
+            body.setdefault("options", {})["temperature"] = temperature
+        # Same passthroughs as the async path. NOTE num_ctx is a CAP, not a floor:
+        # left unset, current Ollama sizes the context to the prompt (measured: a
+        # 15k-token prompt counted in full), so passing a value BELOW the prompt is
+        # what causes silent left-truncation. Only set it when you know the ceiling.
+        ollama_options = kwargs.get("ollama_options")
+        if ollama_options:
+            body.setdefault("options", {}).update(ollama_options)
+        response_format = kwargs.get("format")
+        if response_format is not None:
+            body["format"] = response_format
+
+        start = time.monotonic()
+
+        def _call() -> Any:
+            with httpx.Client(timeout=300) as client:
+                resp = client.post(f"{self._ollama_url}/api/chat", json=body)
+                resp.raise_for_status()
+                return resp.json()
+
+        data = with_retry_sync(_call, max_retries=self._max_retries, base_delay=self._base_delay, max_delay=self._max_delay)
+        elapsed = (time.monotonic() - start) * 1000
+        text = data.get("message", {}).get("content", "")
+        input_tokens = data.get("prompt_eval_count", 0)
+        output_tokens = data.get("eval_count", 0)
+        logger.info("complete_sync model=%s backend=ollama tokens=%d/%d latency=%.0fms",
+                    model, input_tokens, output_tokens, elapsed)
+        return RelayResponse(raw=data, text=text, input_tokens=input_tokens,
+                             output_tokens=output_tokens, model=model,
+                             latency_ms=elapsed, backend="ollama")
+
     def complete_sync(
         self, model: str, messages: list[dict], max_tokens: int,
         system: str | None = None, temperature: float | None = None,
         **kwargs: Any,
     ) -> RelayResponse:
+        if self._backend == "ollama":
+            return self._complete_ollama_sync(model, messages, max_tokens, system, temperature, **kwargs)
         if self._sync_client is None:
             self._sync_client = create_sync_client(
                 backend=self._backend, gateway_url=self._gateway_url, gateway_api_key=self._gateway_api_key,
