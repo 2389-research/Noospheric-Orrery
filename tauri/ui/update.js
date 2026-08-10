@@ -59,10 +59,8 @@ async function runInstall(card, statusEl) {
     const { downloaded, total } = e.payload;
     if (total) {
       fill.style.width = `${Math.min(100, Math.round((downloaded / total) * 100))}%`;
-      statusEl.textContent = `Downloading… ${Math.round(downloaded / 1e6)} MB`;
-    } else {
-      statusEl.textContent = `Downloading… ${Math.round(downloaded / 1e6)} MB`;
     }
+    statusEl.textContent = `Downloading… ${Math.round(downloaded / 1e6)} MB`;
   });
   try {
     await invoke("install_update");
@@ -102,6 +100,7 @@ async function mountUpdateFlow({ container, mode, onDone }) {
     }
     card.appendChild(el("h2", "ou-title", "Couldn't check for updates"));
     card.appendChild(el("p", "ou-error", info.__error));
+    card.appendChild(el("p", "ou-notes", "You can close this window."));
     container.appendChild(card);
     return;
   }
@@ -134,10 +133,14 @@ async function mountUpdateFlow({ container, mode, onDone }) {
     card.remove();
     done();
   });
-  install.addEventListener("click", () => {
+  install.addEventListener("click", async () => {
     install.disabled = true;
     later.disabled = true;
-    runInstall(card, status);
+    await runInstall(card, status);
+    // Reached only if the install failed — a successful install restarts the
+    // app, so control never returns here. Re-enable dismiss so the user can
+    // still proceed (in launch mode, dismissing is what boots the app).
+    later.disabled = false;
   });
 }
 
