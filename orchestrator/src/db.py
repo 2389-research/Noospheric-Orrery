@@ -287,6 +287,170 @@ CREATE TABLE IF NOT EXISTS collection_edges (
 );
 """
 
+# repos/* -> collections/*. Applied BEFORE the schema script (see migrate_to_collections).
+_LEGACY_TABLES = [
+    ("repos", "collections"),
+    ("document_repos", "document_collections"),
+    ("repo_edges", "collection_edges"),
+]
+_LEGACY_COLUMNS = [
+    ("document_collections", "repo_id", "collection_id"),
+    ("collection_edges", "from_repo", "source"),
+    ("collection_edges", "to_repo", "target"),
+]
+
+
+def migrate_to_collections(conn) -> None:
+    """Rename the repo-era tables and columns in place.
+
+    MUST run BEFORE `executescript(SCHEMA)`. `CREATE TABLE IF NOT EXISTS collections`
+    would otherwise create an EMPTY table beside the populated `repos`, the rename
+    would then fail with "table collections already exists", and every existing corpus
+    would be stranded behind an empty one — silently, since reads would just return
+    nothing.
+
+    `ALTER TABLE ... RENAME TO` also rewrites REFERENCES clauses in other tables
+    (SQLite >= 3.25 with legacy_alter_table off, the default), so the foreign keys
+    follow automatically. Idempotent: each step is skipped once it has been applied.
+
+    ATOMIC. SQLite makes DDL transactional, so the whole sequence runs inside a
+    savepoint: a failure part-way through would otherwise leave one table renamed and
+    the next not — exactly the half-migrated state the preflight below refuses to
+    start from, reached by a different route and with no way to retry out of it.
+    """
+    conn.execute("SAVEPOINT collections_migration")
+    try:
+        _migrate_to_collections(conn)
+    except Exception:
+        conn.execute("ROLLBACK TO collections_migration")
+        conn.execute("RELEASE collections_migration")
+        raise
+    conn.execute("RELEASE collections_migration")
+
+
+def _migrate_to_collections(conn) -> None:
+    """The migration body. Always call `migrate_to_collections`, which makes it atomic."""
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    # PREFLIGHT every pair before touching anything. Raising mid-loop would leave the
+    # database half-renamed — one table moved, the next not — which is a worse state
+    # than the one being refused, and init_db would fail identically on every retry.
+    conflicts = [(old, new) for old, new in _LEGACY_TABLES
+                 if old in tables and new in tables]
+    if conflicts:
+        # Rows live under each name and the schema script is about to make the new
+        # name authoritative, silently orphaning everything still under the old one.
+        # No safe automatic merge exists (ids can collide), so stop loudly.
+        pairs = ", ".join(f"{o!r}+{n!r}" for o, n in conflicts)
+        raise RuntimeError(
+            f"cannot migrate: both names exist for {pairs}. Rows under the old name "
+            f"would become unreachable. Merge them by hand, then drop the old table.")
+    for old, new in _LEGACY_TABLES:
+        if old in tables and new not in tables:
+            conn.execute(f"ALTER TABLE {old} RENAME TO {new}")
+            tables.discard(old)
+            tables.add(new)
+    for table, old_col, new_col in _LEGACY_COLUMNS:
+        if table not in tables:
+            continue
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if old_col in cols and new_col not in cols:
+            conn.execute(f"ALTER TABLE {table} RENAME COLUMN {old_col} TO {new_col}")
+    # The index survives the table rename but keeps its old NAME; the schema script
+    # recreates it as idx_document_collections_collection.
+    conn.execute("DROP INDEX IF EXISTS idx_document_repos_repo")
+    # The stored discriminator followed the tables. `repo_uses` was the repo-era name
+    # for what the contract has always exposed as `uses`; writers now emit `uses`
+    # directly. Idempotent — a second pass matches nothing.
+    # Guarded: this runs BEFORE the schema script, so on a fresh database the table
+    # does not exist yet — and there is nothing to migrate there anyway.
+    if "collection_edges" in tables:
+        # A pair can carry BOTH spellings after a mixed-version deploy (one process
+        # writing `repo_uses`, another `uses`). A bare UPDATE then violates the
+        # composite key (source, target, type) and init_db raises — the database stops
+        # opening at all. So fold the duplicates first, keeping the larger weight,
+        # then rewrite what is left.
+        conn.execute("""UPDATE collection_edges SET weight = MAX(weight, (
+                            SELECT r.weight FROM collection_edges r
+                            WHERE r.source = collection_edges.source
+                              AND r.target = collection_edges.target
+                              AND r.type = 'repo_uses'))
+                        WHERE type = 'uses' AND EXISTS (
+                            SELECT 1 FROM collection_edges r
+                            WHERE r.source = collection_edges.source
+                              AND r.target = collection_edges.target
+                              AND r.type = 'repo_uses')""")
+        conn.execute("""DELETE FROM collection_edges WHERE type = 'repo_uses' AND EXISTS (
+                            SELECT 1 FROM collection_edges r
+                            WHERE r.source = collection_edges.source
+                              AND r.target = collection_edges.target
+                              AND r.type = 'uses')""")
+        conn.execute("UPDATE collection_edges SET type = 'uses' WHERE type = 'repo_uses'")
+
+
+
+
+def _migrate_collection_columns(conn) -> None:
+    """Bring a RENAMED legacy collection table up to the current column set.
+
+    `migrate_to_collections` moves `repos` -> `collections`, but a renamed table keeps
+    its old COLUMNS, and `CREATE TABLE IF NOT EXISTS` adds none to a table that already
+    exists. So a legacy corpus arrives with the right table names and the wrong shape,
+    and the reads that select `role` or filter `emits_cooccurrence` fail on it — or
+    worse, a column added with a DEFAULT reads as though it had been chosen.
+
+    Must run AFTER the schema script (the tables have to exist on a fresh database).
+    Idempotent: every step is guarded on the column being absent.
+    """
+    coll_cols = {r[1] for r in conn.execute("PRAGMA table_info(collections)").fetchall()}
+    for col, decl in [("pos_x", "REAL"), ("pos_y", "REAL"),
+                      ("remote_url", "TEXT"), ("commit_sha", "TEXT")]:
+        if col not in coll_cols:
+            conn.execute(f"ALTER TABLE collections ADD COLUMN {col} {decl}")
+    # `kind` discriminates a git repo from a tracker run. Legacy corpora predate it and
+    # `remote_url IS NULL` is not a proxy (a locally-ingested repo has it NULL too).
+    if "kind" not in coll_cols:
+        conn.execute("ALTER TABLE collections ADD COLUMN kind TEXT DEFAULT 'git_repo'")
+        conn.execute("UPDATE collections SET kind = 'git_repo' WHERE kind IS NULL")
+    # Recover the kind of collections ingested before that column existed.
+    # `chain_next` is written by exactly one code path — tracker-run ingest — so
+    # participating in such an edge is a fact about provenance, not a guess. Defaulting
+    # these to 'git_repo' would mislabel an entire trajectory corpus on first open.
+    # Limitation: a corpus of ONE run has no chain edge and stays 'git_repo'. Partial
+    # recovery beats none, and re-ingesting sets `kind` directly.
+    conn.execute("""UPDATE collections SET kind = 'tracker_run'
+                    WHERE kind = 'git_repo' AND id IN (
+                        SELECT source FROM collection_edges WHERE type = 'chain_next'
+                        UNION
+                        SELECT target FROM collection_edges WHERE type = 'chain_next')""")
+
+    # `role` + `emits_cooccurrence` replaced the overloaded `level`, which did three
+    # unrelated jobs: structural position, a co-occurrence switch (`level == 'file'`),
+    # and the lookup key for a collection's own summary doc.
+    dc_cols = {r[1] for r in conn.execute("PRAGMA table_info(document_collections)").fetchall()}
+    if "role" not in dc_cols:
+        conn.execute("ALTER TABLE document_collections ADD COLUMN role TEXT")
+    if "emits_cooccurrence" not in dc_cols:
+        conn.execute("ALTER TABLE document_collections ADD COLUMN emits_cooccurrence INTEGER DEFAULT 1")
+    # Only a MIGRATED table has `level`; this schema never creates it, so the backfill
+    # is guarded on the column's presence rather than assuming it (the fork's version
+    # could assume it — its schema still declared the column — and copying that
+    # verbatim would raise "no such column: level" on every fresh database).
+    if "level" in dc_cols:
+        # Scoped to `level IS NOT NULL`, which is exactly the legacy rows: writers on
+        # this schema set role/emits_cooccurrence and never write `level`. Idempotent,
+        # and it cannot overwrite a value a current writer chose. It CANNOT be gated on
+        # `emits_cooccurrence IS NULL` instead — ADD COLUMN ... DEFAULT 1 backfills
+        # existing rows with 1, so there is no NULL sentinel left to detect.
+        conn.execute("""UPDATE document_collections SET
+                            role = CASE level
+                                WHEN 'repo' THEN 'root'
+                                WHEN 'module' THEN 'group'
+                                WHEN 'file' THEN 'leaf'
+                            END,
+                            emits_cooccurrence = CASE WHEN level = 'file' THEN 1 ELSE 0 END
+                        WHERE level IS NOT NULL""")
+
 def init_db(db_path: str) -> None:
     # Fast path: skip migrations if we've already initialized this DB in this process.
     if db_path in _initialized:
@@ -298,6 +462,7 @@ def init_db(db_path: str) -> None:
         # One factory owns WAL + busy_timeout; init_db must not re-specify them.
         conn = get_connection(db_path)
         try:
+            migrate_to_collections(conn)   # MUST run BEFORE the schema script — see above
             conn.executescript(SCHEMA)
             # Migrate: add columns for image support if missing
             cols = {r[1] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
@@ -344,6 +509,8 @@ def init_db(db_path: str) -> None:
                     conn.execute(f"ALTER TABLE normalization_log ADD COLUMN {col} {decl}")
             # Backfill: existing merge-log rows predate `action`
             conn.execute("UPDATE normalization_log SET action = 'merge' WHERE action IS NULL")
+
+            _migrate_collection_columns(conn)
 
             # entity_sources has no primary key, so without this the graph build's
             # per-entity source_count and the trade-route self-joins scan the whole
