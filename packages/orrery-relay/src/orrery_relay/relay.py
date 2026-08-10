@@ -50,6 +50,18 @@ def _anthropic_to_ollama_messages(messages: list[dict], system: str | None = Non
     return result, system
 
 
+# Kwargs that only mean something to the native Ollama endpoint. They must be
+# stripped before the Anthropic SDK call: `messages.create()` has a closed
+# signature and raises TypeError on an unknown keyword, so a caller that passes
+# `ollama_options` unconditionally (the right thing — it cannot know the backend)
+# would otherwise break the moment ANTHROPIC_BACKEND is bedrock or gateway.
+_OLLAMA_ONLY_KWARGS = ("ollama_options", "format")
+
+
+def _strip_ollama_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in kwargs.items() if k not in _OLLAMA_ONLY_KWARGS}
+
+
 def _parse_json_from_text(text: str) -> dict | None:
     """Try to extract a JSON object from text that may have markdown fences."""
     text = text.strip()
@@ -192,6 +204,22 @@ class Relay:
             body["options"] = {"num_predict": max_tokens}
         if temperature is not None:
             body.setdefault("options", {})["temperature"] = temperature
+        # Extra native Ollama options (e.g. num_ctx). Ollama's default context is
+        # small (4096) and it truncates the prompt SILENTLY from the LEFT, so a
+        # caller feeding long input (a rendered reference vocabulary, a whole file,
+        # a node trace) must raise num_ctx or the model answers from a prompt whose
+        # head — the instructions — has been cut off. There is no error and the
+        # output still looks well-formed, which is what makes it dangerous.
+        # Merged last so an explicit caller value wins.
+        ollama_options = kwargs.get("ollama_options")
+        if ollama_options:
+            body.setdefault("options", {}).update(ollama_options)
+        # Native structured output: a JSON schema in `format` makes Ollama do
+        # grammar-constrained decoding, so the model CANNOT emit tokens that break
+        # the schema. Passed through from complete_structured; ignored otherwise.
+        response_format = kwargs.get("format")
+        if response_format is not None:
+            body["format"] = response_format
 
         start = time.monotonic()
 
@@ -234,7 +262,7 @@ class Relay:
         if temperature is not None: call_kwargs["temperature"] = temperature
         if tools is not None: call_kwargs["tools"] = tools
         if tool_choice is not None: call_kwargs["tool_choice"] = tool_choice
-        call_kwargs.update(kwargs)
+        call_kwargs.update(_strip_ollama_kwargs(kwargs))
 
         start = time.monotonic()
         async def _call() -> Any:
@@ -254,10 +282,13 @@ class Relay:
             text = "\n".join(text_parts)
         input_tokens = raw.usage.input_tokens
         output_tokens = raw.usage.output_tokens
+        # getattr: these are absent on backends/SDK versions without prompt caching.
+        cache_creation = getattr(raw.usage, "cache_creation_input_tokens", 0) or 0
+        cache_read = getattr(raw.usage, "cache_read_input_tokens", 0) or 0
 
-        logger.info("complete model=%s backend=%s tokens=%d/%d latency=%.0fms", model, self._backend, input_tokens, output_tokens, elapsed)
+        logger.info("complete model=%s backend=%s tokens=%d/%d cache=%d/%d latency=%.0fms", model, self._backend, input_tokens, output_tokens, cache_creation, cache_read, elapsed)
 
-        response = RelayResponse(raw=raw, text=text, input_tokens=input_tokens, output_tokens=output_tokens, model=model, latency_ms=elapsed, backend=self._backend)
+        response = RelayResponse(raw=raw, text=text, input_tokens=input_tokens, output_tokens=output_tokens, model=model, latency_ms=elapsed, backend=self._backend, cache_creation_input_tokens=cache_creation, cache_read_input_tokens=cache_read)
 
         if self._on_usage:
             from datetime import datetime, timezone
@@ -279,9 +310,13 @@ class Relay:
         For Ollama: prompts for JSON and parses from text response.
         """
         if self._backend == "ollama":
-            schema_hint = json.dumps(schema, indent=2)
-            json_instruction = f"\n\nReturn your response as a JSON object matching this schema:\n{schema_hint}\n\nReturn ONLY the JSON object, no other text."
-
+            # Enforce the schema via Ollama's native structured output (grammar-
+            # constrained decoding) — the model cannot produce invalid JSON. This
+            # replaces spelling the whole schema out in the prompt, which both cost
+            # tokens on a context Ollama silently truncates and only *asked* for
+            # valid JSON. A short nudge still helps quality (Ollama's own guidance),
+            # but `format` is what guarantees parseability.
+            json_instruction = "\n\nReturn ONLY a JSON value matching the required schema — no prose, no markdown fences."
             augmented = list(messages)
             if augmented and augmented[-1]["role"] == "user":
                 content = augmented[-1]["content"]
@@ -290,7 +325,10 @@ class Relay:
                 elif isinstance(content, list):
                     augmented[-1] = {**augmented[-1], "content": content + [{"type": "text", "text": json_instruction}]}
 
-            response = await self._complete_ollama(model, augmented, max_tokens, system, temperature, **kwargs)
+            # Drop any caller-supplied `format` so the schema is the only one in play.
+            call_kwargs = {k: v for k, v in kwargs.items() if k != "format"}
+            response = await self._complete_ollama(
+                model, augmented, max_tokens, system, temperature, format=schema, **call_kwargs)
             parsed = _parse_json_from_text(response.text)
             return parsed if parsed is not None else {}
 
@@ -330,7 +368,7 @@ class Relay:
         call_kwargs: dict[str, Any] = {"model": mapped_model, "messages": messages, "max_tokens": max_tokens}
         if system is not None: call_kwargs["system"] = system
         if temperature is not None: call_kwargs["temperature"] = temperature
-        call_kwargs.update(kwargs)
+        call_kwargs.update(_strip_ollama_kwargs(kwargs))
 
         start = time.monotonic()
         def _call() -> Any:
@@ -339,5 +377,7 @@ class Relay:
 
         elapsed = (time.monotonic() - start) * 1000
         text = "\n".join(b.text for b in raw.content if hasattr(b, "text")) if raw.content else ""
-        logger.info("complete_sync model=%s backend=%s tokens=%d/%d latency=%.0fms", model, self._backend, raw.usage.input_tokens, raw.usage.output_tokens, elapsed)
-        return RelayResponse(raw=raw, text=text, input_tokens=raw.usage.input_tokens, output_tokens=raw.usage.output_tokens, model=model, latency_ms=elapsed, backend=self._backend)
+        cache_creation = getattr(raw.usage, "cache_creation_input_tokens", 0) or 0
+        cache_read = getattr(raw.usage, "cache_read_input_tokens", 0) or 0
+        logger.info("complete_sync model=%s backend=%s tokens=%d/%d cache=%d/%d latency=%.0fms", model, self._backend, raw.usage.input_tokens, raw.usage.output_tokens, cache_creation, cache_read, elapsed)
+        return RelayResponse(raw=raw, text=text, input_tokens=raw.usage.input_tokens, output_tokens=raw.usage.output_tokens, model=model, latency_ms=elapsed, backend=self._backend, cache_creation_input_tokens=cache_creation, cache_read_input_tokens=cache_read)

@@ -1,8 +1,8 @@
 """UMAP-based domain layout with anchor domains for stable positioning.
 
-Uses 100 pre-defined anchor domains to establish a well-distributed semantic
-space on the first fit. User domains slot into meaningful positions from the
-start, regardless of what they upload first.
+Uses the canonical taxonomy's paths as anchor domains to establish a
+well-distributed semantic space on the first fit. User domains slot into
+meaningful positions from the start, regardless of what they upload first.
 
 New domains added after the initial fit are placed via embedding similarity
 to the nearest positioned domain (no UMAP transform() call — avoids the
@@ -10,26 +10,21 @@ NUMBA_DISABLE_JIT / ARM Docker incompatibility).
 """
 
 from __future__ import annotations
-import json
 import pickle
 import sqlite3
-from pathlib import Path
 import numpy as np
 
 
-# Anchor domains for UMAP space initialization
-_ANCHORS_PATH = Path(__file__).resolve().parent.parent.parent / "specs" / "universal_domains.json"
-_ANCHOR_DOMAINS: list[str] | None = None
-
-
 def _get_anchor_domains() -> list[str]:
-    """Load the 100 universal anchor domains."""
-    global _ANCHOR_DOMAINS
-    if _ANCHOR_DOMAINS is None:
-        with open(_ANCHORS_PATH) as f:
-            data = json.load(f)
-        _ANCHOR_DOMAINS = data["domains"]
-    return _ANCHOR_DOMAINS
+    """Anchor domains for UMAP space initialization — the flattened paths from
+    the canonical taxonomy (specs/taxonomy.json), the SAME source the classifier
+    renders its reference vocabulary from. Anchors and the classifier's output
+    vocabulary must span the same space: anchoring on paths the classifier never
+    emits leaves real domains with no nearby anchor to slot against. Spanning the
+    company's real breadth (software + business + product + operations + people +
+    research) also keeps any one region from collapsing into a corner."""
+    from .taxonomy import anchor_paths
+    return anchor_paths()
 
 
 def _embed_texts(texts: list[str]) -> np.ndarray | None:

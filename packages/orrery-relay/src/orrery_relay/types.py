@@ -18,6 +18,12 @@ class RelayResponse:
     model: str
     latency_ms: float
     backend: str
+    # Prompt-caching usage (Anthropic/Bedrock only; 0 on ollama). cache_read is
+    # billed at ~0.1x input, cache_creation at ~1.25x — a caller that marks a
+    # cache breakpoint needs these to confirm the block is actually being reused
+    # rather than silently re-billed at full price on every call.
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
 
 @dataclass
