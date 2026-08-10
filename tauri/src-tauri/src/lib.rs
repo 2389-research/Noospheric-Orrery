@@ -668,6 +668,25 @@ fn open_logs_window(app: &tauri::AppHandle) {
     .build();
 }
 
+/// Open (or focus) the software-update window — the manual "Check for
+/// Updates…" entry point. Runs the same update flow as launch, in its own
+/// window because after launch the main window has navigated to the frontend.
+fn open_updates_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("updates") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    let _ = tauri::WebviewWindowBuilder::new(
+        app,
+        "updates",
+        tauri::WebviewUrl::App("updates.html".into()),
+    )
+    .title("Noospheric — Software Update")
+    .inner_size(520.0, 420.0)
+    .build();
+}
+
 /// Navigate the main window back to the bundled settings screen, marked
 /// with `?settings=1` so index.html's init() shows the form immediately
 /// (pre-filled with current values) instead of only on first run.
@@ -749,9 +768,15 @@ pub fn run() {
                 MenuItem::with_id(app, "view-logs", "Service Logs", true, Some("CmdOrCtrl+L"))?;
             let settings_item =
                 MenuItem::with_id(app, "change-settings", "Change Settings…", true, None::<&str>)?;
+            let updates_item =
+                MenuItem::with_id(app, "check-updates", "Check for Updates…", true, None::<&str>)?;
             let quit = PredefinedMenuItem::quit(app, None)?;
-            let submenu =
-                Submenu::with_items(app, "Noospheric", true, &[&logs_item, &settings_item, &quit])?;
+            let submenu = Submenu::with_items(
+                app,
+                "Noospheric",
+                true,
+                &[&logs_item, &settings_item, &updates_item, &quit],
+            )?;
             // A custom menu overrides the default Edit menu; without these
             // predefined items, Cmd+X/C/V/A don't work in webview text fields
             // (e.g. pasting the API key into the settings form).
@@ -808,6 +833,8 @@ pub fn run() {
                 open_logs_window(app);
             } else if event.id() == "change-settings" {
                 reopen_settings(app);
+            } else if event.id() == "check-updates" {
+                open_updates_window(app);
             }
         })
         .on_window_event(|window, event| {
