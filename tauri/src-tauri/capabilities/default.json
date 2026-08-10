@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main and logs windows",
-  "windows": ["main", "logs"],
+  "description": "Capability for the main, logs, and updates windows",
+  "windows": ["main", "logs", "updates"],
   "permissions": [
     "core:default",
     "opener:default"
