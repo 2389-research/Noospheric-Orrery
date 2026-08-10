@@ -74,3 +74,52 @@ No quest-completion tracking needed for quest 11 — it's the finale, not a chec
 - Exact fixture location for `news_small/` inside the repo.
 - Quest 10's fallback graph domain/content.
 - Exact name/location of the `design-your-orrery` skill.
+
+## Revision 1 — UX feedback from first demo (2026-08-10)
+
+The first implementation rendered every Part/quest as static cards on one long page, all visible at
+once. Feedback from trying it:
+
+1. **Not interactive enough, too much on one page.** A wall of cards for every quest across all
+   three Parts, all visible from the first paint, reads as a form to scroll through rather than a
+   guided experience.
+2. **Domains found should be shown**, not just counted. The classify quest showed `Domains found: N`
+   — the actual payoff (seeing real domain paths, including invented ones like
+   `research/concepts/reference-notes`, next to anchored ones like `business/finance/accounting`)
+   was hidden.
+3. **The first ingested file should show up immediately**, not on the next 3s poll tick. Ingesting
+   one document should feel instant — the response from `POST /ingest` already contains the new
+   document's title, domains, and entity_count, and should update UI state synchronously rather than
+   waiting for the next polling cycle to reflect it.
+
+### Revised interaction model: one active quest at a time
+
+Replace the all-quests-visible layout with a **single-focus stepper**: only the current active
+quest renders as a full card in the main content area; completed quests collapse into the Quest Log
+sidebar (already designed) as single lines with their lore blurb, and not-yet-reached quests aren't
+rendered in the main area at all (they already exist, greyed out, in the Quest Log — that's the
+"what's coming" preview, not a second copy of the interactive card). Advancing to the next quest's
+card happens automatically the instant the current quest's completion condition is met — no "Next"
+button required for quests that complete via a real action (ingest, simmer, normalize, search), since
+the action itself is the advance signal. Quests that require deliberate exploration (e.g. "descend
+into a collection") keep a manual "I did this" affordance, per the original design.
+
+This changes the Architecture section's UI shape but not its data model: `TutorialProvider` still
+computes quest state from real data, it just also tracks a single `activeQuestIndex` (first
+not-done quest in Part order) that the page uses to decide which one card to render.
+
+### Domains: show the list, not the count
+
+The classify quest (and any other place domain count was surfaced) renders the actual list of
+domain paths returned by `/domains`, grouped visually into "anchored" (matches an existing taxonomy
+path) vs. "invented" (does not) if that distinction is cheap to compute client-side, or as a flat
+list of paths if not. The count remains as a small badge, not the primary content.
+
+### Immediate ingest feedback
+
+`ingestFile()`'s response (`{document_id, title, domains, entity_count}`) is applied directly to
+local component state the moment each upload call resolves, instead of relying solely on the next
+poll tick of `/documents`/`/domains`/`/entities`. The 3s poll remains as the source of truth for
+everything the ingest response doesn't cover (job status, normalization state) and to reconcile if
+an optimistic update and the polled state ever diverge, but the user sees their first document (and
+its domains) appear the moment the request completes, not up to 3 seconds later.
