@@ -64,6 +64,7 @@ async function runInstall(card, statusEl) {
   });
   try {
     await invoke("install_update");
+    un();
     statusEl.textContent = "Installing… the app will restart.";
   } catch (err) {
     un();
@@ -75,73 +76,79 @@ async function runInstall(card, statusEl) {
 
 // mode: "launch" | "manual"
 async function mountUpdateFlow({ container, mode, onDone }) {
-  ensureStyle();
   const done = typeof onDone === "function" ? onDone : () => {};
-
-  let info;
   try {
-    info = await withTimeout(invoke("check_for_update"), 5000, { __timedOut: true });
+    ensureStyle();
+
+    let info;
+    try {
+      info = await withTimeout(invoke("check_for_update"), 5000, { __timedOut: true });
+    } catch (err) {
+      info = { __error: String(err) };
+    }
+
+    // Fail-open on timeout: never block launch on a slow/hung check.
+    if (info && info.__timedOut) {
+      done();
+      return;
+    }
+
+    const card = el("div", "ou-card");
+
+    if (info && info.__error) {
+      if (mode !== "manual") {
+        done();
+        return;
+      }
+      card.appendChild(el("h2", "ou-title", "Couldn't check for updates"));
+      card.appendChild(el("p", "ou-error", info.__error));
+      card.appendChild(el("p", "ou-notes", "You can close this window."));
+      container.appendChild(card);
+      return;
+    }
+
+    if (!info) {
+      if (mode !== "manual") {
+        done();
+        return;
+      }
+      card.appendChild(el("h2", "ou-title", "You're up to date"));
+      card.appendChild(el("p", "ou-notes", "You can close this window."));
+      container.appendChild(card);
+      return;
+    }
+
+    // An update is available.
+    card.appendChild(el("h2", "ou-title", `Version ${info.version} is available`));
+    if (info.notes) card.appendChild(el("p", "ou-notes", info.notes));
+    const status = el("div", "ou-status");
+    const row = el("div", "ou-row");
+    const install = el("button", "ou-btn", "Install & Restart");
+    const later = el("button", "ou-btn ghost", mode === "manual" ? "Close" : "Not now");
+    row.appendChild(install);
+    row.appendChild(later);
+    card.appendChild(row);
+    card.appendChild(status);
+    container.appendChild(card);
+
+    later.addEventListener("click", () => {
+      card.remove();
+      done();
+    });
+    install.addEventListener("click", async () => {
+      install.disabled = true;
+      later.disabled = true;
+      await runInstall(card, status);
+      // Reached only if the install failed — a successful install restarts the
+      // app, so control never returns here. Re-enable dismiss so the user can
+      // still proceed (in launch mode, dismissing is what boots the app).
+      later.disabled = false;
+    });
   } catch (err) {
-    info = { __error: String(err) };
-  }
-
-  // Fail-open on timeout: never block launch on a slow/hung check.
-  if (info && info.__timedOut) {
+    // Fail-open: an unexpected error must never hang launch (onDone gates boot).
+    console.error("update flow failed:", err);
     done();
-    return;
   }
-
-  const card = el("div", "ou-card");
-
-  if (info && info.__error) {
-    if (mode !== "manual") {
-      done();
-      return;
-    }
-    card.appendChild(el("h2", "ou-title", "Couldn't check for updates"));
-    card.appendChild(el("p", "ou-error", info.__error));
-    card.appendChild(el("p", "ou-notes", "You can close this window."));
-    container.appendChild(card);
-    return;
-  }
-
-  if (!info) {
-    if (mode !== "manual") {
-      done();
-      return;
-    }
-    card.appendChild(el("h2", "ou-title", "You're up to date"));
-    card.appendChild(el("p", "ou-notes", "You can close this window."));
-    container.appendChild(card);
-    return;
-  }
-
-  // An update is available.
-  card.appendChild(el("h2", "ou-title", `Version ${info.version} is available`));
-  if (info.notes) card.appendChild(el("p", "ou-notes", info.notes));
-  const status = el("div", "ou-status");
-  const row = el("div", "ou-row");
-  const install = el("button", "ou-btn", "Install & Restart");
-  const later = el("button", "ou-btn ghost", mode === "manual" ? "Close" : "Not now");
-  row.appendChild(install);
-  row.appendChild(later);
-  card.appendChild(row);
-  card.appendChild(status);
-  container.appendChild(card);
-
-  later.addEventListener("click", () => {
-    card.remove();
-    done();
-  });
-  install.addEventListener("click", async () => {
-    install.disabled = true;
-    later.disabled = true;
-    await runInstall(card, status);
-    // Reached only if the install failed — a successful install restarts the
-    // app, so control never returns here. Re-enable dismiss so the user can
-    // still proceed (in launch mode, dismissing is what boots the app).
-    later.disabled = false;
-  });
 }
 
 window.OrreryUpdate = { mountUpdateFlow, withTimeout };
