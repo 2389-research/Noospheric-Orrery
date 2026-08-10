@@ -45,8 +45,22 @@ copy_service() {
 }
 copy_service orchestrator
 copy_service worker
-cp -r "$ORRERY/packages/orrery-relay" "$RES/services/packages/orrery-relay"
-rm -rf "$RES/services/packages/orrery-relay/.venv" 2>/dev/null || true
+# EVERY package under packages/, not a hand-listed one. The service pyprojects resolve
+# these as `{ path = "../packages/<name>" }`, and `uv sync --frozen` at first launch
+# reads the STAGED lockfile — so a package the lockfile references but staging skipped
+# fails provisioning, which means the app never starts. Adding a path dep used to
+# require remembering to edit this line, and nothing checked that you had
+# (orchestrator/tests/test_desktop_staging.py now does).
+for pkg in "$ORRERY"/packages/*/; do
+  [ -f "$pkg/pyproject.toml" ] || continue
+  name="$(basename "$pkg")"
+  cp -r "$pkg" "$RES/services/packages/$name"
+  # Build/test detritus: a stale .venv shadows the provisioned one, and the caches are
+  # dead weight inside a signed bundle.
+  rm -rf "$RES/services/packages/$name/.venv" \
+         "$RES/services/packages/$name/.pytest_cache" 2>/dev/null || true
+  echo "    staged package: $name"
+done
 
 echo "==> Staging simmer-sdk (worker dependency, not in lockfile)"
 if [ -d "$ORRERY/../simmer-sdk/.git" ]; then
