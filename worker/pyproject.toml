@@ -10,6 +10,7 @@ dependencies = [
     # "simmer-sdk>=0.2.0",
     "orrery-relay",
     "orrery-codesum",
+    "orrery-tracksum",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +22,7 @@ dev = [
 [tool.uv.sources]
 orrery-relay = { path = "../packages/orrery-relay" }
 orrery-codesum = { path = "../packages/orrery-codesum" }
+orrery-tracksum = { path = "../packages/orrery-tracksum" }
 torch = { index = "pytorch-cpu" }
 
 [[tool.uv.index]]

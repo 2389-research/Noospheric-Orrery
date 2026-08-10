@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && \
 # Mirror repo layout so the ../packages/* path sources resolve from pyproject.toml
 COPY packages/orrery-relay/ /app/packages/orrery-relay/
 COPY packages/orrery-codesum/ /app/packages/orrery-codesum/
+COPY packages/orrery-tracksum/ /app/packages/orrery-tracksum/
 
 WORKDIR /app/worker
 

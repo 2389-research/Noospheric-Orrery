@@ -11,7 +11,8 @@ from orrery_relay import Relay
 
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
-from ..models import IngestResult, DirectoryIngestRequest, RepoIngestRequest
+from ..models import (IngestResult, DirectoryIngestRequest, RepoIngestRequest,
+                      TrackerRunsIngestRequest)
 from ..pipeline.chunker import chunk_document
 from ..pipeline.excerpt import build_classification_excerpt
 from ..pipeline.classifier import classify_document
@@ -464,3 +465,60 @@ async def ingest_repo(request: RepoIngestRequest, auth: AuthStore = Depends(get_
         store.close()
 
     return {"job_id": job_id, "collection_id": collection_id}
+
+
+@router.post("/ingest/tracker-runs", status_code=status.HTTP_202_ACCEPTED)
+async def ingest_tracker_runs(request: TrackerRunsIngestRequest,
+                              auth: AuthStore = Depends(get_auth_store)):
+    """Ingest tracker code-gen runs: one COLLECTION per run, trajectory as edges.
+
+    A run IS a collection as far as everything downstream is concerned — extraction,
+    co-occurrence, normalization, the graph snapshot, the viz. It needed no schema
+    change to land in the same table, which is the evidence that the abstraction is
+    "collection" rather than "git repo". Same two-phase shape as /ingest/repo: this
+    enqueues phase 1, which enqueues phase 2 itself.
+    """
+    path = Path(request.path)
+    if not path.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {request.path}")
+
+    # Bundle mode when the summaries already exist (no model calls at all); otherwise
+    # the worker summarizes the raw runs, which needs tracker's `distill` importable.
+    bundled = (path / "index.json").is_file()
+
+    store = auth.store
+    try:
+        # A run label becomes a collection's UNIQUE `path`, so re-ingesting the same
+        # corpus would fail mid-write on an IntegrityError, having already inserted the
+        # earlier runs. Refuse up front and name the collision instead: a partially
+        # ingested trajectory is worse than a rejected one, because the chain edges
+        # would be incomplete without saying so.
+        if request.chain:
+            clash = [c for c in request.chain if store.collections.get_by_path(c)]
+            if clash:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"collections already exist for run label(s): {', '.join(clash)}")
+
+        spec = store.specs.get_general()
+        if spec:
+            spec_id = spec.id
+        else:
+            spec_id = str(uuid.uuid4())
+            store.specs.create(spec_id, None, 1, GENERAL_CODE_SPEC)
+
+        job_id = str(uuid.uuid4())
+        store.jobs.create(job_id, "ingest_tracker_runs", "tracker-runs", {
+            "out_dir": str(path) if bundled else None,
+            "raw_root": None if bundled else str(path),
+            "spec_id": spec_id,
+            "chain": request.chain,
+            # Where the raw dip/spec artifacts are staged, so documents.source_path
+            # resolves for the worker (map -> territory drill-down). Only needed in
+            # bundle mode — raw runs are already resolvable at their own paths.
+            "runs_dir": request.runs_dir or str(path.parent / "runs"),
+        })
+    finally:
+        store.close()
+
+    return {"job_id": job_id, "mode": "bundle" if bundled else "raw"}

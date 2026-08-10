@@ -30,6 +30,13 @@ class Settings:
     judge_samples: int = 1
     judge_panel: str = "auto"
     judge_deliberate: bool = True
+    # Tracker-run summarization. tracker's `distill` module reads its own
+    # activity.jsonl format — that schema belongs to tracker and drifts on its own
+    # schedule, so orrery-tracksum takes an INJECTED trace reader rather than
+    # vendoring the parser. Point this at the directory containing distill.py to let
+    # the worker summarize RAW runs in-process; leave it empty and only pre-made
+    # summary bundles can be ingested (which need no model calls at all).
+    tracker_distill_path: str = ""
 
 
 # Env var name mapping — keys are Settings field names, values are env var names.
@@ -57,6 +64,7 @@ _ENV_MAP = {
     "judge_samples": "JUDGE_SAMPLES",
     "judge_panel": "JUDGE_PANEL",
     "judge_deliberate": "JUDGE_DELIBERATE",
+    "tracker_distill_path": "TRACKER_DISTILL_PATH",
 }
 
 
