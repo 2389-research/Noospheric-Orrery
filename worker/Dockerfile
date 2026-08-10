@@ -20,6 +20,10 @@ RUN uv sync --frozen --no-cache --no-dev --no-install-project
 COPY worker/src/ src/
 RUN uv sync --frozen --no-cache --no-dev
 
+# Bundle the canonical taxonomy (authored in orchestrator/specs) so the worker
+# classifier reads the SAME source as the orchestrator — one authored file.
+COPY orchestrator/specs/taxonomy.json /app/worker/taxonomy.json
+
 # Install simmer-sdk AFTER final sync (not in lockfile, so must come after).
 # The [local] extra pulls in `openai`, required by simmer-sdk's Ollama agent
 # loop (local_agent.py). Without it, every board judge fails with

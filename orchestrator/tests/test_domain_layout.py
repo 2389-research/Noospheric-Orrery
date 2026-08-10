@@ -7,12 +7,16 @@ import numpy as np
 
 
 def test_anchor_domains_load():
-    """Universal domains JSON loads correctly."""
+    """Anchors come from the canonical taxonomy — a broad company topic set
+    spanning software + business + product + operations + people + research."""
     from src.pipeline.domain_layout import _get_anchor_domains
     anchors = _get_anchor_domains()
-    assert len(anchors) == 100
-    assert "business/startups/product-market-fit" in anchors
-    assert "science/physics/quantum-mechanics" in anchors
+    assert len(anchors) >= 100
+    assert "software/ai-agents/llm-orchestration" in anchors
+    assert "business/finance/budgeting" in anchors
+    assert "product/product-management/roadmap" in anchors
+    regions = {a.split("/")[0] for a in anchors}
+    assert {"software", "business", "product", "operations", "people", "research"} <= regions
 
 
 def test_full_fit_with_anchors(test_store):

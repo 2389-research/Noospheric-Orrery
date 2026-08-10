@@ -33,6 +33,8 @@ orchestrator/
       chunker.py     — Split document into fixed-size chunks
       excerpt.py     — Build adaptive excerpt for classification
       classifier.py  — Call Sonnet to classify document into domains
+                       (MIRRORED in worker/src/classifier.py — see Taxonomy below)
+      taxonomy.py    — Loader for specs/taxonomy.json, the ONE authored taxonomy
       domain_normalizer.py — Assign/normalize domains after classification
       extractor.py   — Call Haiku with a spec to extract entities from chunks
       normalizer.py  — Per-entity normalization (merge_map check → insert)
@@ -235,6 +237,46 @@ full pass over those paths, not a quiet flip alongside unrelated work.
 ### Domain Spec Cascade
 
 When a document is ingested, the pipeline walks up the domain tree and applies every spec that exists at any ancestor level. A doc in `business/product_development/strategy` gets the `strategy` spec, then the `product_development` spec, then the `business` spec (deepest first). This is in `ingest.py` under the "cascade through domain specs" comment.
+
+### Taxonomy — one authored source, two consumers, two copies
+
+`orchestrator/specs/taxonomy.json` is the single authored domain vocabulary
+(`region/category/topic`, spanning software + business + product + operations + people
++ research). Two things derive from it, and they must not diverge: the classifier's
+**REFERENCE VOCABULARY** block (`reference_vocab_text()`) and the UMAP layout
+**anchors** (`anchor_paths()`). Anchoring on paths the classifier never emits leaves
+real domains with no nearby anchor, so both read the same file.
+
+Two mechanical duplications exist on purpose, because neither process imports the
+other's package:
+
+- **`worker/src/taxonomy.py`** mirrors `orchestrator/src/pipeline/taxonomy.py`. The
+  worker image bundles the JSON (`Dockerfile` COPYs it to `/app/worker/taxonomy.json`);
+  in dev/tests it falls back to reading the orchestrator's copy. Either way there is
+  one authored file.
+- **`worker/src/classifier.py`** must stay **byte-identical below its ABOUTME header**
+  to `orchestrator/src/pipeline/classifier.py`. Both classify into the SAME taxonomy —
+  the worker during repo/run ingest, the orchestrator during document upload — so a
+  one-sided prompt edit means identical content gets different domains depending on
+  which door it came in through, which breaks the premise that equivalent content
+  merges into one node. Enforced by `orchestrator/tests/test_schema_mirror.py`
+  (which, like the `db.py` half, must run **natively**).
+
+**Prompt caching:** the classifier prompt is split so the static half (instructions +
+reference vocabulary) is sent as a `cache_control: ephemeral` block. The breakpoint sits
+*before* the existing-taxonomy block on purpose — that grows as the graph fills in, so
+including it would miss the cache on every call. `RelayResponse.cache_read_input_tokens`
+is how you confirm hits.
+
+**Local models:** `classify_document` passes `ollama_options={"num_ctx": …}` because the
+rendered prompt (~2.4k static + a taxonomy block that grows with the graph) clears
+Ollama's 4096 default, and **Ollama truncates from the LEFT and reports nothing** —
+measured: at `num_ctx=4096` a 5,160-token prompt was silently cut to 2,051, discarding
+the instructions and vocabulary, and the model returned schema-valid nonsense (a
+placeholder domain parroted from the surviving tail, 74 "secondary" domains where the
+truncated instruction had asked for 0-3). Ollama-only kwargs (`ollama_options`,
+`format`) are stripped in `Relay.complete`/`complete_sync` before the Anthropic SDK
+call, since `messages.create()` raises on unknown keywords.
 
 ### Entity Normalization
 

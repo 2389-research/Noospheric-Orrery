@@ -1,6 +1,11 @@
-"""orchestrator/src/db.py and worker/src/db.py must not drift.
+"""The files the orchestrator and the worker each keep their own copy of must not drift.
 
-The two processes open the SAME database files. A table or index present in one and
+Two pairs live here: `db.py` (the shared schema) and `classifier.py` (the shared
+classification prompt + schema). Both are duplicated on purpose — neither process
+imports the other's package — and in both cases a one-sided edit is invisible at
+runtime and wrong.
+
+For db.py: the two processes open the SAME database files. A table or index present in one and
 missing from the other is not a style problem: whichever process opens a workspace
 first decides its shape, and the other then reads a schema it does not expect.
 
@@ -92,6 +97,43 @@ def test_index_is_mirrored(name):
     if name in _ALLOWED_DIVERGENCE:
         pytest.skip(_ALLOWED_DIVERGENCE[name])
     assert orch == worker, f"the `{name}` index differs between the two db.py files"
+
+
+# ── classifier.py ───────────────────────────────────────────────────────────────
+# The worker classifies during repo/run ingest and the orchestrator during ordinary
+# document upload, into the SAME taxonomy. If the two prompts drift, the same content
+# gets different domain paths depending on which door it came in through — and the
+# graph's whole premise is that equivalent content from different sources merges into
+# one node. Kept byte-identical below the ABOUTME header so drift needs no parsing to
+# detect: the copy is mechanical, so the check should be too.
+_ORCH_CLASSIFIER = _ROOT / "orchestrator" / "src" / "pipeline" / "classifier.py"
+_WORKER_CLASSIFIER = _ROOT / "worker" / "src" / "classifier.py"
+
+_HEADER = re.compile(r"\A(?:#[^\n]*\n)+\n")  # leading ABOUTME comment block + blank line
+
+
+def _below_header(path: Path) -> str:
+    source = path.read_text()
+    m = _HEADER.match(source)
+    assert m, f"{path.name} does not start with an ABOUTME comment block"
+    return source[m.end():]
+
+
+def test_classifier_is_mirrored():
+    orch, worker = _below_header(_ORCH_CLASSIFIER), _below_header(_WORKER_CLASSIFIER)
+    assert orch == worker, (
+        "orchestrator/src/pipeline/classifier.py and worker/src/classifier.py have "
+        "diverged below their ABOUTME headers. Both classify into the same taxonomy, "
+        "so a prompt or schema change must be made in both or the same document gets "
+        "a different domain depending on which process handled it.")
+
+
+def test_the_classifier_mirror_check_can_actually_fail():
+    """The comparison must not be vacuous — both sides must have real content."""
+    body = _below_header(_ORCH_CLASSIFIER)
+    assert "CLASSIFICATION_PROMPT_STATIC" in body
+    assert "CLASSIFICATION_SCHEMA" in body
+    assert len(body) > 5000, "header stripping ate the body"
 
 
 def test_the_mirror_check_can_actually_fail():

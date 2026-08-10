@@ -1,5 +1,7 @@
-# ABOUTME: Classify documents (text and images) into domains using an LLM.
-# ABOUTME: Uses tool use for guaranteed valid JSON. Takes a Relay instance.
+# ABOUTME: Domain classification for repo/run ingest — classifies on the grounded
+# ABOUTME: repo-level summary. MIRROR of orchestrator/src/pipeline/classifier.py:
+# ABOUTME: everything below this header must stay byte-identical (enforced by
+# ABOUTME: orchestrator/tests/test_schema_mirror.py), like db.py.
 
 from orrery_relay import Relay
 
