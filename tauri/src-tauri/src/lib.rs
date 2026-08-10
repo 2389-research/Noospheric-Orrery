@@ -12,6 +12,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager, State};
+use tauri_plugin_updater::UpdaterExt;
 
 const ORCH_PORT: u16 = 8100;
 const FRONT_PORT: u16 = 3100;
@@ -117,6 +118,22 @@ struct Status {
     provisioned: bool,
     has_settings: bool,
     frontend_url: String,
+}
+
+/// Update metadata the webview needs to render the prompt. The raw plugin
+/// `Update` stays in Rust; the webview only sees these three fields.
+#[derive(Serialize)]
+struct UpdateInfo {
+    version: String,
+    current_version: String,
+    notes: Option<String>,
+}
+
+/// Download progress streamed to the webview during install.
+#[derive(Serialize, Clone)]
+struct UpdateProgress {
+    downloaded: usize,
+    total: Option<u64>,
 }
 
 struct Paths {
@@ -593,6 +610,48 @@ fn get_log_buffer(state: State<Supervisor>) -> HashMap<String, Vec<String>> {
         .collect()
 }
 
+/// Ask the update endpoint whether a newer version exists. `Ok(None)` means
+/// up to date; `Err` means the check itself failed (offline, endpoint down)
+/// — the caller treats that as "proceed on the current version".
+#[tauri::command]
+async fn check_for_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let maybe_update = updater.check().await.map_err(|e| e.to_string())?;
+    Ok(maybe_update.map(|update| UpdateInfo {
+        version: update.version,
+        current_version: update.current_version,
+        notes: update.body,
+    }))
+}
+
+/// Download and install the pending update, streaming progress, then restart
+/// onto the new version. Re-checks so it doesn't have to hold the non-'static
+/// `Update` across the earlier IPC call; a `None` here means the release moved
+/// between check and confirm — a harmless no-op.
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
+        return Ok(());
+    };
+    let app_progress = app.clone();
+    let mut downloaded: usize = 0;
+    update
+        .download_and_install(
+            move |chunk_length, content_length| {
+                downloaded += chunk_length;
+                let _ = app_progress.emit(
+                    "update-progress",
+                    UpdateProgress { downloaded, total: content_length },
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    app.restart();
+}
+
 fn open_logs_window(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("logs") {
         let _ = w.show();
@@ -672,7 +731,9 @@ pub fn run() {
             save_settings,
             bootstrap,
             launch,
-            get_log_buffer
+            get_log_buffer,
+            check_for_update,
+            install_update
         ])
         .setup(|app| {
             println!("\n┌─ Noospheric ─────────────────────────────────");
