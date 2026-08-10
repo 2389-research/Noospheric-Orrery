@@ -664,6 +664,7 @@ fn kill_children_and_clear_logs(state: &Supervisor) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Supervisor::default())
         .invoke_handler(tauri::generate_handler![
             get_status,
