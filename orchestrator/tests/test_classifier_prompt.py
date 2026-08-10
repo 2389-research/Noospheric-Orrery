@@ -166,6 +166,28 @@ def test_the_list_facets_are_capped_after_the_parse_not_in_the_schema(field, cap
     )[field] == [f"x/y/z-{i}" for i in range(cap)]
 
 
+@pytest.mark.asyncio
+async def test_image_classification_is_clamped_too():
+    """`classify_image` shares CLASSIFICATION_SCHEMA, so it shares the caps.
+
+    Nothing downstream distinguishes an image's domains from a document's — both become
+    `document_domains` rows — so a cap enforced on only one of the two call sites is
+    not a cap at all.
+    """
+    mock = AsyncMock()
+    mock.complete_structured = AsyncMock(return_value={
+        "primary_domain": "arts/photography/portrait",
+        "secondary_domains": [f"a/b/c-{i}" for i in range(9)],
+        "subdomains": [f"d/e/f-{i}" for i in range(11)],
+        "confidence": 0.8,
+    })
+    result = await classifier.classify_image(
+        relay=mock, image_base64="Zm9v", media_type="image/png",
+        existing_taxonomy=["arts/photography/portrait"], model="claude-sonnet-4-6")
+    assert len(result["secondary_domains"]) == 3
+    assert len(result["subdomains"]) == 8
+
+
 @pytest.mark.parametrize("payload,expected", [
     ({"secondary_domains": None}, None),                    # null stays null, not []
     ({"secondary_domains": "a/b/c"}, []),                   # a bare string is not a list

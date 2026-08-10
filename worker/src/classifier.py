@@ -200,10 +200,17 @@ async def classify_image(
         {"type": "text", "text": text_prompt},
     ]
 
-    return await relay.complete_structured(
+    # Same schema as the text path, so the same caps apply: an image's secondary
+    # domains become `document_domains` rows exactly like a document's, and nothing
+    # downstream distinguishes the two. Deliberately NOT given `ollama_options` —
+    # this prompt omits the reference vocabulary (~1.4k tokens smaller), and the relay
+    # keeps extra options off the vision path on purpose (num_predict breaks gemma4
+    # vision), so raising num_ctx here would need its own verification.
+    result = await relay.complete_structured(
         model=model, max_tokens=1024,
         messages=[{"role": "user", "content": content}],
         schema=CLASSIFICATION_SCHEMA,
         tool_name="classify_document",
         tool_description="Classify an image into domain paths for the knowledge graph",
     )
+    return _clamp_lists(result)
