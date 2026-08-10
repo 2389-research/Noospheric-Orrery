@@ -5,6 +5,8 @@ import json
 import uuid
 from types import SimpleNamespace
 
+import pytest
+
 from src.db import get_connection, init_db
 from src.identity_filter import is_identity_noise
 
@@ -19,14 +21,58 @@ def test_file_extension_names_are_noise():
 
 def test_collection_and_file_self_names_are_noise():
     assert is_identity_noise("demo-repo", collection_name="demo-repo")
-    assert is_identity_noise("demo_repo", collection_name="demo-repo")  # separator variant
     assert is_identity_noise("a.py", doc_path="src/pkg/a.py")     # basename of the doc path
     assert is_identity_noise("src/pkg/a.py", doc_path="src/pkg/a.py")  # full path
+
+
+@pytest.mark.parametrize("spelling", ["demo-repo", "demo_repo", "demo repo"])
+@pytest.mark.parametrize("configured", ["demo-repo", "demo_repo", "demo repo"])
+def test_every_separator_spelling_matches_every_other(spelling, configured):
+    """A model writes the separator however it likes, so all forms are one identity.
+
+    Cross-producted deliberately: the variants used to be derived from the input
+    directly, so whether `demo repo` was caught depended on whether the collection's
+    own name happened to contain a hyphen — the same entity was filtered in one repo
+    and not in the next.
+    """
+    assert is_identity_noise(spelling, collection_name=configured)
+
+
+def test_the_module_stem_is_noise_not_just_the_filename():
+    """A summary of `traverse.py` names the unit `traverse` about as often.
+
+    Same hub problem as the filename: it co-occurs with everything in its own document
+    by construction.
+    """
+    assert is_identity_noise("traverse", doc_path="src/traverse.py")
+    assert is_identity_noise("steal", doc_path="src/executor/steal.py")
+
+
+def test_the_stem_rule_only_strips_known_source_extensions():
+    """A dot does not make a suffix an extension.
+
+    Blind rpartition-on-dot would treat the tail of any dotted filename as an
+    extension and blacklist whatever precedes it, so a path like `metrics.2026.csv`
+    would quietly filter the concept `metrics.2026`. Only extensions in SOURCE_EXTS
+    are stripped.
+    """
+    assert not is_identity_noise("metrics", doc_path="data/metrics.csv")
+    assert not is_identity_noise("backup", doc_path="tmp/backup.bak")
+    # A *known* extension is stripped, including on a multi-dot name — `notes.2026`
+    # really is the stem of `notes.2026.md`, and it is identity for that document.
+    assert is_identity_noise("notes.2026", doc_path="docs/notes.2026.md")
+    # The basename and the full path are identity regardless of extension — it is only
+    # the STEM stripping that SOURCE_EXTS gates.
+    assert is_identity_noise("metrics.csv", doc_path="data/metrics.csv")
+    assert is_identity_noise("data/metrics.csv", doc_path="data/metrics.csv")
 
 
 def test_real_concepts_survive():
     assert not is_identity_noise("dependency graph", doc_path="src/pkg/a.py", collection_name="demo-repo")
     assert not is_identity_noise("recursive summarization", collection_name="demo-repo")
+    # A stem is only identity for its OWN document — elsewhere it is a normal concept,
+    # which is what keeps a genuinely important name in the graph.
+    assert not is_identity_noise("traverse", doc_path="src/other.py")
     assert is_identity_noise("")  # empty IS noise
 
 

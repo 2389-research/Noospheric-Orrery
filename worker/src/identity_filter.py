@@ -27,13 +27,32 @@ def _identity_names(doc_path: str = "", collection_name: str = "") -> set[str]:
     out: set[str] = set()
     if collection_name:
         c = collection_name.lower().strip()
-        # Separator variants: a model asked about `demo-repo` will happily write
-        # `demo_repo` or `demo repo`, and all three are the same identity.
-        out |= {c, c.replace("-", "_"), c.replace("_", "-"), c.replace("-", " ")}
+        # Normalize to ONE separator first, then derive every spelling from that.
+        # Deriving them from the input directly only covered names that already
+        # contained the separator being replaced: `demo-repo` yielded `demo repo`,
+        # but `demo_repo` never did — so whether a repo's own name was filtered
+        # depended on how it happened to be punctuated.
+        base = c.replace("_", "-").replace(" ", "-")
+        out |= {c, base, base.replace("-", "_"), base.replace("-", " ")}
     if doc_path and doc_path != ".":
         p = doc_path.lower().strip()
         out.add(p)
-        out.add(p.rsplit("/", 1)[-1])  # basename
+        basename = p.rsplit("/", 1)[-1]
+        out.add(basename)
+        # The module stem, not just the filename. A summary of `traverse.py` names the
+        # unit `traverse` about as often as `traverse.py`, and that entity is identity
+        # for the same reason: it co-occurs with everything in this document by
+        # construction. Gated on a known source extension so a path like
+        # `notes.2026.md` does not also contribute `notes.2026`.
+        #
+        # This does drop a stem that reads like a real concept (`parser` inside
+        # `parser.py`). That is the intended trade: within its own file the name adds
+        # no differentiating information, and a concept that genuinely matters also
+        # appears in the sibling and parent summaries, where it is not identity and
+        # survives.
+        stem, _, ext = basename.rpartition(".")
+        if stem and f".{ext}" in SOURCE_EXTS:
+            out.add(stem)
     return out
 
 
