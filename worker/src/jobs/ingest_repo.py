@@ -1,6 +1,7 @@
 # ABOUTME: Phase 1 ingest job — recursively summarizes a repo into code_intent documents.
 # ABOUTME: Assigns them to the repo's classified domain, then enqueues Phase 2 (extract_batch).
 
+import asyncio
 import hashlib
 import json
 import os
@@ -21,6 +22,11 @@ MANIFEST_FILENAMES = ("pyproject.toml", "setup.py", "package.json", "go.mod")
 # A collection's structural role is kind-neutral, so the two are mapped at this seam
 # rather than teaching every reader about filesystems.
 _ROLE_FOR_LEVEL = {"repo": "root", "module": "group", "file": "leaf"}
+
+# Where a repo lands when classification comes back empty. A real path rather than NULL
+# so the documents stay reachable in the graph and the state is visible as "needs
+# reclassifying" instead of silently absent.
+_UNCLASSIFIED_DOMAIN = "unclassified/needs-review"
 
 
 def _parent_of(domain_path: str | None) -> str | None:
@@ -64,6 +70,23 @@ def _git_coordinates(root_path: str) -> tuple[str | None, str | None]:
         # returncode-based so a clean `status --porcelain` (empty stdout) is
         # distinguishable from a failed command.
         return r.stdout.strip() if r.returncode == 0 else None
+
+    # `git -C` ASCENDS to find `.git`, so a plain directory that happens to sit inside
+    # another checkout answers for that OUTER repository — and the pair would then name
+    # a remote and SHA that do not describe the ingested tree, with the stored relative
+    # paths not resolving against it. Worse than no provenance, because it looks valid.
+    # So require the discovered top level to BE root_path.
+    toplevel = _run("rev-parse", "--show-toplevel")
+    if not toplevel:
+        return (None, None)
+    try:
+        same = os.path.samefile(toplevel, root_path)
+    except OSError:
+        same = os.path.realpath(toplevel) == os.path.realpath(root_path)
+    if not same:
+        print(f"[ingest_repo] {root_path} is not a repository root (git reports "
+              f"{toplevel}); recording no git provenance", flush=True)
+        return (None, None)
 
     status = _run("status", "--porcelain")
     if status is None or status:  # not a git repo, or uncommitted changes
@@ -137,7 +160,12 @@ async def run_ingest_repo(job: dict, db_path: str) -> None:
     started = time.monotonic()
     print(f"[ingest_repo] {collection_name}: summarizing {root_path} ...", flush=True)
     summarize_fn = make_summarize_fn(relay, model)
-    artifacts = summarize_repo(root_path, summarize_fn, collection_name)
+    # Off the event loop. codesum's traversal is synchronous and issues one blocking
+    # `complete_sync` per file, module and repo — measured at 155s for a 13-file package
+    # and proportional to repo size. `poll_loop` awaits `handle_job` inline, so running
+    # it here would freeze job polling and the judge sweep for the whole traversal:
+    # a single large ingest would look like a hung worker.
+    artifacts = await asyncio.to_thread(summarize_repo, root_path, summarize_fn, collection_name)
 
     levels: dict = {}
     for a in artifacts:
@@ -161,7 +189,16 @@ async def run_ingest_repo(job: dict, db_path: str) -> None:
         relay=relay, title=collection_name, excerpt=excerpt,
         existing_taxonomy=taxonomy, model=settings.classification_model,
     )
-    domain_path = classification["primary_domain"]
+    # `complete_structured` returns {} when the response does not parse, and
+    # `_clamp_lists` returns {} for a payload that is not an object — a real outcome on
+    # a local model, not a theoretical one. Indexing here would raise KeyError AFTER the
+    # whole repo had been summarized, throwing away every model call. Fall back to a
+    # holding domain instead: the artifacts are the expensive part and they are worth
+    # keeping, and a re-run (or a graph correction) can reclassify from them.
+    domain_path = classification.get("primary_domain") or _UNCLASSIFIED_DOMAIN
+    if not classification.get("primary_domain"):
+        print(f"[ingest_repo] {collection_name}: classification returned no primary "
+              f"domain; filing under {domain_path!r}", flush=True)
     confidence = classification.get("confidence")
     print(f"[ingest_repo] {collection_name} -> {domain_path} "
           f"(secondary={classification.get('secondary_domains')}, confidence={confidence})", flush=True)

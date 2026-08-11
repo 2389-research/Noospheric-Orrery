@@ -79,8 +79,12 @@ def should_skip_file(name: str) -> bool:
         return True
     if name in SKIP_FILE_NAMES:
         return True
+    # Case-folded: the skip list is lowercase, but filesystems are not. `diagram.PNG`
+    # and `bundle.ZIP` were sailing past it, so binary and archive bytes reached the
+    # summarizer — and on a case-insensitive filesystem the same file skips or not
+    # depending purely on how it happens to be spelled.
     _, ext = os.path.splitext(name)
-    if ext in SKIP_FILE_SUFFIXES:
+    if ext.lower() in SKIP_FILE_SUFFIXES:
         return True
     return False
 
