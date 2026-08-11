@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 
 from .grounding import check_grounding
@@ -59,6 +60,22 @@ def _progress(event, **f):
             len(f["missing_mandatory"]), f["conditional_fired"] or "none"))
 
 
+_SAFE_LABEL_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_filename(label) -> str:
+    """A single filesystem-safe segment derived from an untrusted run label.
+
+    Everything outside [A-Za-z0-9._-] collapses to `_`, which removes path separators
+    outright, and pure dot segments (".", "..") are rejected rather than sanitised —
+    they name a directory, not a file. Mirrors the rule the ingest job applies to the
+    same value, so a bundle written here is one ingestion will accept.
+    """
+    text = _SAFE_LABEL_RE.sub("_", str(label or "").strip())
+    text = text.strip("._") or "run"
+    return text[:100]
+
+
 def _cmd_runs(a) -> int:
     if a.distill_path:
         sys.path.insert(0, a.distill_path)
@@ -79,8 +96,21 @@ def _cmd_runs(a) -> int:
 
     if a.out:
         os.makedirs(a.out, exist_ok=True)
+        used: dict[str, int] = {}
         for b in bundles:
-            with open(os.path.join(a.out, b["run_label"] + ".json"), "w") as fh:
+            # `run_label` comes from the CORPUS, so it is untrusted for filesystem use:
+            # `../name` escapes --out entirely and an absolute value makes os.path.join
+            # discard --out. Two runs sharing a label silently overwrote each other's
+            # bundle, losing a run with no error. The ingest side already validated
+            # labels; the producer did not, which left the gap open at the source.
+            name = _safe_filename(b["run_label"])
+            seen = used.get(name, 0)
+            used[name] = seen + 1
+            if seen:
+                name = f"{name}~{seen + 1}"     # keep both, do not clobber
+                print("  ! duplicate run_label %r — writing %s.json"
+                      % (b["run_label"], name))
+            with open(os.path.join(a.out, name + ".json"), "w") as fh:
                 json.dump(b, fh, indent=1)
         with open(os.path.join(a.out, "index.json"), "w") as fh:
             json.dump(index, fh, indent=1)
@@ -110,17 +140,31 @@ def _cmd_one(a, level: str) -> int:
 
 
 def main(argv=None) -> int:
+    # --model must work on BOTH sides of the subcommand: on the top level alone the
+    # usage this module's own docstring documents — `... runs <dir> --model X` — exited
+    # with SystemExit 2. It is registered twice, and the subparser copy uses SUPPRESS:
+    # with a real default there, argparse would OVERWRITE a value given before the
+    # subcommand with the subparser's default, silently ignoring `--model X runs ...`.
+    # SUPPRESS means the subparser sets the attribute only when the flag is actually
+    # present, so whichever side supplies it wins and neither erases the other.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--model", default=argparse.SUPPRESS,
+                        help="model for summarization (default $EXTRACTION_MODEL)")
+
     ap = argparse.ArgumentParser(prog="orrery_tracksum.cli")
-    ap.add_argument("--model", default=os.environ.get("EXTRACTION_MODEL", "gemma4:26b"))
+    ap.add_argument("--model", default=os.environ.get("EXTRACTION_MODEL", "gemma4:26b"),
+                    help="model for summarization (accepted before or after the subcommand)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("runs", help="summarize every run beneath a corpus dir")
+    p = sub.add_parser("runs", parents=[common],
+                       help="summarize every run beneath a corpus dir")
     p.add_argument("root")
     p.add_argument("--out", default=None, help="write per-run JSONs + index.json here")
     p.add_argument("--distill-path", default=None, help="dir containing tracker's distill.py")
 
     for name in ("dip", "node"):
-        q = sub.add_parser(name, help="summarize a single %s artifact" % name)
+        q = sub.add_parser(name, parents=[common],
+                           help="summarize a single %s artifact" % name)
         q.add_argument("path")
 
     a = ap.parse_args(argv)

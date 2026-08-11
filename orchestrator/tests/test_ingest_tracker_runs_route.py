@@ -87,3 +87,48 @@ def test_ingest_tracker_runs_reuses_existing_general_spec(test_client, test_stor
 
     job = test_store.jobs.get(r.json()["job_id"])
     assert job.config["spec_id"] == "existing-spec-id"
+
+
+def test_a_repeat_bundle_ingest_is_409_even_without_an_explicit_chain(test_client, test_store, tmp_path):
+    """The 409 must not depend on the caller supplying `chain`.
+
+    Checking `request.chain` alone meant a repeat ingest WITHOUT a chain sailed past the
+    route and failed inside the worker's insert loop — after earlier runs were already
+    inserted. That is the partial ingest, with silently incomplete chain_next edges, that
+    the guard exists to prevent. In bundle mode the labels are right there in index.json.
+    """
+    import json
+
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "index.json").write_text(json.dumps([
+        {"run_label": "runA", "rung": "R5"}, {"run_label": "runB", "rung": "R0"}]))
+    for label in ("runA", "runB"):
+        (out / f"{label}.json").write_text(json.dumps({"run_label": label, "rollup": "x"}))
+
+    body = {"path": str(out), "runs_dir": str(tmp_path / "runs")}
+    assert test_client.post("/ingest/tracker-runs", json=body).status_code == 202
+
+    # A collection now exists for runA, as the worker would have created it.
+    test_store.collections.create("c-a", "runA", "runA", str(tmp_path))
+
+    resp = test_client.post("/ingest/tracker-runs", json=body)
+    assert resp.status_code == 409, (
+        f"expected a conflict from index.json labels, got {resp.status_code}: {resp.text[:200]}")
+    assert "runA" in resp.json()["detail"]
+
+
+def test_an_unreadable_index_does_not_block_the_request(test_client, test_store, tmp_path):
+    """index.json is caller-supplied; if it cannot be parsed the WORKER reports it.
+
+    Skipping the early check is not skipping the check — the worker preflights every
+    label before writing anything, so a malformed index must not turn into a confusing
+    400/409 from the route.
+    """
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "index.json").write_text("{ not valid json")
+
+    resp = test_client.post("/ingest/tracker-runs",
+                            json={"path": str(out), "runs_dir": str(tmp_path / "runs")})
+    assert resp.status_code == 202

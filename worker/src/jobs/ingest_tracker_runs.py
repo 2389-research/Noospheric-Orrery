@@ -2,6 +2,7 @@
 # ABOUTME: Summarizes raw runs via orrery-tracksum (or takes a pre-made bundle), wires the
 # ABOUTME: trajectory as collection_edges, enqueues extract_batch. Mirrors ingest_repo.
 
+import asyncio
 import hashlib
 import json
 import os
@@ -202,7 +203,14 @@ async def run_ingest_tracker_runs(job: dict, db_path: str) -> None:
     runs_dir = config.get("runs_dir") or os.path.join(os.path.dirname(base), "runs")
 
     # Phase 0: the summaries — pre-made, or produced here via orrery-tracksum.
-    runs = _load_bundles(config, relay, settings)
+    #
+    # Off the event loop, for the same reason ingest_repo moves summarize_repo: in RAW
+    # mode this issues one blocking `complete_sync` per node, spec and rollup across the
+    # whole corpus, and `poll_loop` awaits `handle_job` inline — so running it here would
+    # freeze job polling and the judge sweep for the entire summarization. Bundle mode is
+    # only file reads and would not need this, but the call site is shared and paying a
+    # thread hand-off for a few reads is not worth branching over.
+    runs = await asyncio.to_thread(_load_bundles, config, relay, settings)
     # A label reaches the filesystem (staged artifacts) and `collections.path`; drop any run
     # whose label isn't a single safe segment rather than trusting bundle data.
     skipped = [r.get("run_label") for r in runs if not _safe_label(r.get("run_label"))]
@@ -241,6 +249,32 @@ async def run_ingest_tracker_runs(job: dict, db_path: str) -> None:
 
     conn = get_connection(db_path)
     try:
+        # PREFLIGHT every label before writing anything. `collections.path` is UNIQUE, so
+        # a label that already exists raises mid-loop — after earlier runs are inserted —
+        # which is the partial ingest with silently incomplete chain edges that the route
+        # comment claims to prevent. The route can only check when the caller supplies an
+        # explicit `chain`, and in raw mode the labels are not even known until the runs
+        # are summarized, so THIS is the check that always runs. The route's is an early,
+        # friendlier 409; this one is the guarantee.
+        labels = [r["run_label"] for r in runs]
+        rows = conn.execute(
+            "SELECT path FROM collections WHERE path IN (%s)"
+            % ",".join("?" * len(labels)), labels).fetchall()
+        clash = sorted(r[0] for r in rows)
+        if clash:
+            raise RuntimeError(
+                f"ingest_tracker_runs: collections already exist for run label(s) "
+                f"{', '.join(clash)} — refusing to ingest, since a partial trajectory "
+                f"would have incomplete chain_next edges without saying so. Delete those "
+                f"collections or ingest under different labels.")
+        # A duplicate WITHIN this corpus is the same hazard from the other direction: the
+        # second insert would collide with the first after both were accepted.
+        dupes = sorted({lbl for lbl in labels if labels.count(lbl) > 1})
+        if dupes:
+            raise RuntimeError(
+                f"ingest_tracker_runs: duplicate run label(s) in this corpus: "
+                f"{', '.join(dupes)}")
+
         collection_ids: dict[str, str] = {}
         for run in runs:
             label = run["run_label"]

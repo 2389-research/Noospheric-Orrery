@@ -331,3 +331,62 @@ def test_spec_text_prefers_the_embedded_bundle_text():
 def _spec_text_of(run):
     from src.jobs.ingest_tracker_runs import _spec_text
     return _spec_text(run)
+
+
+async def test_an_existing_run_label_aborts_before_any_row_is_written(tmp_path, monkeypatch):
+    """The worker owns the uniqueness guarantee, because only it knows every label.
+
+    `collections.path` is UNIQUE, so a label that already exists raises mid-loop — after
+    earlier runs are inserted — leaving a partial trajectory whose chain_next edges are
+    incomplete without saying so. The route's 409 is an early convenience (and in raw
+    mode it cannot know the labels at all); this preflight is the actual guarantee.
+    """
+    import json
+    import uuid
+
+    import pytest
+
+    from src.db import get_connection, init_db
+
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "index.json").write_text(json.dumps([{"run_label": "runA"}, {"run_label": "runB"}]))
+    for label in ("runA", "runB"):
+        (out / f"{label}.json").write_text(json.dumps(
+            {"run_label": label, "rollup": f"{label} overview",
+             "spec": {"text": "do a thing"}, "nodes": []}))
+
+    conn = get_connection(db_path)
+    conn.execute("INSERT INTO specs (id, domain_path, version, spec_content) "
+                 "VALUES ('spec1', NULL, 1, 'x')")
+    # runB already ingested — runA is new, so a naive loop would insert it then die.
+    conn.execute("INSERT INTO collections (id, name, path, root_path, kind) "
+                 "VALUES ('existing', 'runB', 'runB', '/x', 'tracker_run')")
+    conn.commit()
+    conn.close()
+
+    import src.jobs.ingest_tracker_runs as mod
+
+    async def fake_classify(**kw):
+        return {"primary_domain": "software/agents/codegen", "secondary_domains": [],
+                "confidence": 0.9}
+
+    monkeypatch.setattr(mod, "classify_document", fake_classify)
+    monkeypatch.setattr(mod, "Relay", type("R", (), {
+        "from_settings": classmethod(lambda cls, s, **k: cls())}))
+
+    job = {"id": str(uuid.uuid4()), "config": json.dumps(
+        {"out_dir": str(out), "spec_id": "spec1", "runs_dir": str(tmp_path / "runs")})}
+
+    with pytest.raises(RuntimeError, match="already exist"):
+        await mod.run_ingest_tracker_runs(job, db_path)
+
+    conn = get_connection(db_path)
+    names = {r[0] for r in conn.execute("SELECT name FROM collections")}
+    docs = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+    conn.close()
+    assert names == {"runB"}, f"a row was written before the abort: {names}"
+    assert docs == 0, "documents were written despite the refusal"

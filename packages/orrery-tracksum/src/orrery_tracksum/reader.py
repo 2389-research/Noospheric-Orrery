@@ -59,10 +59,34 @@ def _find_corpus_manifest(run_dir: str, max_depth: int = 8) -> dict:
             try:
                 with open(mf, encoding="utf-8", errors="replace") as f:
                     rows = json.load(f)
-                return {e.get("run_id"): e for e in rows}
-            except (OSError, ValueError, AttributeError, TypeError):
+            except (OSError, ValueError):
                 return {}
+            # Per ENTRY, not per file. Calling .get() on every item meant one `null` or
+            # scalar in the list threw and the handler discarded labels and rungs for
+            # EVERY valid run in the corpus — a whole corpus mislabelled because of one
+            # bad row. A malformed entry is skipped; its neighbours are not its problem.
+            out = {}
+            if not isinstance(rows, list):
+                return {}
+            for e in rows:
+                if isinstance(e, dict) and e.get("run_id") is not None:
+                    out[e["run_id"]] = e
+            return out
     return {}
+
+
+def _as_label(value) -> str | None:
+    """A label must be a plain scalar — corpus JSON can hold anything.
+
+    `run_label` becomes an output filename AND a UNIQUE `collections.path`; `rung` is
+    displayed and used for chain ordering. A dict or list would travel a long way before
+    failing, so non-scalars are dropped here and the caller falls back to run_id.
+    """
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    return None
 
 
 def strip_run_header(distilled: str) -> str:
@@ -97,7 +121,11 @@ def distill_reader(distill):
 
             run_id = os.path.basename(run_dir)
             entry = as_obj(_find_corpus_manifest(run_dir).get(run_id))
-            rung = entry.get("rung_label_in_dip") or as_obj(man.get("vars")).get("rung")
+            # Coerced to str-or-None. Both of these come from corpus JSON and flow into
+            # a filename and a UNIQUE `collections.path`, so a dict or list here would
+            # propagate an unusable value deep into ingestion before failing.
+            rung = _as_label(entry.get("rung_label_in_dip")
+                             or as_obj(man.get("vars")).get("rung"))
 
             nodes = []
             for n in built:
@@ -110,7 +138,7 @@ def distill_reader(distill):
 
             return RunTrace(
                 run_id=run_id, nodes=nodes,
-                run_label=entry.get("run") or run_id, rung=rung, manifest=man,
+                run_label=_as_label(entry.get("run")) or run_id, rung=rung, manifest=man,
             )
 
     return _DistillReader()

@@ -13,7 +13,28 @@ import re
 # an unlisted extension is simply not checked (the check is a floor, not a ceiling).
 # The optional leading dot keeps dotfile paths intact (`.flagship/gate/001.log`) — an
 # earlier version anchored on \w and reported them without it.
-PATH_RE = re.compile(r"\.?[\w][\w./-]*\.(?:js|mjs|json|md|py|txt|log|tsv)\b")
+# Anchored on a NON-path character (or start) on the left, and a non-path character on
+# the right, so a token is matched WHOLE. `\b` accepted the boundary before a dot, which
+# meant `src/store.js` in the trace marked the INVENTED `src/store.js.bak` as grounded —
+# defeating the one thing this check exists to catch.
+#
+# The extension list is the floor, not the ceiling, but it now covers the artifacts
+# tracker runs actually name: `workflow.dip`, config/CI yaml, and extensionless files
+# (Dockerfile, Makefile) which were invisible to an extension-only pattern.
+_EXTS = "js|mjs|ts|tsx|json|md|py|txt|log|tsv|csv|yml|yaml|toml|dip|sh|rs|go"
+_EXTENSIONLESS = "Dockerfile|Makefile|Procfile|LICENSE|README"
+PATH_RE = re.compile(
+    r"(?<![\w./-])"                                   # not mid-token on the left
+    r"(?:"
+    rf"\.?[\w][\w./-]*\.(?:{_EXTS})"                 # dotted paths, known extension
+    rf"|(?:[\w./-]*/)?(?:{_EXTENSIONLESS})"            # extensionless, optionally in a dir
+    r")"
+    # Reject a token that CONTINUES on the right — but a sentence-final dot is not a
+    # continuation. `(?![\w./-])` alone rejected "wrote src/store.js." and matched
+    # nothing; this rejects `/foo`, `-bar` and `.bak` while allowing a terminal dot,
+    # which `paths_in` then strips.
+    r"(?![\w/-])(?!\.\w)"
+)
 
 
 def paths_in(text: str) -> set[str]:

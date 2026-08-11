@@ -507,16 +507,27 @@ async def ingest_tracker_runs(request: TrackerRunsIngestRequest,
     store = auth.store
     try:
         # A run label becomes a collection's UNIQUE `path`, so re-ingesting the same
-        # corpus would fail mid-write on an IntegrityError, having already inserted the
-        # earlier runs. Refuse up front and name the collision instead: a partially
-        # ingested trajectory is worse than a rejected one, because the chain edges
-        # would be incomplete without saying so.
-        if request.chain:
-            clash = [c for c in request.chain if store.collections.get_by_path(c)]
-            if clash:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"collections already exist for run label(s): {', '.join(clash)}")
+        # corpus collides. Answering 409 here is the friendly, early rejection; the
+        # WORKER owns the guarantee, because only it knows every label (in raw mode they
+        # do not exist until the runs are summarized). Checking `request.chain` alone was
+        # not enough: a repeat ingest WITHOUT a chain sailed past this and failed inside
+        # the worker's insert loop, which is the partial ingest this comment claimed to
+        # prevent. In bundle mode the labels are right there in index.json, so use them.
+        known_labels = list(request.chain or [])
+        if bundled and not known_labels:
+            try:
+                index = json.loads((path / "index.json").read_text())
+                known_labels = [row.get("run_label") for row in index
+                                if isinstance(row, dict) and row.get("run_label")]
+            except (OSError, ValueError):
+                # index.json is caller-supplied data; if it is unreadable the worker will
+                # say so properly. Skipping the early check is not skipping the check.
+                known_labels = []
+        clash = [c for c in known_labels if store.collections.get_by_path(c)]
+        if clash:
+            raise HTTPException(
+                status_code=409,
+                detail=f"collections already exist for run label(s): {', '.join(sorted(set(clash)))}")
 
         spec = store.specs.get_general()
         if spec:

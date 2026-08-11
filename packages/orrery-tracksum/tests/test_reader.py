@@ -110,3 +110,46 @@ def test_malformed_corpus_manifest_degrades(tmp_path, payload):
 def test_strip_run_header_is_a_noop_without_a_node_marker():
     assert strip_run_header("no marker here") == "no marker here"
     assert strip_run_header("RUN x\nNODE A\nbody") == "NODE A\nbody"
+
+
+def test_one_malformed_manifest_entry_does_not_discard_the_others(tmp_path):
+    """A broad except returned {} and lost labels + rungs for EVERY valid run.
+
+    One `null` row in a corpus MANIFEST.json mislabelled the whole corpus — every run
+    silently falling back to its directory name, with no error to explain why the
+    trajectory suddenly had no rungs.
+    """
+    import json
+
+    from orrery_tracksum.reader import _find_corpus_manifest
+
+    corpus = tmp_path / "corpus"
+    (corpus / "run1").mkdir(parents=True)
+    (corpus / "MANIFEST.json").write_text(json.dumps([
+        {"run_id": "run1", "run": "R6-brief", "rung_label_in_dip": "R6"},
+        None,                                     # the poison row
+        "not-an-object",
+        {"no_run_id": True},
+        {"run_id": "run2", "run": "R5"},
+    ]))
+
+    found = _find_corpus_manifest(str(corpus / "run1"))
+    assert set(found) == {"run1", "run2"}, "valid entries were discarded with the bad one"
+    assert found["run1"]["run"] == "R6-brief"
+
+
+def test_a_non_scalar_label_is_dropped_rather_than_propagated():
+    """`run_label` becomes a filename AND a UNIQUE collections.path.
+
+    A dict or list would travel from corpus JSON all the way into ingestion before
+    failing, so it is rejected at the boundary and the caller falls back to run_id.
+    """
+    from orrery_tracksum.reader import _as_label
+
+    assert _as_label("R5") == "R5"
+    assert _as_label(3) == "3"
+    assert _as_label({"a": 1}) is None
+    assert _as_label(["R5"]) is None
+    assert _as_label("") is None
+    assert _as_label(None) is None
+    assert _as_label(True) is None      # a bool is not a label
