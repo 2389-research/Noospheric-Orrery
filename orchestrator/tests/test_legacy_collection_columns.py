@@ -14,8 +14,12 @@ every new install.
 """
 
 import sqlite3
+from pathlib import Path
 
 from src.db import init_db
+
+_ORCH_DB = Path(__file__).resolve().parents[1] / "src" / "db.py"
+_WORKER_DB = Path(__file__).resolve().parents[2] / "worker" / "src" / "db.py"
 
 
 def _legacy_db(path, *, with_level=True):
@@ -186,9 +190,12 @@ def test_two_concurrent_processes_can_open_a_legacy_database(tmp_path):
         init_db({db!r})
         print("ok")
     """)
+    # Eight, not four. At four this passed on macOS and failed on Linux CI — the race
+    # window is real but narrow, and a test that only sometimes enters it is no guard at
+    # all. More contenders make the collision reliable on both.
     procs = [subprocess.Popen([sys.executable, "-c", script],
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-             for _ in range(4)]
+             for _ in range(8)]
     results = [(p.wait(timeout=90), *p.communicate()) for p in procs]
 
     failed = [(rc, out, err) for rc, out, err in results if rc != 0]
@@ -201,6 +208,47 @@ def test_two_concurrent_processes_can_open_a_legacy_database(tmp_path):
     roles = dict(conn.execute("SELECT document_id, role FROM document_collections").fetchall())
     conn.close()
     assert roles == {"d1": "root", "d2": "group", "d3": "leaf", "d4": "leaf"}
+
+
+def test_busy_timeout_is_set_before_journal_mode(tmp_path):
+    """`busy_timeout` must be set BEFORE `journal_mode=WAL`, in both db modules.
+
+    Switching journal modes takes a brief exclusive lock, so on a database not yet in
+    WAL — a fresh file, or one just imported from elsewhere — that pragma is itself a
+    contended write. Set after, it runs with NO timeout in force and raises "database is
+    locked" immediately. A pragma cannot be covered by a timeout that has not been set
+    yet. This is what broke on Linux CI, in `get_connection`, not in the migration.
+
+    Asserted STATICALLY, on the source order, which deserves an explanation. Two dynamic
+    attempts were tried and neither is a usable guard:
+
+      - Racing N processes and checking none fail: it reproduced on Linux CI and passed
+        on macOS even with the bug reintroduced. A test that enters the window by luck
+        fails to guard on whichever machine is unlucky.
+      - Having a parent HOLD the write lock while a child opens: too strong. The held
+        lock blocks the child at statement PREPARE time, so `busy_timeout` itself raises
+        "database is locked" and the test fails identically with and without the fix —
+        it stops discriminating.
+
+    The invariant is a property of the source, so the source is what is checked. The
+    multi-process test below still exercises the real thing end to end; this pins the
+    one-line ordering that made it fail.
+    """
+    # The worker's db.py is skipped when absent rather than failing: the orchestrator
+    # container image ships only `orchestrator/` + `packages/`, so in-container runs
+    # cannot see it (the same constraint that makes test_schema_mirror.py native-only).
+    # CI checks out the whole repo and does check both.
+    checked = [p for p in (_ORCH_DB, _WORKER_DB) if p.is_file()]
+    assert _ORCH_DB in checked, "the orchestrator's own db.py must always be checkable"
+
+    for path in checked:
+        source = path.read_text()
+        timeout_at = source.index('PRAGMA busy_timeout')
+        wal_at = source.index('PRAGMA journal_mode=WAL')
+        assert timeout_at < wal_at, (
+            f"{path.name}: journal_mode=WAL is set before busy_timeout, so the "
+            f"journal-mode switch runs with no timeout and fails immediately under "
+            f"concurrent open")
 
 
 def test_the_migration_is_idempotent_across_processes(tmp_path):

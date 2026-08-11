@@ -581,8 +581,14 @@ def reset_initialized(db_path: str | None = None) -> None:
 def get_connection(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    # busy_timeout FIRST. Switching journal modes takes a brief exclusive lock, so on a
+    # database not yet in WAL — a fresh file, or an imported one — this pragma is itself
+    # a contended write. Set after, it ran with NO timeout in force and raised "database
+    # is locked" immediately whenever another process was opening the same file, which
+    # both services do on startup. Ordering is the whole fix: a pragma cannot be covered
+    # by a timeout that has not been set yet.
     conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
