@@ -374,3 +374,32 @@ def test_a_real_failure_is_not_retried_into_silence():
     with pytest.raises(sqlite3.OperationalError, match="readonly"):
         _enable_wal(conn, attempts=6)
     assert conn.switches == 1, "a non-contention error must not be retried"
+
+
+def test_a_connection_is_never_returned_quietly_without_wal():
+    """`PRAGMA journal_mode=WAL` REPORTS the resulting mode; it need not raise.
+
+    So a final bare execute could leave the connection in rollback-journal mode with no
+    error anywhere — silently losing the concurrent reader/writer guarantee the rest of
+    this codebase assumes, which is the whole reason WAL is set. The returned value is
+    the only reliable signal, so exhausting the retries on a database that never
+    switches has to raise rather than return.
+    """
+    import pytest
+
+    from src.db import _enable_wal
+
+    class NeverSwitches:
+        """Accepts the pragma without error and stays in `delete` — the silent case."""
+        def __init__(self):
+            self.switches = 0
+
+        def execute(self, sql, *args):
+            if sql.strip().lower() == "pragma journal_mode=wal":
+                self.switches += 1
+            return _Row("delete")
+
+    conn = NeverSwitches()
+    with pytest.raises(sqlite3.OperationalError, match="could not enable WAL"):
+        _enable_wal(conn, attempts=2)
+    assert conn.switches >= 2, "should have exhausted its retries before giving up"

@@ -569,9 +569,17 @@ def _enable_wal(conn: sqlite3.Connection, attempts: int = 6) -> None:
         except sqlite3.OperationalError:
             pass
         time.sleep(0.05 * (attempt + 1))
-    # Out of attempts: let the real error speak instead of reporting a clean connection
-    # that is not actually in WAL.
-    conn.execute("PRAGMA journal_mode=WAL")
+    # Out of attempts. `PRAGMA journal_mode=WAL` RETURNS the resulting mode and does not
+    # necessarily raise when it could not switch, so a final bare execute would hand back
+    # a connection that is quietly still in rollback-journal mode — losing the concurrent
+    # reader/writer guarantee the rest of this codebase assumes, with no error anywhere.
+    # The returned value is the only reliable signal, so it is what gets checked.
+    row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+    mode = str(row[0]).lower() if row else "unknown"
+    if mode != "wal":
+        raise sqlite3.OperationalError(
+            f"could not enable WAL after {attempts} attempts (journal_mode is {mode!r}); "
+            f"another process may hold the database, or it may not be writable")
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:
