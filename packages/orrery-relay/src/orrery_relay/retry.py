@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import random
 import time
 from datetime import datetime, timezone
@@ -29,29 +30,51 @@ _RETRYABLE_EXC = (APIStatusError, httpx.HTTPStatusError)
 T = TypeVar("T")
 
 
+# Ceiling on an honoured Retry-After. NOT max_delay: a server answering 429 with
+# "Retry-After: 120" means it, and clamping that to 30s would retry early and earn
+# another 429 — honouring the server is the point of reading the header. But an
+# unbounded honour lets one header stall a job for as long as it likes, so there is a
+# hard cap above any realistic value.
+_MAX_RETRY_AFTER = 300.0
+
+
 def _parse_retry_after(header: str | None) -> float | None:
-    """Parse a Retry-After header into a delay in seconds.
+    """Parse a Retry-After header into a delay in seconds, or None if unusable.
 
     RFC 7231 allows either delta-seconds ("120") or an HTTP-date
-    ("Wed, 21 Oct 2026 07:28:00 GMT"). Returns None on an absent or unparseable
-    value so the caller falls back to computed backoff — a malformed header must
-    never crash the retry loop (the old float(header) raised ValueError on dates).
+    ("Wed, 21 Oct 2026 07:28:00 GMT"). None means "fall back to computed backoff" — a
+    malformed header must never crash or stall the retry loop it exists to drive.
+
+    Every returned value is finite and within [0, _MAX_RETRY_AFTER], because
+    `_compute_delay` passes it straight to sleep. `float()` alone accepts "-1", "nan"
+    and "inf": the first two make `time.sleep` raise ValueError — aborting the retry
+    that was meant to recover — and "inf" is worse still, sleeping forever, which is a
+    silently hung worker rather than an error anyone can see.
     """
     if not header:
         return None
+
+    seconds: float | None = None
     try:
-        return float(header)
+        seconds = float(header)
     except ValueError:
-        pass
-    try:
-        when = parsedate_to_datetime(header)
-    except (TypeError, ValueError):
+        try:
+            when = parsedate_to_datetime(header)
+        except (TypeError, ValueError):
+            return None
+        if when is None:
+            return None
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        # A date already in the past means "retry now", not "retry in the past".
+        seconds = max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+    # math.isfinite rejects nan and ±inf; negatives are nonsense as a delay. Both fall
+    # back to computed backoff rather than being coerced to 0, since a header this broken
+    # is no evidence about when the server is ready.
+    if not math.isfinite(seconds) or seconds < 0:
         return None
-    if when is None:
-        return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+    return min(seconds, _MAX_RETRY_AFTER)
 
 
 def _compute_delay(
