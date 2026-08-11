@@ -141,10 +141,11 @@ def summarize_runs(root: str, summarize_fn, reader, on_progress=None) -> list[di
     ]
 
 
-def build_index(bundles: list[dict], filenames: dict[str, str] | None = None) -> list[dict]:
+def build_index(bundles: list[dict], filenames: dict[int, str] | None = None) -> list[dict]:
     """The `index.json` the ingest job reads to find the per-run files.
 
-    `filenames` maps a bundle's index in `bundles` to the file actually written. It
+    `filenames` maps a bundle's POSITION in `bundles` (the int from enumerate) to the
+    file actually written. It
     matters because the writer sanitises and de-duplicates names: a label like `../x`
     becomes `_x.json` and a repeated `foo` becomes `foo~2.json`, so a reader that
     reconstructs `<run_label>.json` would miss those files entirely — and read `foo.json`

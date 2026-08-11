@@ -7,6 +7,7 @@ The ingest side already validated labels; the PRODUCER did not, which left the g
 at the source.
 """
 import argparse
+import sys
 
 import pytest
 
@@ -111,8 +112,9 @@ def test_a_label_colliding_with_a_generated_suffix_does_not_overwrite(tmp_path, 
     monkeypatch.setattr(cli, "distill_reader",
                         lambda d: types.SimpleNamespace(find_runs=lambda root: ["r"]))
     monkeypatch.setattr(cli, "_relay", lambda model: (lambda *a, **k: None))
-    import sys
-    sys.modules.setdefault("distill", types.ModuleType("distill"))
+    # setitem, not sys.modules.setdefault: a permanent entry made a LATER test's result
+    # depend on this one having run first — order-dependent tests hide real breakage.
+    monkeypatch.setitem(sys.modules, "distill", types.ModuleType("distill"))
 
     cli._cmd_runs(a)
 
@@ -143,6 +145,11 @@ def test_the_index_names_the_file_that_was_actually_written(tmp_path, monkeypatc
     monkeypatch.setattr(cli, "distill_reader",
                         lambda d: types.SimpleNamespace(find_runs=lambda root: ["r"]))
     monkeypatch.setattr(cli, "_relay", lambda model: (lambda *a, **k: None))
+    # Installed here too, not inherited from a sibling test. Relying on another test to
+    # have populated sys.modules is exactly the order dependence being removed — and it
+    # showed up immediately: run alone, this test failed with ModuleNotFoundError.
+    monkeypatch.setitem(sys.modules, "distill", types.ModuleType("distill"))
+
     cli._cmd_runs(a)
 
     index = json.loads((out / "index.json").read_text())
