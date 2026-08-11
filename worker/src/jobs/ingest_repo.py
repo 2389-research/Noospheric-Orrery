@@ -229,7 +229,12 @@ async def run_ingest_repo(job: dict, db_path: str) -> None:
             if file_arts:
                 fe = np.asarray(embed_entities([a["intent"] for a in file_arts]))
                 best = (fe @ sub_emb.T).argmax(axis=1)
-                for a, bi in zip(file_arts, best):
+                # strict=True: `best` is one argmax per file artifact, so a length
+                # mismatch means the embedding step silently returned the wrong number
+                # of rows. Zipping would then assign some files the WRONG subdomain and
+                # drop the tail — and since this whole block is wrapped in a broad
+                # except that only logs, it would look like it worked.
+                for a, bi in zip(file_arts, best, strict=True):
                     file_domain[a["path"]] = subdomains[int(bi)]
             print(f"[ingest_repo] {collection_name}: {len(subdomains)} subdomains, "
                   f"assigned {len(file_domain)} files", flush=True)
