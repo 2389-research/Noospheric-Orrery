@@ -170,6 +170,8 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # APPLE_API_KEY_PATH and KEYCHAIN_PASSWORD arrive via GITHUB_ENV above
         with:
           projectPath: tauri
@@ -177,7 +179,7 @@ jobs:
           releaseName: ${{ github.ref_type == 'tag' && format('Noospheric {0}', github.ref_name) || '' }}
           releaseDraft: true
           prerelease: ${{ github.ref_type == 'tag' && contains(github.ref_name, '-') }}
-          includeUpdaterJson: false
+          includeUpdaterJson: true
 
       # V8 JITs at runtime: if app bundling ever re-signs nested resources and
       # strips allow-jit from node, the frontend SIGTRAPs on launch (issue #52).

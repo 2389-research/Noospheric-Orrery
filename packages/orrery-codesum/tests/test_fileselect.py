@@ -22,3 +22,18 @@ def test_dotfiles_still_skipped():
     assert should_skip_file(".env")
     assert should_skip_file(".gitignore")
     assert not should_skip_file("main.rs")
+
+
+def test_uppercase_suffixes_are_skipped_too():
+    """The skip list is lowercase; filesystems are not.
+
+    `diagram.PNG` sailed past it, so binary bytes reached the summarizer — and on a
+    case-insensitive filesystem the same file skipped or not purely by how it was
+    spelled, which is not a property anyone can reason about.
+    """
+    from orrery_codesum.fileselect import should_skip_file
+    for name in ("diagram.PNG", "bundle.ZIP", "photo.JPEG", "lib.SO"):
+        assert should_skip_file(name), f"{name} should be skipped"
+    # Source files are still kept, whatever their case.
+    assert not should_skip_file("Main.PY")
+    assert not should_skip_file("app.ts")

@@ -5,6 +5,7 @@ import uuid
 import os
 import json
 import hashlib
+import sqlite3
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Response, status
 from orrery_relay import Relay
@@ -452,15 +453,32 @@ async def ingest_repo(request: RepoIngestRequest, auth: AuthStore = Depends(get_
         # README excerpt — which works for undocumented repos too, and aligns the
         # domain with the vocabulary the extraction actually produces.
         collection_id = str(uuid.uuid4())
-        store.collections.create(collection_id, request.name, request.name, request.path)
+        try:
+            store.collections.create(collection_id, request.name, request.name, request.path)
+        except sqlite3.IntegrityError:
+            # The get_by_path check above is not a lock, so two requests for the same
+            # name can both pass it. The UNIQUE constraint is what actually decides;
+            # report the loser as the same 409 rather than a 500, so a race and a repeat
+            # look identical to the caller.
+            raise HTTPException(
+                status_code=409,
+                detail=f"Collection '{request.name}' already exists")
 
         job_id = str(uuid.uuid4())
-        store.jobs.create(job_id, "ingest_repo", collection_id, {
-            "root_path": request.path,
-            "collection_id": collection_id,
-            "collection_name": request.name,
-            "spec_id": spec_id,
-        })
+        try:
+            store.jobs.create(job_id, "ingest_repo", collection_id, {
+                "root_path": request.path,
+                "collection_id": collection_id,
+                "collection_name": request.name,
+                "spec_id": spec_id,
+            })
+        except Exception:
+            # `collections.create` commits, so a failure here would leave a collection
+            # with no job behind — and because the name is UNIQUE and this route answers
+            # 409 on a repeat, that orphan would block every retry of the same repo
+            # permanently. Undo it so the request is genuinely retryable.
+            store.collections.delete(collection_id)
+            raise
     finally:
         store.close()
 

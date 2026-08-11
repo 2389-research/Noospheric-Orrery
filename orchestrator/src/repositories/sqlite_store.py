@@ -917,6 +917,19 @@ class SQLiteCollectionRepository:
         return {"id": row["id"], "name": row["name"], "path": row["path"],
                 "root_path": row["root_path"], "kind": row["kind"]}
 
+    def delete(self, collection_id):
+        """Hard-delete a collection row. For compensating an interrupted create ONLY.
+
+        Not part of the corrections path, which soft-deletes with `invalid_at` so an
+        edit stays reversible. This exists because `create` commits: if the work that
+        was supposed to follow it fails, the committed row is an orphan, and since
+        `path` is UNIQUE it would block every retry of the same name. Deliberately
+        narrow — it removes the row and nothing else, because the only caller uses it
+        before any document has been attached.
+        """
+        self._conn.execute("DELETE FROM collections WHERE id = ?", (collection_id,))
+        self._conn.commit()
+
     def link_document(self, document_id, collection_id, *, parent_path=None,
                       role=None, emits_cooccurrence=None):
         """Attach a document to a collection at a position in its tree.
