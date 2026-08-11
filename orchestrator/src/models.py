@@ -80,3 +80,17 @@ class RepoIngestRequest(BaseModel):
     """
     path: str
     name: str
+
+
+class TrackerRunsIngestRequest(BaseModel):
+    """A corpus of tracker code-gen runs. One run becomes one collection.
+
+    `path` is either a directory of pre-made per-run summary JSONs (recognised by an
+    `index.json`, needing no model calls at all) or a raw corpus the worker summarizes
+    itself. `chain` states the trajectory order explicitly; without it the worker falls
+    back to the ground-truth rung order. `runs_dir` is where the raw artifacts are
+    staged so `documents.source_path` resolves in-container.
+    """
+    path: str
+    chain: list[str] | None = None
+    runs_dir: str | None = None

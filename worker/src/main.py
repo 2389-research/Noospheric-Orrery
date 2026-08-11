@@ -39,6 +39,9 @@ async def handle_job(job: dict, db_path: str) -> None:
     elif job["type"] == "ingest_repo":
         from .jobs.ingest_repo import run_ingest_repo
         await run_ingest_repo(job, db_path)
+    elif job["type"] == "ingest_tracker_runs":
+        from .jobs.ingest_tracker_runs import run_ingest_tracker_runs
+        await run_ingest_tracker_runs(job, db_path)
     elif job["type"] == "judge_corrections":
         from .jobs.graph_repair import run_judge_corrections
         await run_judge_corrections(job, db_path)

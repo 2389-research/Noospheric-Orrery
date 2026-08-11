@@ -12,7 +12,8 @@ from orrery_relay import Relay
 
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
-from ..models import IngestResult, DirectoryIngestRequest, RepoIngestRequest
+from ..models import (IngestResult, DirectoryIngestRequest, RepoIngestRequest,
+                      TrackerRunsIngestRequest)
 from ..pipeline.chunker import chunk_document
 from ..pipeline.excerpt import build_classification_excerpt
 from ..pipeline.classifier import classify_document
@@ -482,3 +483,85 @@ async def ingest_repo(request: RepoIngestRequest, auth: AuthStore = Depends(get_
         store.close()
 
     return {"job_id": job_id, "collection_id": collection_id}
+
+
+@router.post("/ingest/tracker-runs", status_code=status.HTTP_202_ACCEPTED)
+async def ingest_tracker_runs(request: TrackerRunsIngestRequest,
+                              auth: AuthStore = Depends(get_auth_store)):
+    """Ingest tracker code-gen runs: one COLLECTION per run, trajectory as edges.
+
+    A run IS a collection as far as everything downstream is concerned — extraction,
+    co-occurrence, normalization, the graph snapshot, the viz. It needed no schema
+    change to land in the same table, which is the evidence that the abstraction is
+    "collection" rather than "git repo". Same two-phase shape as /ingest/repo: this
+    enqueues phase 1, which enqueues phase 2 itself.
+    """
+    path = Path(request.path)
+    if not path.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {request.path}")
+
+    # Bundle mode when the summaries already exist (no model calls at all); otherwise
+    # the worker summarizes the raw runs, which needs tracker's `distill` importable.
+    bundled = (path / "index.json").is_file()
+
+    store = auth.store
+    try:
+        # A run label becomes a collection's UNIQUE `path`, so re-ingesting the same
+        # corpus collides. Answering 409 here is the friendly, early rejection; the
+        # WORKER owns the guarantee, because only it knows every label (in raw mode they
+        # do not exist until the runs are summarized). Checking `request.chain` alone was
+        # not enough: a repeat ingest WITHOUT a chain sailed past this and failed inside
+        # the worker's insert loop, which is the partial ingest this comment claimed to
+        # prevent. In bundle mode the labels are right there in index.json, so use them.
+        # UNION, not either/or. Reading index.json only when `chain` was empty meant a
+        # PARTIAL chain (naming runA while the corpus also holds an already-ingested
+        # runB) skipped the index labels entirely and answered 202 — the conflict then
+        # surfacing from the worker instead.
+        known_labels = list(request.chain or [])
+        if bundled:
+            try:
+                index = json.loads((path / "index.json").read_text())
+                # Valid JSON is not a valid index: `{}` iterates string KEYS and `42`
+                # raises TypeError, neither caught below — so both became a 500 instead
+                # of being deferred to the worker's clear error. A label must also be a
+                # non-empty STRING; `run_label: []` is truthy and would reach get_by_path.
+                if isinstance(index, list):
+                    known_labels += [
+                        row["run_label"] for row in index
+                        if isinstance(row, dict)
+                        and isinstance(row.get("run_label"), str)
+                        and row["run_label"].strip()
+                    ]
+            except (OSError, ValueError):
+                # index.json is caller-supplied data; if it is unreadable the worker will
+                # say so properly. Skipping the early check is not skipping the check —
+                # and an explicit chain, if given, is still checked.
+                pass
+        clash = [c for c in known_labels if store.collections.get_by_path(c)]
+        if clash:
+            raise HTTPException(
+                status_code=409,
+                detail=f"collections already exist for run label(s): {', '.join(sorted(set(clash)))}")
+
+        spec = store.specs.get_general()
+        if spec:
+            spec_id = spec.id
+        else:
+            spec_id = str(uuid.uuid4())
+            store.specs.create(spec_id, None, 1, GENERAL_CODE_SPEC)
+
+        job_id = str(uuid.uuid4())
+        store.jobs.create(job_id, "ingest_tracker_runs", "tracker-runs", {
+            "out_dir": str(path) if bundled else None,
+            "raw_root": None if bundled else str(path),
+            "spec_id": spec_id,
+            "chain": request.chain,
+            # Where the raw dip/spec artifacts are staged, so documents.source_path
+            # resolves for the worker (map -> territory drill-down). Only needed in
+            # bundle mode — raw runs are already resolvable at their own paths.
+            "runs_dir": request.runs_dir or str(path.parent / "runs"),
+        })
+    finally:
+        store.close()
+
+    return {"job_id": job_id, "mode": "bundle" if bundled else "raw"}

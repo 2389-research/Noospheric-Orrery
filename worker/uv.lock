@@ -556,6 +556,16 @@ dev = [
 ]
 
 [[package]]
+name = "orrery-tracksum"
+version = "0.1.0"
+source = { directory = "../packages/orrery-tracksum" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.0" }]
+
+[[package]]
 name = "orrery-worker"
 version = "0.1.0"
 source = { editable = "." }
@@ -563,6 +573,7 @@ dependencies = [
     { name = "anthropic", extra = ["bedrock"] },
     { name = "orrery-codesum" },
     { name = "orrery-relay" },
+    { name = "orrery-tracksum" },
     { name = "sentence-transformers" },
     { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
@@ -579,6 +590,7 @@ requires-dist = [
     { name = "anthropic", extras = ["bedrock"], specifier = ">=0.40.0" },
     { name = "orrery-codesum", directory = "../packages/orrery-codesum" },
     { name = "orrery-relay", directory = "../packages/orrery-relay" },
+    { name = "orrery-tracksum", directory = "../packages/orrery-tracksum" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
     { name = "sentence-transformers", specifier = ">=3.0.0" },
