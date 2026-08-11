@@ -161,14 +161,32 @@ def _load_bundles(config: dict, relay, settings) -> list[dict]:
     if index_path and os.path.exists(index_path):
         with open(index_path, encoding="utf-8") as f:
             index = json.load(f)
+        # Valid JSON is not a valid index. `{}` iterates its string KEYS (so `row.get`
+        # raises AttributeError), and `42` raises TypeError on iteration — neither is
+        # caught by a ValueError handler, so both surfaced as an opaque crash rather than
+        # "your index is malformed".
+        if not isinstance(index, list):
+            raise RuntimeError(
+                f"ingest_tracker_runs: {index_path} must contain a JSON list of run "
+                f"objects, got {type(index).__name__}")
         bundles = []
         for row in index:
-            label = (row or {}).get("run_label")
+            if not isinstance(row, dict):
+                print(f"[ingest_tracker_runs] skipping non-object index row {row!r}", flush=True)
+                continue
+            label = row.get("run_label")
             # index.json is data; a label is only ever a filename inside out_dir.
             if not _safe_label(label):
                 print(f"[ingest_tracker_runs] skipping unsafe run_label {label!r}", flush=True)
                 continue
-            rp = os.path.join(out_dir, label + ".json")
+            # Prefer the filename the writer actually emitted. The writer sanitises and
+            # de-duplicates names (`../x` -> `_x.json`, a repeated `foo` -> `foo~2.json`),
+            # so reconstructing `<run_label>.json` missed those files and read `foo.json`
+            # twice. Falls back to the label for indexes written before `file` existed.
+            fname = row.get("file")
+            if not (isinstance(fname, str) and _safe_label(fname)):
+                fname = label + ".json"
+            rp = os.path.join(out_dir, fname)
             if os.path.exists(rp):
                 with open(rp, encoding="utf-8") as f:
                     bundles.append(json.load(f))

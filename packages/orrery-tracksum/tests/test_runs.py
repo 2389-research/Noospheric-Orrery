@@ -105,7 +105,9 @@ def test_run_without_a_dip_still_summarizes(tmp_path):
 def test_build_index_summarizes_the_batch(run_dir):
     reader = FakeReader(run_dir, [NodeTrace(id="Build", text=NODE_TRACE, kind="agent")])
     index = build_index([summarize_run(run_dir, fake_summarize_fn, reader)])
-    assert index == [{"run_label": "run4", "rung": "R0", "nodes": 1,
+    # `file` records the filename the writer actually emitted, so a reader never has to
+    # reconstruct `<run_label>.json` — which missed sanitised and de-duplicated names.
+    assert index == [{"run_label": "run4", "file": "run4.json", "rung": "R0", "nodes": 1,
                       "dip_recognized": True, "completeness": True}]
 
 

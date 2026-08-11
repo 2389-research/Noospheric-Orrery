@@ -13,6 +13,15 @@ import pytest
 from orrery_tracksum.cli import _safe_filename, main
 
 
+def _bundle(label: str, n: int) -> dict:
+    """A bundle with the fields `build_index` reads, plus a payload marker."""
+    return {
+        "run_label": label, "rung": "R0", "nodes": [],
+        "dip": {"recognized": ""}, "coherency": {"completeness_pass": True},
+        "n": n,
+    }
+
+
 @pytest.mark.parametrize("label,forbidden", [
     ("../escape", ".."),
     ("../../etc/passwd", ".."),
@@ -79,7 +88,7 @@ def test_the_model_flag_still_works_before_the_subcommand(monkeypatch):
         "a subparser default overwrote the value given before the subcommand")
 
 
-def test_a_label_colliding_with_a_generated_suffix_does_not_overwrite(tmp_path):
+def test_a_label_colliding_with_a_generated_suffix_does_not_overwrite(tmp_path, monkeypatch):
     """Counting per BASE name was not enough.
 
     Labels `foo`, `foo`, `foo~2` produced `foo`, `foo~2`, `foo~2` — the third silently
@@ -91,20 +100,17 @@ def test_a_label_colliding_with_a_generated_suffix_does_not_overwrite(tmp_path):
 
     import orrery_tracksum.cli as cli
 
-    bundles = [{"run_label": "foo", "n": 1},
-               {"run_label": "foo", "n": 2},
-               {"run_label": "foo~2", "n": 3}]
+    bundles = [_bundle("foo", 1), _bundle("foo", 2), _bundle("foo~2", 3)]
 
     out = tmp_path / "out"
     a = types.SimpleNamespace(out=str(out), root="x", model="m", distill_path=None)
 
     # Exercise only the writing block, with the summarization stubbed out.
-    cli.summarize_runs = lambda *args, **kw: bundles
-    cli.build_index = lambda bs: [{"run_label": b["run_label"], "rung": "-", "nodes": 0,
-                                   "dip_recognized": False, "completeness": 1.0}
-                                  for b in bs]
-    cli.distill_reader = lambda d: types.SimpleNamespace(find_runs=lambda root: ["r"])
-    cli._relay = lambda model: (lambda *a, **k: None)
+    # monkeypatch throughout: assigning over module state leaked stubs into later tests.
+    monkeypatch.setattr(cli, "summarize_runs", lambda *args, **kw: bundles)
+    monkeypatch.setattr(cli, "distill_reader",
+                        lambda d: types.SimpleNamespace(find_runs=lambda root: ["r"]))
+    monkeypatch.setattr(cli, "_relay", lambda model: (lambda *a, **k: None))
     import sys
     sys.modules.setdefault("distill", types.ModuleType("distill"))
 
@@ -114,3 +120,36 @@ def test_a_label_colliding_with_a_generated_suffix_does_not_overwrite(tmp_path):
     assert len(written) == 3, f"a bundle was overwritten: {written}"
     payloads = sorted(json.loads((out / n).read_text())["n"] for n in written)
     assert payloads == [1, 2, 3], "every run's payload must survive"
+
+
+def test_the_index_names_the_file_that_was_actually_written(tmp_path, monkeypatch):
+    """The index must point at the emitted filename, not a reconstructed one.
+
+    The writer sanitises and de-duplicates names, so `<run_label>.json` is a GUESS: a
+    collision-resolved `foo~2.json` was unreachable and `foo.json` was read twice, which
+    means the de-duplication fix silently lost a run instead of overwriting it. Recording
+    the emitted name is what closes that loop.
+    """
+    import json
+    import types
+
+    import orrery_tracksum.cli as cli
+
+    bundles = [_bundle("foo", 1), _bundle("foo", 2), _bundle("../escape", 3)]
+    out = tmp_path / "out"
+    a = types.SimpleNamespace(out=str(out), root="x", model="m", distill_path=None)
+
+    monkeypatch.setattr(cli, "summarize_runs", lambda *args, **kw: bundles)
+    monkeypatch.setattr(cli, "distill_reader",
+                        lambda d: types.SimpleNamespace(find_runs=lambda root: ["r"]))
+    monkeypatch.setattr(cli, "_relay", lambda model: (lambda *a, **k: None))
+    cli._cmd_runs(a)
+
+    index = json.loads((out / "index.json").read_text())
+    assert len(index) == 3
+    for row in index:
+        assert (out / row["file"]).is_file(), (
+            f"index names {row['file']!r}, which was never written")
+    # And every payload is reachable exactly once.
+    seen = sorted(json.loads((out / row["file"]).read_text())["n"] for row in index)
+    assert seen == [1, 2, 3]

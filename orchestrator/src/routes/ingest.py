@@ -521,8 +521,17 @@ async def ingest_tracker_runs(request: TrackerRunsIngestRequest,
         if bundled:
             try:
                 index = json.loads((path / "index.json").read_text())
-                known_labels += [row.get("run_label") for row in index
-                                 if isinstance(row, dict) and row.get("run_label")]
+                # Valid JSON is not a valid index: `{}` iterates string KEYS and `42`
+                # raises TypeError, neither caught below — so both became a 500 instead
+                # of being deferred to the worker's clear error. A label must also be a
+                # non-empty STRING; `run_label: []` is truthy and would reach get_by_path.
+                if isinstance(index, list):
+                    known_labels += [
+                        row["run_label"] for row in index
+                        if isinstance(row, dict)
+                        and isinstance(row.get("run_label"), str)
+                        and row["run_label"].strip()
+                    ]
             except (OSError, ValueError):
                 # index.json is caller-supplied data; if it is unreadable the worker will
                 # say so properly. Skipping the early check is not skipping the check —

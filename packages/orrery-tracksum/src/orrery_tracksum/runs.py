@@ -141,15 +141,26 @@ def summarize_runs(root: str, summarize_fn, reader, on_progress=None) -> list[di
     ]
 
 
-def build_index(bundles: list[dict]) -> list[dict]:
-    """The `index.json` the ingest job reads to find the per-run files."""
+def build_index(bundles: list[dict], filenames: dict[str, str] | None = None) -> list[dict]:
+    """The `index.json` the ingest job reads to find the per-run files.
+
+    `filenames` maps a bundle's index in `bundles` to the file actually written. It
+    matters because the writer sanitises and de-duplicates names: a label like `../x`
+    becomes `_x.json` and a repeated `foo` becomes `foo~2.json`, so a reader that
+    reconstructs `<run_label>.json` would miss those files entirely — and read `foo.json`
+    twice. Recording the emitted name removes the guess. Omitted (or absent from an older
+    index) it falls back to the label, which is correct for the common case where the
+    label needed no transformation.
+    """
+    filenames = filenames or {}
     return [
         {
             "run_label": b["run_label"],
+            "file": filenames.get(i, b["run_label"] + ".json"),
             "rung": b["rung"],
             "nodes": len(b["nodes"]),
             "dip_recognized": bool(b["dip"]["recognized"]),
             "completeness": b["coherency"]["completeness_pass"],
         }
-        for b in bundles
+        for i, b in enumerate(bundles)
     ]

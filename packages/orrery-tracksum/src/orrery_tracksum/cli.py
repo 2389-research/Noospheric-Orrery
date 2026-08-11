@@ -92,12 +92,12 @@ def _cmd_runs(a) -> int:
     print("summarizing %d run(s) with %s" % (len(runs), a.model))
 
     bundles = summarize_runs(a.root, summarize_fn, reader, on_progress=_progress)
-    index = build_index(bundles)
 
+    written_names: dict[int, str] = {}
     if a.out:
         os.makedirs(a.out, exist_ok=True)
         emitted: set[str] = set()
-        for b in bundles:
+        for i, b in enumerate(bundles):
             # `run_label` comes from the CORPUS, so it is untrusted for filesystem use:
             # `../name` escapes --out entirely and an absolute value makes os.path.join
             # discard --out. Two runs sharing a label silently overwrote each other's
@@ -116,12 +116,15 @@ def _cmd_runs(a) -> int:
                 print("  ! duplicate output name for run_label %r — writing %s.json"
                       % (b["run_label"], name))
             emitted.add(name)
+            written_names[i] = name + ".json"
             with open(os.path.join(a.out, name + ".json"), "w") as fh:
                 json.dump(b, fh, indent=1)
+        # Built AFTER writing, so it can record the names actually emitted.
         with open(os.path.join(a.out, "index.json"), "w") as fh:
-            json.dump(index, fh, indent=1)
+            json.dump(build_index(bundles, written_names), fh, indent=1)
         print("\nwrote %d bundle(s) + index.json to %s" % (len(bundles), a.out))
 
+    index = build_index(bundles, written_names)
     print("\n=== INDEX ===")
     for e in index:
         print("  %-6s %-10s nodes=%-2d dip=%s completeness=%s" % (
