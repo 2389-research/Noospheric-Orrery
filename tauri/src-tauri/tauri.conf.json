@@ -21,6 +21,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "resources": {
       "resources": "resources"
@@ -32,5 +33,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIxMzU0N0U4OEZDRjE4RkQKUldUOUdNK1A2RWMxSWRzcFJEOFRUYjl6QmQ5SDBzY3dna0JOWkFTd0s1N1RLV3hqdjFvMFJrVjUK",
+      "endpoints": [
+        "https://github.com/2389-research/Noospheric-Orrery/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

@@ -115,6 +115,15 @@ $("reconfigure").addEventListener("click", async () => {
 
 (async function init() {
   try {
+    // Offer an update before touching services — the only safe window to
+    // swap the bundle. Fail-open is built into mountUpdateFlow (5s timeout).
+    await new Promise((resolve) =>
+      window.OrreryUpdate.mountUpdateFlow({
+        container: document.querySelector("main"),
+        mode: "launch",
+        onDone: resolve,
+      })
+    );
     const forceSettings = new URLSearchParams(window.location.search).get("settings") === "1";
     const status = await invoke("get_status");
     if (!status.has_settings || forceSettings) {

@@ -12,6 +12,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager, State};
+use tauri_plugin_updater::UpdaterExt;
 
 const ORCH_PORT: u16 = 8100;
 const FRONT_PORT: u16 = 3100;
@@ -117,6 +118,22 @@ struct Status {
     provisioned: bool,
     has_settings: bool,
     frontend_url: String,
+}
+
+/// Update metadata the webview needs to render the prompt. The raw plugin
+/// `Update` stays in Rust; the webview only sees these three fields.
+#[derive(Serialize)]
+struct UpdateInfo {
+    version: String,
+    current_version: String,
+    notes: Option<String>,
+}
+
+/// Download progress streamed to the webview during install.
+#[derive(Serialize, Clone)]
+struct UpdateProgress {
+    downloaded: usize,
+    total: Option<u64>,
 }
 
 struct Paths {
@@ -593,6 +610,48 @@ fn get_log_buffer(state: State<Supervisor>) -> HashMap<String, Vec<String>> {
         .collect()
 }
 
+/// Ask the update endpoint whether a newer version exists. `Ok(None)` means
+/// up to date; `Err` means the check itself failed (offline, endpoint down)
+/// — the caller treats that as "proceed on the current version".
+#[tauri::command]
+async fn check_for_update(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let maybe_update = updater.check().await.map_err(|e| e.to_string())?;
+    Ok(maybe_update.map(|update| UpdateInfo {
+        version: update.version,
+        current_version: update.current_version,
+        notes: update.body,
+    }))
+}
+
+/// Download and install the pending update, streaming progress, then restart
+/// onto the new version. Re-checks so it doesn't have to hold the non-'static
+/// `Update` across the earlier IPC call; a `None` here means the release moved
+/// between check and confirm — a harmless no-op.
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
+        return Ok(());
+    };
+    let app_progress = app.clone();
+    let mut downloaded: usize = 0;
+    update
+        .download_and_install(
+            move |chunk_length, content_length| {
+                downloaded += chunk_length;
+                let _ = app_progress.emit(
+                    "update-progress",
+                    UpdateProgress { downloaded, total: content_length },
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    app.restart();
+}
+
 fn open_logs_window(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("logs") {
         let _ = w.show();
@@ -606,6 +665,25 @@ fn open_logs_window(app: &tauri::AppHandle) {
     )
     .title("Noospheric — Service Logs")
     .inner_size(980.0, 640.0)
+    .build();
+}
+
+/// Open (or focus) the software-update window — the manual "Check for
+/// Updates…" entry point. Runs the same update flow as launch, in its own
+/// window because after launch the main window has navigated to the frontend.
+fn open_updates_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("updates") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    let _ = tauri::WebviewWindowBuilder::new(
+        app,
+        "updates",
+        tauri::WebviewUrl::App("updates.html".into()),
+    )
+    .title("Noospheric — Software Update")
+    .inner_size(520.0, 420.0)
     .build();
 }
 
@@ -664,6 +742,7 @@ fn kill_children_and_clear_logs(state: &Supervisor) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Supervisor::default())
         .invoke_handler(tauri::generate_handler![
             get_status,
@@ -671,7 +750,9 @@ pub fn run() {
             save_settings,
             bootstrap,
             launch,
-            get_log_buffer
+            get_log_buffer,
+            check_for_update,
+            install_update
         ])
         .setup(|app| {
             println!("\n┌─ Noospheric ─────────────────────────────────");
@@ -687,9 +768,15 @@ pub fn run() {
                 MenuItem::with_id(app, "view-logs", "Service Logs", true, Some("CmdOrCtrl+L"))?;
             let settings_item =
                 MenuItem::with_id(app, "change-settings", "Change Settings…", true, None::<&str>)?;
+            let updates_item =
+                MenuItem::with_id(app, "check-updates", "Check for Updates…", true, None::<&str>)?;
             let quit = PredefinedMenuItem::quit(app, None)?;
-            let submenu =
-                Submenu::with_items(app, "Noospheric", true, &[&logs_item, &settings_item, &quit])?;
+            let submenu = Submenu::with_items(
+                app,
+                "Noospheric",
+                true,
+                &[&logs_item, &settings_item, &updates_item, &quit],
+            )?;
             // A custom menu overrides the default Edit menu; without these
             // predefined items, Cmd+X/C/V/A don't work in webview text fields
             // (e.g. pasting the API key into the settings form).
@@ -746,6 +833,8 @@ pub fn run() {
                 open_logs_window(app);
             } else if event.id() == "change-settings" {
                 reopen_settings(app);
+            } else if event.id() == "check-updates" {
+                open_updates_window(app);
             }
         })
         .on_window_event(|window, event| {
