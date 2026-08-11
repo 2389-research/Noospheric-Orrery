@@ -18,6 +18,15 @@ from pathlib import Path
 
 from src.db import init_db
 
+class _Row(list):
+    """Minimal stand-in for a sqlite3 row: `fetchone()[0]` is all the code reads."""
+    def __init__(self, value):
+        super().__init__([value])
+
+    def fetchone(self):
+        return self if self[0] is not None else None
+
+
 _ORCH_DB = Path(__file__).resolve().parents[1] / "src" / "db.py"
 _WORKER_DB = Path(__file__).resolve().parents[2] / "worker" / "src" / "db.py"
 
@@ -243,8 +252,12 @@ def test_busy_timeout_is_set_before_journal_mode(tmp_path):
 
     for path in checked:
         source = path.read_text()
-        timeout_at = source.index('PRAGMA busy_timeout')
-        wal_at = source.index('PRAGMA journal_mode=WAL')
+        # Scoped to get_connection's body: `PRAGMA journal_mode=WAL` also appears in
+        # _enable_wal (and in its docstring), so searching the whole file finds the
+        # wrong occurrence and the assertion becomes meaningless.
+        body = source[source.index("def get_connection("):]
+        timeout_at = body.index('PRAGMA busy_timeout')
+        wal_at = body.index('_enable_wal(conn)')
         assert timeout_at < wal_at, (
             f"{path.name}: journal_mode=WAL is set before busy_timeout, so the "
             f"journal-mode switch runs with no timeout and fails immediately under "
@@ -272,3 +285,121 @@ def test_the_migration_is_idempotent_across_processes(tmp_path):
     conn.close()
     assert rows == {"d1": "root", "d2": "group", "d3": "leaf", "d4": "leaf"}
     assert n_collections == 1, "the collection row was duplicated by a second migration"
+
+
+def test_the_wal_switch_tolerates_a_concurrent_switcher():
+    """Changing journal mode can return SQLITE_BUSY even with busy_timeout set.
+
+    Setting the timeout first was necessary but NOT sufficient: CI failed on
+    `PRAGMA journal_mode=WAL` with "database is locked" *after* that fix, because
+    busy_timeout does not reliably cover a journal-mode change. Two processes opening the
+    same not-yet-WAL file — the normal case for a freshly imported database, since both
+    services open every workspace on startup — can still collide.
+
+    Driven with a fake connection rather than a real race: the timing would not reproduce
+    on macOS or in a Linux container, only on CI runners. The behaviour under test is the
+    retry, not the scheduling, and `sqlite3.Connection` cannot be monkeypatched anyway.
+    """
+    from src.db import _enable_wal
+
+    class BusyOnce:
+        """Raises SQLITE_BUSY on the first switch, then reports success."""
+        def __init__(self):
+            self.switches = 0
+
+        def execute(self, sql, *args):
+            if sql.strip().lower() == "pragma journal_mode=wal":
+                self.switches += 1
+                if self.switches == 1:
+                    raise sqlite3.OperationalError("database is locked")
+                return _Row("wal")
+            if sql.strip().lower() == "pragma journal_mode":
+                # The first switch RAISED, so the file is still in rollback mode. A fake
+                # that claimed "wal" here would let _enable_wal return early and the test
+                # would pass without ever exercising the retry.
+                return _Row("wal" if self.switches >= 2 else "delete")
+            return _Row(None)
+
+    conn = BusyOnce()
+    _enable_wal(conn, attempts=3)          # must not raise
+    assert conn.switches >= 2, "the switch was not retried after SQLITE_BUSY"
+
+
+def test_the_switch_is_satisfied_when_another_process_already_did_it():
+    """"Already WAL" is success, not something to keep fighting for.
+
+    If the other process won, the work is done — retrying to exhaustion would turn a
+    won race into an error.
+    """
+    from src.db import _enable_wal
+
+    class AlwaysBusyButAlreadyWal:
+        def __init__(self):
+            self.switches = 0
+
+        def execute(self, sql, *args):
+            if sql.strip().lower() == "pragma journal_mode=wal":
+                self.switches += 1
+                raise sqlite3.OperationalError("database is locked")
+            if sql.strip().lower() == "pragma journal_mode":
+                return _Row("wal")      # someone else completed the switch
+            return _Row(None)
+
+    conn = AlwaysBusyButAlreadyWal()
+    _enable_wal(conn, attempts=4)          # must not raise
+    assert conn.switches == 1, "should stop as soon as the file is observed to be WAL"
+
+
+def test_a_real_failure_is_not_retried_into_silence():
+    """Only contention is retryable — an unwritable database must surface at once.
+
+    Otherwise the retry loop becomes a way of hiding problems rather than surviving
+    them, and a clear error arrives several seconds late wearing the wrong clothes.
+    """
+    import pytest
+
+    from src.db import _enable_wal
+
+    class ReadOnly:
+        def __init__(self):
+            self.switches = 0
+
+        def execute(self, sql, *args):
+            if sql.strip().lower() == "pragma journal_mode=wal":
+                self.switches += 1
+                raise sqlite3.OperationalError("attempt to write a readonly database")
+            return _Row(None)
+
+    conn = ReadOnly()
+    with pytest.raises(sqlite3.OperationalError, match="readonly"):
+        _enable_wal(conn, attempts=6)
+    assert conn.switches == 1, "a non-contention error must not be retried"
+
+
+def test_a_connection_is_never_returned_quietly_without_wal():
+    """`PRAGMA journal_mode=WAL` REPORTS the resulting mode; it need not raise.
+
+    So a final bare execute could leave the connection in rollback-journal mode with no
+    error anywhere — silently losing the concurrent reader/writer guarantee the rest of
+    this codebase assumes, which is the whole reason WAL is set. The returned value is
+    the only reliable signal, so exhausting the retries on a database that never
+    switches has to raise rather than return.
+    """
+    import pytest
+
+    from src.db import _enable_wal
+
+    class NeverSwitches:
+        """Accepts the pragma without error and stays in `delete` — the silent case."""
+        def __init__(self):
+            self.switches = 0
+
+        def execute(self, sql, *args):
+            if sql.strip().lower() == "pragma journal_mode=wal":
+                self.switches += 1
+            return _Row("delete")
+
+    conn = NeverSwitches()
+    with pytest.raises(sqlite3.OperationalError, match="could not enable WAL"):
+        _enable_wal(conn, attempts=2)
+    assert conn.switches >= 2, "should have exhausted its retries before giving up"

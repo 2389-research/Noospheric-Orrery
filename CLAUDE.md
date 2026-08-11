@@ -268,15 +268,31 @@ reference vocabulary) is sent as a `cache_control: ephemeral` block. The breakpo
 including it would miss the cache on every call. `RelayResponse.cache_read_input_tokens`
 is how you confirm hits.
 
-**Local models:** `classify_document` passes `ollama_options={"num_ctx": …}` because the
-rendered prompt (~2.4k static + a taxonomy block that grows with the graph) clears
-Ollama's 4096 default, and **Ollama truncates from the LEFT and reports nothing** —
-measured: at `num_ctx=4096` a 5,160-token prompt was silently cut to 2,051, discarding
-the instructions and vocabulary, and the model returned schema-valid nonsense (a
-placeholder domain parroted from the surviving tail, 74 "secondary" domains where the
-truncated instruction had asked for 0-3). Ollama-only kwargs (`ollama_options`,
-`format`) are stripped in `Relay.complete`/`complete_sync` before the Anthropic SDK
-call, since `messages.create()` raises on unknown keywords.
+**Local models — `num_ctx` is a CAP, not a floor.** With `num_ctx` unset, current Ollama
+sizes the context to the prompt (measured: a 15k-token prompt counted in full). Passing a
+value *below* the prompt is what causes damage: **Ollama truncates from the LEFT and
+reports nothing** — at `num_ctx=4096` a 5,160-token prompt was counted as 2,051,
+discarding the instructions and vocabulary from the head, and the model returned
+schema-valid nonsense (a placeholder domain parroted from the surviving tail, 74
+"secondary" domains where the truncated instruction had asked for 0-3). So when you set
+`ollama_options={"num_ctx": …}`, it must stay comfortably above the largest prompt that
+call site can build. It is set at all for portability — older Ollama releases default to
+2048/4096 instead of auto-sizing.
+
+Ollama-only kwargs (`ollama_options`, `format`) are stripped in `Relay.complete` /
+`complete_sync` before an Anthropic SDK call, since `messages.create()` raises on unknown
+keywords — so a caller can pass them unconditionally without knowing the backend.
+
+**⚠️ On Ollama, always go through the native `/api/chat` path (`_complete_ollama` /
+`_complete_ollama_sync`), never the Anthropic-compatible shim.** Ollama *does* serve
+`/v1/messages`, so `Anthropic(base_url=OLLAMA_URL)` appears to work — but that shim
+leaves **thinking enabled**. Measured on gemma4:e4b: a one-word request finishes
+reasoning and emits a text block, while any substantive prompt spends the whole
+`max_tokens` budget inside a `thinking` block (`stop_reason=max_tokens`) and emits **no
+text block**, so `.text` is empty. Blank output, no error. Both relay paths set
+`think: false` for exactly this reason. This is why `complete_sync` has an ollama branch:
+orrery-codesum summarizes a repo through `complete_sync` exclusively (its traversal is
+synchronous), and on the shim every file summary came back empty.
 
 ### Entity Normalization
 

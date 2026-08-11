@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import threading
+import time
 from pathlib import Path
 
 # Paths already migrated by init_db in this process. The schema + migrations
@@ -578,17 +579,60 @@ def reset_initialized(db_path: str | None = None) -> None:
             _initialized.discard(db_path)
 
 
+def _enable_wal(conn: sqlite3.Connection, attempts: int = 6) -> None:
+    """Put the connection's database into WAL mode, tolerating a concurrent switcher.
+
+    Changing journal mode needs an exclusive moment, and `busy_timeout` does NOT
+    reliably cover it — setting the timeout first (which this still does, and must) was
+    necessary but not sufficient. Two processes opening the same not-yet-WAL file, or one
+    opening while another holds a write transaction on it, can still get SQLITE_BUSY
+    here. Both services open every workspace on startup, so that is the normal case for
+    a freshly imported database, not an exotic one.
+
+    Retries briefly, and treats "already WAL" as success: if another process won the
+    race, the work is done and there is nothing left to do. Only a persistent failure
+    propagates, because operating in rollback-journal mode would silently drop the
+    concurrency guarantee the rest of this codebase assumes.
+    """
+    for attempt in range(attempts):
+        try:
+            row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+            if row and str(row[0]).lower() == "wal":
+                return
+        except sqlite3.OperationalError as e:
+            # Only contention is retryable; a genuine problem (an unwritable file, say)
+            # must surface now rather than after six pointless sleeps.
+            if "locked" not in str(e).lower() and "busy" not in str(e).lower():
+                raise
+        # Someone else may have completed the switch while we were blocked.
+        try:
+            row = conn.execute("PRAGMA journal_mode").fetchone()
+            if row and str(row[0]).lower() == "wal":
+                return
+        except sqlite3.OperationalError:
+            pass
+        time.sleep(0.05 * (attempt + 1))
+    # Out of attempts. `PRAGMA journal_mode=WAL` RETURNS the resulting mode and does not
+    # necessarily raise when it could not switch, so a final bare execute would hand back
+    # a connection that is quietly still in rollback-journal mode — losing the concurrent
+    # reader/writer guarantee the rest of this codebase assumes, with no error anywhere.
+    # The returned value is the only reliable signal, so it is what gets checked.
+    row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+    mode = str(row[0]).lower() if row else "unknown"
+    if mode != "wal":
+        raise sqlite3.OperationalError(
+            f"could not enable WAL after {attempts} attempts (journal_mode is {mode!r}); "
+            f"another process may hold the database, or it may not be writable")
+
+
 def get_connection(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    # busy_timeout FIRST. Switching journal modes takes a brief exclusive lock, so on a
-    # database not yet in WAL — a fresh file, or an imported one — this pragma is itself
-    # a contended write. Set after, it ran with NO timeout in force and raised "database
-    # is locked" immediately whenever another process was opening the same file, which
-    # both services do on startup. Ordering is the whole fix: a pragma cannot be covered
-    # by a timeout that has not been set yet.
+    # busy_timeout FIRST — necessary but not sufficient, see _enable_wal. A pragma cannot
+    # be covered by a timeout that has not been set yet, and the journal-mode switch is
+    # itself a contended write on a database not already in WAL.
     conn.execute("PRAGMA busy_timeout=30000")
-    conn.execute("PRAGMA journal_mode=WAL")
+    _enable_wal(conn)
     return conn
 
 
