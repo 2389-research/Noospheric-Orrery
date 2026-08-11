@@ -80,12 +80,14 @@ async def poll_loop():
 
     from orrery_relay import Relay
     from .jobs.graph_repair import run_judge_sweep
+    from .jobs.normalization_judge import resolve_judge_relay, run_normalization_judge_sweep
     relay = Relay.from_settings(settings)
     last_sweep = 0.0  # 0 → sweep on the first iteration
 
     while True:
         # Scan all workspace DBs for queued jobs
         db_paths = _find_workspace_dbs(settings.db_path)
+        did_work = False   # did a REAL job run this pass? (this gates the idle judge)
 
         for db_path in db_paths:
             try:
@@ -94,6 +96,7 @@ async def poll_loop():
                 job = pick_next_job(conn)
 
                 if job:
+                    did_work = True
                     ws_name = Path(db_path).parent.name
                     print(f"Picked up job {job['id']} ({job['type']}) in workspace {ws_name}", flush=True)
                     mark_job_running(conn, job["id"])
@@ -124,7 +127,42 @@ async def poll_loop():
             except Exception as e:
                 print(f"judge sweep error: {e}", flush=True)
 
-        await asyncio.sleep(settings.worker_poll_interval)
+        # Low-priority background work: drain the normalization review backlog, but ONLY
+        # when no real job ran this pass. The point of the gate is resource contention —
+        # on a local model the judge and an extraction would fight over the same GPU, and
+        # the judge is never the urgent one. One bounded batch per pass; while it is
+        # draining, poll again quickly (still checking for jobs FIRST) instead of idling
+        # the full interval, so a backlog clears without delaying real work.
+        norm_did = False
+        if settings.normalization_judge_mode != "off" and not did_work:
+            try:
+                # Local model if Ollama has it, else the cloud model — re-checked on a TTL
+                # rather than fixed at startup, since Ollama comes and goes. The probe
+                # blocks, so it runs in a thread: the poll loop must not stall on a socket
+                # timeout. Inside the try on purpose — a resolve failure has to be logged
+                # and retried, never crash poll_loop and take the worker down with it.
+                judge_relay, judge_model, judge_src = await asyncio.to_thread(
+                    resolve_judge_relay, settings, relay)
+                nr = await run_normalization_judge_sweep(
+                    db_paths, judge_relay, judge_model,
+                    batch_size=settings.normalization_judge_batch,
+                    mode=settings.normalization_judge_mode,
+                    min_confidence=settings.normalization_judge_min_confidence,
+                    temperature=settings.normalization_judge_temperature,
+                    max_attempts=settings.normalization_judge_max_attempts,
+                )
+                if nr["pairs"]:
+                    norm_did = True
+                    ws = Path(nr.get("workspace", "")).parent.name
+                    print(f"norm_judge[{settings.normalization_judge_mode}/{judge_src}:"
+                          f"{judge_model}] ws={ws}: judged {nr['judged']}, "
+                          f"kept-resolved {nr['kept_resolved']}, "
+                          f"merge-advised {nr['merge_advised']}, unsure {nr['unsure']}, "
+                          f"{nr['failed']} failed", flush=True)
+            except Exception as e:
+                print(f"norm_judge error: {e}", flush=True)
+
+        await asyncio.sleep(1 if norm_did else settings.worker_poll_interval)
 
 def main():
     asyncio.run(poll_loop())
