@@ -3,6 +3,8 @@
 
 import uuid
 from types import SimpleNamespace
+
+import pytest
 from src.db import init_db, get_connection
 from src.jobs import normalization_judge as nj
 from src.jobs.normalization_judge import (
@@ -275,3 +277,68 @@ async def test_sweep_skips_empty_and_returns_first_with_pending(tmp_path):
     r = await run_normalization_judge_sweep(
         [empty, db_path], relay, "m", batch_size=10, mode="advise", min_confidence=0.75)
     assert r["pairs"] == 2 and r["workspace"] == db_path
+
+
+# --- the judge must never overwrite a decision made while it was thinking ------
+
+async def test_a_human_resolution_during_the_relay_call_wins(tmp_path, monkeypatch):
+    """The SELECT is stale by the time the verdict arrives.
+
+    A relay call takes seconds to minutes, and a human (or another worker) can resolve a
+    pair in that window. Updating by `id` alone let the judge overwrite a HUMAN decision
+    with `resolution = 'kept'` — the opposite of the human-gated property this job is
+    built around, and invisible afterwards because the row simply looks judged.
+    """
+    from src.db import get_connection, init_db
+    from src.jobs import normalization_judge as nj
+
+    db = str(tmp_path / "t.db")
+    init_db(db)
+    conn = get_connection(db)
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('a','alpha','Thing')")
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES ('b','alphas','Thing')")
+    conn.execute("INSERT INTO normalization_review_queue "
+                 "(id, entity_a_id, entity_a_name, entity_b_id, entity_b_name, similarity) "
+                 "VALUES ('p1','a','alpha','b','alphas',0.81)")
+    conn.commit()
+
+    async def judge_and_meanwhile_a_human_resolves(conn_, relay, pairs, model, **kw):
+        # Exactly the window the guard protects: the human acts BEFORE the verdict lands.
+        conn_.execute("UPDATE normalization_review_queue SET status='resolved', "
+                      "resolution='merged' WHERE id='p1'")
+        conn_.commit()
+        return {0: {"verdict": "keep", "confidence": 0.99, "rationale": "distinct"}}
+
+    monkeypatch.setattr(nj, "judge_batch", judge_and_meanwhile_a_human_resolves)
+
+    await nj.run_normalization_judge_chunk(
+        conn, relay=object(), model="m", batch_size=10, mode="apply", min_confidence=0.75)
+
+    row = conn.execute("SELECT status, resolution, judge_verdict FROM "
+                       "normalization_review_queue WHERE id='p1'").fetchone()
+    conn.close()
+    assert row["status"] == "resolved" and row["resolution"] == "merged", (
+        f"the judge overwrote a human resolution: {tuple(row)}")
+    assert row["judge_verdict"] is None, "a late verdict was recorded as if it had a say"
+
+
+@pytest.mark.parametrize("bad", ["0.9", ["0.9"], {"c": 1}, None, True, float("nan"),
+                                 float("inf"), -0.1, 1.5])
+def test_an_unusable_confidence_is_rejected(bad):
+    """`is not None` was the whole check.
+
+    A string or list then reached the SQLite binding (which raises and kills the entire
+    chunk, not just the pair) and the `>= min_confidence` comparison. A value above 1.0
+    also passed, and in `apply` mode that auto-resolves a keep on a confidence the model
+    was never entitled to claim.
+    """
+    from src.jobs.normalization_judge import _usable_confidence
+
+    assert not _usable_confidence(bad)
+
+
+@pytest.mark.parametrize("good", [0.0, 0.5, 1.0, 0, 1])
+def test_a_valid_confidence_is_accepted(good):
+    from src.jobs.normalization_judge import _usable_confidence
+
+    assert _usable_confidence(good)

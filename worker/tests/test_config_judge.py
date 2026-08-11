@@ -1,6 +1,8 @@
 import importlib
 import os
 
+import pytest
+
 from src import config as config_mod
 
 def _get(monkeypatch, **env):
@@ -61,3 +63,34 @@ def test_judge_settings_are_env_overridable(monkeypatch):
     assert s.normalization_judge_batch == 3
     assert s.normalization_judge_min_confidence == 0.9
     assert s.normalization_judge_prefer_local is False
+
+
+def test_a_negative_batch_cannot_disable_the_limit(monkeypatch):
+    """`LIMIT -1` means NO LIMIT in SQLite.
+
+    So a batch of -1 makes one "idle" pass judge the entire backlog — contending with
+    real work, which is the single thing the idle gate exists to prevent. The failure is
+    silent: the query succeeds and does far more than asked.
+    """
+    monkeypatch.setenv("NORMALIZATION_JUDGE_BATCH", "-1")
+    assert config_mod.get_settings().normalization_judge_batch >= 1
+    monkeypatch.setenv("NORMALIZATION_JUDGE_BATCH", "0")
+    assert config_mod.get_settings().normalization_judge_batch >= 1
+
+
+def test_an_attempt_cap_below_one_would_retry_forever(monkeypatch):
+    monkeypatch.setenv("NORMALIZATION_JUDGE_MAX_ATTEMPTS", "0")
+    assert config_mod.get_settings().normalization_judge_max_attempts >= 1
+
+
+@pytest.mark.parametrize("value,expected", [("-0.5", 0.0), ("1.5", 1.0), ("0.9", 0.9)])
+def test_the_confidence_threshold_stays_within_zero_and_one(monkeypatch, value, expected):
+    """Outside 0..1 it either auto-resolves everything or nothing."""
+    monkeypatch.setenv("NORMALIZATION_JUDGE_MIN_CONFIDENCE", value)
+    assert config_mod.get_settings().normalization_judge_min_confidence == expected
+
+
+def test_an_unknown_mode_falls_back_to_advise(monkeypatch):
+    """An unrecognised mode must not be treated as `apply` by accident."""
+    monkeypatch.setenv("NORMALIZATION_JUDGE_MODE", "aply")   # typo
+    assert config_mod.get_settings().normalization_judge_mode == "advise"

@@ -24,6 +24,7 @@ corrections judge.
 """
 
 import json
+import math
 import time
 import urllib.request
 
@@ -104,6 +105,20 @@ VERDICTS_SCHEMA = {
     },
     "required": ["verdicts"],
 }
+
+
+def _usable_confidence(value) -> bool:
+    """True only for a finite number in [0, 1].
+
+    `value is not None` was the whole check, so a model returning a string or a list
+    reached the SQLite binding (which raises and kills the entire chunk, not just the
+    pair) and the `>= min_confidence` comparison (which raises on a str under Python 3).
+    A number above 1.0 also passed, and in `apply` mode that auto-resolves a keep on
+    a confidence the model was never entitled to claim.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value) and 0.0 <= value <= 1.0
 
 
 def _evidence(conn, entity_id: str) -> tuple[str, str]:
@@ -263,31 +278,44 @@ async def run_normalization_judge_chunk(
         print(f"norm_judge: batch relay call failed: {e}", flush=True)
         verdicts = {}
 
+    # EVERY update below is guarded on `status = 'pending'`. The relay call above takes
+    # seconds to minutes, and a human (or another worker) can resolve a pair in that
+    # window — the SELECT that produced `pairs` is long stale by now. Updating by `id`
+    # alone would let the judge overwrite a HUMAN decision with `resolution = 'kept'`,
+    # which is the opposite of the human-gated property this job is built around.
     for i, p in enumerate(pairs):
         v = verdicts.get(i)
-        if not v or v["verdict"] not in VALID_VERDICTS or v["confidence"] is None:
+        if not v or v["verdict"] not in VALID_VERDICTS or not _usable_confidence(v.get("confidence")):
             # No usable verdict — count an attempt; after max_attempts this pair
             # drops out of the pull and stops blocking fresh pairs behind it.
             conn.execute(
-                "UPDATE normalization_review_queue SET judge_attempts = COALESCE(judge_attempts, 0) + 1 WHERE id = ?",
+                "UPDATE normalization_review_queue SET judge_attempts = "
+                "COALESCE(judge_attempts, 0) + 1 WHERE id = ? AND status = 'pending'",
                 (p["id"],),
             )
             stats["failed"] += 1
             continue
-        conn.execute(
+        cur = conn.execute(
             "UPDATE normalization_review_queue SET judge_verdict = ?, judge_confidence = ?, "
-            "judge_rationale = ? WHERE id = ?",
+            "judge_rationale = ? WHERE id = ? AND status = 'pending'",
             (v["verdict"], v["confidence"], v["rationale"], p["id"]),
         )
+        if not cur.rowcount:
+            # Resolved while we were thinking. Someone else's decision stands; ours is
+            # simply late, and recording it would imply the judge had a say.
+            stats["skipped_resolved"] = stats.get("skipped_resolved", 0) + 1
+            continue
         stats["judged"] += 1
         confident = v["confidence"] >= min_confidence
         if v["verdict"] == "keep":
             if mode == "apply" and confident:
-                conn.execute(
-                    "UPDATE normalization_review_queue SET status = 'resolved', resolution = 'kept' WHERE id = ?",
+                cur = conn.execute(
+                    "UPDATE normalization_review_queue SET status = 'resolved', "
+                    "resolution = 'kept' WHERE id = ? AND status = 'pending'",
                     (p["id"],),
                 )
-                stats["kept_resolved"] += 1
+                if cur.rowcount:
+                    stats["kept_resolved"] += 1
         elif v["verdict"] == "merge":
             if confident:
                 stats["merge_advised"] += 1

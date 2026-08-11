@@ -135,4 +135,35 @@ def get_settings() -> Settings:
         else:
             kwargs[f.name] = default
 
-    return Settings(**kwargs)
+    return _validated(Settings(**kwargs))
+
+
+def _validated(s: "Settings") -> "Settings":
+    """Clamp the judge limits to values that mean what they say.
+
+    These reach SQL and a scheduling decision directly, and the failure is silent rather
+    than loud: `LIMIT -1` means NO LIMIT in SQLite, so a batch of -1 makes one "idle"
+    pass judge the ENTIRE backlog — contending with real work, which is the single thing
+    the idle gate exists to prevent. A max_attempts below 1 retries a hopeless pair
+    forever; a confidence threshold outside 0..1 either auto-resolves everything or
+    nothing. Clamped rather than raised, because a bad env var should not stop the worker
+    booting — but it is reported, so the operator sees why their value did not take.
+    """
+    import dataclasses
+
+    fixes: dict = {}
+    if s.normalization_judge_batch < 1:
+        fixes["normalization_judge_batch"] = 1
+    if s.normalization_judge_max_attempts < 1:
+        fixes["normalization_judge_max_attempts"] = 1
+    if not 0.0 <= s.normalization_judge_min_confidence <= 1.0:
+        fixes["normalization_judge_min_confidence"] = min(
+            1.0, max(0.0, s.normalization_judge_min_confidence))
+    if s.normalization_judge_mode not in ("off", "advise", "apply"):
+        fixes["normalization_judge_mode"] = "advise"
+    if fixes:
+        for name, value in fixes.items():
+            print(f"config: {name}={getattr(s, name)!r} is out of range; using {value!r}",
+                  flush=True)
+        s = dataclasses.replace(s, **fixes)
+    return s
