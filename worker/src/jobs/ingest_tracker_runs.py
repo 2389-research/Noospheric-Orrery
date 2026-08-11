@@ -275,6 +275,23 @@ async def run_ingest_tracker_runs(job: dict, db_path: str) -> None:
                 f"ingest_tracker_runs: duplicate run label(s) in this corpus: "
                 f"{', '.join(dupes)}")
 
+        # An explicit chain must describe exactly the runs that were loaded. The edge
+        # loop silently skips members it cannot resolve, so a typo or a duplicate in
+        # `config["chain"]` completed the job with MISSING chain_next edges — a
+        # trajectory quietly shorter than the corpus, which is the failure this job
+        # exists to represent faithfully.
+        if config.get("chain"):
+            requested = list(config["chain"])
+            unknown = sorted(set(requested) - set(labels))
+            dup = sorted({c for c in requested if requested.count(c) > 1})
+            missing = sorted(set(labels) - set(requested))
+            if unknown or dup or missing:
+                raise RuntimeError(
+                    "ingest_tracker_runs: the explicit chain does not match the loaded "
+                    f"runs — unknown={unknown or '[]'} duplicated={dup or '[]'} "
+                    f"omitted={missing or '[]'}. Every loaded run must appear exactly "
+                    "once, or the trajectory would be silently incomplete.")
+
         collection_ids: dict[str, str] = {}
         for run in runs:
             label = run["run_label"]

@@ -96,20 +96,26 @@ def _cmd_runs(a) -> int:
 
     if a.out:
         os.makedirs(a.out, exist_ok=True)
-        used: dict[str, int] = {}
+        emitted: set[str] = set()
         for b in bundles:
             # `run_label` comes from the CORPUS, so it is untrusted for filesystem use:
             # `../name` escapes --out entirely and an absolute value makes os.path.join
             # discard --out. Two runs sharing a label silently overwrote each other's
             # bundle, losing a run with no error. The ingest side already validated
             # labels; the producer did not, which left the gap open at the source.
-            name = _safe_filename(b["run_label"])
-            seen = used.get(name, 0)
-            used[name] = seen + 1
-            if seen:
-                name = f"{name}~{seen + 1}"     # keep both, do not clobber
-                print("  ! duplicate run_label %r — writing %s.json"
+            base = _safe_filename(b["run_label"])
+            # Track every EMITTED name, not just the base. Counting per base meant the
+            # labels `foo`, `foo`, `foo~2` produced `foo`, `foo~2`, `foo~2` — the third
+            # silently overwriting the second, which is the exact loss the suffix was
+            # added to prevent.
+            name, n = base, 1
+            while name in emitted:
+                n += 1
+                name = f"{base}~{n}"
+            if name != base:
+                print("  ! duplicate output name for run_label %r — writing %s.json"
                       % (b["run_label"], name))
+            emitted.add(name)
             with open(os.path.join(a.out, name + ".json"), "w") as fh:
                 json.dump(b, fh, indent=1)
         with open(os.path.join(a.out, "index.json"), "w") as fh:

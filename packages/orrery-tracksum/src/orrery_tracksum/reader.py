@@ -69,8 +69,14 @@ def _find_corpus_manifest(run_dir: str, max_depth: int = 8) -> dict:
             if not isinstance(rows, list):
                 return {}
             for e in rows:
-                if isinstance(e, dict) and e.get("run_id") is not None:
-                    out[e["run_id"]] = e
+                if not isinstance(e, dict):
+                    continue
+                # run_id becomes a DICT KEY, so it has to be hashable AND meaningful:
+                # `{"run_id": []}` passed an is-not-None check and then raised TypeError
+                # on assignment, aborting the whole corpus over one bad row.
+                run_id = e.get("run_id")
+                if isinstance(run_id, str) and run_id.strip():
+                    out[run_id] = e
             return out
     return {}
 
@@ -124,8 +130,12 @@ def distill_reader(distill):
             # Coerced to str-or-None. Both of these come from corpus JSON and flow into
             # a filename and a UNIQUE `collections.path`, so a dict or list here would
             # propagate an unusable value deep into ingestion before failing.
-            rung = _as_label(entry.get("rung_label_in_dip")
-                             or as_obj(man.get("vars")).get("rung"))
+            # Coerce each candidate BEFORE the `or`, not after. A truthy non-scalar
+            # (a list, a dict) would win the `or`, then _as_label would return None —
+            # discarding a perfectly good manifest rung and losing the value chain
+            # ordering depends on.
+            rung = (_as_label(entry.get("rung_label_in_dip"))
+                    or _as_label(as_obj(man.get("vars")).get("rung")))
 
             nodes = []
             for n in built:

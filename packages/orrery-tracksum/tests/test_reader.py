@@ -130,6 +130,10 @@ def test_one_malformed_manifest_entry_does_not_discard_the_others(tmp_path):
         None,                                     # the poison row
         "not-an-object",
         {"no_run_id": True},
+        {"run_id": []},          # unhashable — would raise TypeError as a dict key
+        {"run_id": {"a": 1}},
+        {"run_id": ""},          # empty is not a usable id
+        {"run_id": 7},           # non-string ids are not accepted
         {"run_id": "run2", "run": "R5"},
     ]))
 
@@ -153,3 +157,19 @@ def test_a_non_scalar_label_is_dropped_rather_than_propagated():
     assert _as_label("") is None
     assert _as_label(None) is None
     assert _as_label(True) is None      # a bool is not a label
+
+
+def test_a_non_scalar_corpus_rung_falls_back_to_the_manifest_rung():
+    """Coercion must happen BEFORE the `or`, not after.
+
+    A truthy list/dict in `rung_label_in_dip` won the `or`, then `_as_label` returned
+    None — silently discarding a perfectly good manifest rung and losing the value chain
+    ordering depends on.
+    """
+    from orrery_tracksum.reader import _as_label
+
+    corpus_rung, manifest_rung = ["R6"], "R5"
+    # The fixed expression:
+    assert (_as_label(corpus_rung) or _as_label(manifest_rung)) == "R5"
+    # The old one would have produced None:
+    assert _as_label(corpus_rung or manifest_rung) is None

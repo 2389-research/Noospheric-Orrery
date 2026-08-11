@@ -132,3 +132,30 @@ def test_an_unreadable_index_does_not_block_the_request(test_client, test_store,
     resp = test_client.post("/ingest/tracker-runs",
                             json={"path": str(out), "runs_dir": str(tmp_path / "runs")})
     assert resp.status_code == 202
+
+
+def test_a_partial_explicit_chain_still_sees_the_index_labels(test_client, test_store, tmp_path):
+    """The label sources must UNION, not shadow one another.
+
+    Reading index.json only when `chain` was empty meant a chain naming runA — while the
+    corpus also holds an already-ingested runB — skipped the index labels entirely and
+    answered 202, pushing the conflict down into the worker.
+    """
+    import json
+
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "index.json").write_text(json.dumps([
+        {"run_label": "runA"}, {"run_label": "runB"}]))
+    for label in ("runA", "runB"):
+        (out / f"{label}.json").write_text(json.dumps({"run_label": label, "rollup": "x"}))
+
+    # runB is already ingested; the caller's chain mentions only runA.
+    test_store.collections.create("c-b", "runB", "runB", str(tmp_path))
+
+    resp = test_client.post("/ingest/tracker-runs", json={
+        "path": str(out), "runs_dir": str(tmp_path / "runs"), "chain": ["runA"]})
+
+    assert resp.status_code == 409, (
+        f"expected the index label runB to be checked too, got {resp.status_code}")
+    assert "runB" in resp.json()["detail"]

@@ -513,16 +513,21 @@ async def ingest_tracker_runs(request: TrackerRunsIngestRequest,
         # not enough: a repeat ingest WITHOUT a chain sailed past this and failed inside
         # the worker's insert loop, which is the partial ingest this comment claimed to
         # prevent. In bundle mode the labels are right there in index.json, so use them.
+        # UNION, not either/or. Reading index.json only when `chain` was empty meant a
+        # PARTIAL chain (naming runA while the corpus also holds an already-ingested
+        # runB) skipped the index labels entirely and answered 202 — the conflict then
+        # surfacing from the worker instead.
         known_labels = list(request.chain or [])
-        if bundled and not known_labels:
+        if bundled:
             try:
                 index = json.loads((path / "index.json").read_text())
-                known_labels = [row.get("run_label") for row in index
-                                if isinstance(row, dict) and row.get("run_label")]
+                known_labels += [row.get("run_label") for row in index
+                                 if isinstance(row, dict) and row.get("run_label")]
             except (OSError, ValueError):
                 # index.json is caller-supplied data; if it is unreadable the worker will
-                # say so properly. Skipping the early check is not skipping the check.
-                known_labels = []
+                # say so properly. Skipping the early check is not skipping the check —
+                # and an explicit chain, if given, is still checked.
+                pass
         clash = [c for c in known_labels if store.collections.get_by_path(c)]
         if clash:
             raise HTTPException(

@@ -390,3 +390,74 @@ async def test_an_existing_run_label_aborts_before_any_row_is_written(tmp_path, 
     conn.close()
     assert names == {"runB"}, f"a row was written before the abort: {names}"
     assert docs == 0, "documents were written despite the refusal"
+
+
+async def test_an_explicit_chain_that_does_not_match_the_corpus_is_refused(tmp_path, monkeypatch):
+    """The edge loop skips members it cannot resolve, so a bad chain went unnoticed.
+
+    A typo or a duplicate in `config["chain"]` completed the job with MISSING chain_next
+    edges — a trajectory quietly shorter than the corpus, which is precisely the thing
+    this job exists to represent faithfully.
+    """
+    import json
+    import uuid
+
+    import pytest
+
+    from src.db import get_connection, init_db
+
+    db_path = str(tmp_path / "test.db")
+    init_db(db_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "index.json").write_text(json.dumps([{"run_label": "runA"}, {"run_label": "runB"}]))
+    for label in ("runA", "runB"):
+        (out / f"{label}.json").write_text(json.dumps(
+            {"run_label": label, "rollup": f"{label} overview",
+             "spec": {"text": "s"}, "nodes": []}))
+
+    conn = get_connection(db_path)
+    conn.execute("INSERT INTO specs (id, domain_path, version, spec_content) "
+                 "VALUES ('spec1', NULL, 1, 'x')")
+    conn.commit()
+    conn.close()
+
+    import src.jobs.ingest_tracker_runs as mod
+
+    async def fake_classify(**kw):
+        return {"primary_domain": "software/agents/codegen", "secondary_domains": [],
+                "confidence": 0.9}
+
+    monkeypatch.setattr(mod, "classify_document", fake_classify)
+    monkeypatch.setattr(mod, "Relay", type("R", (), {
+        "from_settings": classmethod(lambda cls, s, **k: cls())}))
+
+    def _job(chain):
+        return {"id": str(uuid.uuid4()), "config": json.dumps(
+            {"out_dir": str(out), "spec_id": "spec1",
+             "runs_dir": str(tmp_path / "runs"), "chain": chain})}
+
+    # A typo: runC is not in the corpus, and runB is silently omitted.
+    with pytest.raises(RuntimeError, match="unknown="):
+        await mod.run_ingest_tracker_runs(_job(["runA", "runC"]), db_path)
+
+    # A duplicate.
+    with pytest.raises(RuntimeError, match="duplicated="):
+        await mod.run_ingest_tracker_runs(_job(["runA", "runA", "runB"]), db_path)
+
+    # An omission — the trajectory would be shorter than the corpus.
+    with pytest.raises(RuntimeError, match="omitted="):
+        await mod.run_ingest_tracker_runs(_job(["runA"]), db_path)
+
+    conn = get_connection(db_path)
+    n = conn.execute("SELECT COUNT(*) FROM collections").fetchone()[0]
+    conn.close()
+    assert n == 0, "rows were written despite the refusal"
+
+    # And the correct chain still works.
+    await mod.run_ingest_tracker_runs(_job(["runA", "runB"]), db_path)
+    conn = get_connection(db_path)
+    edges = conn.execute(
+        "SELECT COUNT(*) FROM collection_edges WHERE type='chain_next'").fetchone()[0]
+    conn.close()
+    assert edges == 1
