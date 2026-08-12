@@ -27,12 +27,32 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+import re
 import shutil
 import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# A workspace id becomes a directory name. Keep it to a single, boring path component.
+# This matters most on the IMPORT side, where the id can come from the archive's own
+# manifest — and an archive is by definition something someone else built — so
+# `../../..` must not be spellable. The character class is the whole guard: with no
+# separator and no leading dot, traversal is unrepresentable. A resolved-path
+# containment check was considered and rejected, because it also refuses a legitimately
+# symlinked workspace directory, which is a real setup for a corpus too big for the
+# main disk.
+#
+# Duplicated verbatim in import_noosphere.py: that script ships standalone inside the
+# archive and cannot import from here.
+_WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _workspace_dir(data_dir: Path, workspace: str) -> Path:
+    if not _WORKSPACE_ID_RE.match(workspace or ""):
+        sys.exit(f"invalid workspace id {workspace!r}: expected a single path component "
+                 "of letters, digits, '.', '-' or '_'")
+    return data_dir / "workspaces" / workspace
 
 
 def _counts(conn: sqlite3.Connection) -> dict:
@@ -66,7 +86,7 @@ def _source_path_prefixes(conn: sqlite3.Connection, limit: int = 8) -> list[str]
 
 
 def export(workspace: str, data_dir: Path, out_dir: Path) -> Path:
-    src = data_dir / "workspaces" / workspace / "orrery.db"
+    src = _workspace_dir(data_dir, workspace) / "orrery.db"
     if not src.is_file():
         sys.exit(f"no database at {src}")
 
@@ -74,8 +94,12 @@ def export(workspace: str, data_dir: Path, out_dir: Path) -> Path:
     entry = None
     if registry_path.is_file():
         try:
-            entry = next((w for w in json.loads(registry_path.read_text())
-                          if w.get("id") == workspace), None)
+            loaded = json.loads(registry_path.read_text())
+            # A registry that is not a list of objects is corrupt, not fatal: iterating
+            # a dict yields str keys, and `.get` on those raises rather than reporting.
+            if isinstance(loaded, list):
+                entry = next((w for w in loaded
+                              if isinstance(w, dict) and w.get("id") == workspace), None)
         except (OSError, ValueError):
             entry = None
     if entry is None:
@@ -87,6 +111,12 @@ def export(workspace: str, data_dir: Path, out_dir: Path) -> Path:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     staged = out_dir / "orrery.db"
+    # `--out data/workspaces/<id>` makes `staged` the live database, and the unlink
+    # below would then delete the corpus this is supposed to be exporting — before
+    # VACUUM INTO ever runs, so there is nothing left to recover from.
+    if staged.resolve() == src.resolve():
+        sys.exit(f"--out is the workspace directory itself ({out_dir}); that would "
+                 "delete the database being exported")
     if staged.exists():
         staged.unlink()
 
