@@ -103,6 +103,22 @@ def test_a_source_path_outside_the_repo_root_yields_no_path(test_store, test_cli
     assert "url" not in ref
 
 
+def test_a_directory_named_with_leading_dots_is_not_mistaken_for_an_escape(test_store, test_client):
+    """The escape guard compares path COMPONENTS, not string prefixes.
+
+    `startswith("..")` also rejects `.../engine.go` and `..config/x`, which are
+    perfectly ordinary names — the file is inside the repo and its ref resolves fine.
+    Only `..` itself, or a leading `../`, actually climbs out of the root.
+    """
+    doc_id = _seed_repo_doc(
+        test_store, "github.com/2389-research/tracker", "f" * 40,
+        "/data/repos/tracker", "/data/repos/tracker/.../engine.go",
+    )
+    ref = test_client.get(f"/documents/{doc_id}").json()["git_ref"]
+    assert ref["path"] == ".../engine.go", "a legitimate path was dropped as an escape"
+    assert ref["url"].endswith("/.../engine.go")
+
+
 def test_a_path_needing_escaping_is_quoted_but_keeps_separators(test_store, test_client):
     """Path separators must survive quoting or the URL collapses to one segment;
     everything else that would change the URL's meaning must not."""

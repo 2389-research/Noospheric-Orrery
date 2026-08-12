@@ -74,11 +74,25 @@ def resolve(db_path: str, org: str) -> dict:
     still uses the name, which is what the repo is actually called.
     """
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    # BOTH null, not either. `_git_coordinates` is all-or-nothing (see
+    # worker/src/jobs/ingest_repo.py), so a half-filled pair should not exist — but
+    # selecting on "either is null" and then writing BOTH columns would replace a
+    # captured ingest-time SHA with the current default-branch HEAD, destroying the
+    # one piece of real provenance that row had. That is the exact opposite of what
+    # this script promises.
     rows = conn.execute(
         "SELECT path, name FROM collections "
         "WHERE kind = 'git_repo' AND name IS NOT NULL "
-        "AND (remote_url IS NULL OR commit_sha IS NULL)").fetchall()
+        "AND remote_url IS NULL AND commit_sha IS NULL").fetchall()
+    # Report half-pairs rather than silently passing over them: one means something
+    # wrote provenance outside the all-or-nothing path, which deserves a human look.
+    partial = conn.execute(
+        "SELECT path FROM collections WHERE kind = 'git_repo' "
+        "AND ((remote_url IS NULL) != (commit_sha IS NULL))").fetchall()
     conn.close()
+    for row in partial:
+        print(f"  {row[0]}: only half a provenance pair -> left alone, repair by hand",
+              file=sys.stderr)
     mapping: dict = {}
     for path, name in rows:
         # full_name + default_branch in one call (scalar, '|'-joined).
@@ -102,16 +116,28 @@ def apply(db_path: str, mapping: dict) -> int:
     conn.execute("PRAGMA busy_timeout=30000")
     changed = 0
     for path, v in mapping.items():
-        remote, sha = v.get("remote"), v.get("sha")
-        if not remote or not sha:
+        remote, sha, name = v.get("remote"), v.get("sha"), v.get("name")
+        if not remote or not sha or not name:
             print(f"  {path}: incomplete mapping entry -> skipped", file=sys.stderr)
             continue
-        # Only fill rows still missing provenance, and only git repos — never
-        # overwrite a captured ingest-time sha, never touch a tracker run.
+        # `name` is part of the predicate, not just the payload. In split mode the
+        # map is resolved on one machine and applied on another, possibly much later,
+        # so it can be stale: a collection deleted and re-created at the same `path`
+        # would otherwise be handed provenance belonging to a DIFFERENT repository —
+        # a ref that resolves perfectly and points at the wrong code, which is the
+        # failure this whole feature is built to avoid.
+        #
+        # Both columns must still be NULL: never overwrite captured provenance, and
+        # never touch a tracker run.
         cur = conn.execute(
             "UPDATE collections SET remote_url=?, commit_sha=? "
-            "WHERE path=? AND kind='git_repo' AND (remote_url IS NULL OR commit_sha IS NULL)",
-            (remote, sha, path))
+            "WHERE path=? AND name=? AND kind='git_repo' "
+            "AND remote_url IS NULL AND commit_sha IS NULL",
+            (remote, sha, path, name))
+        if cur.rowcount == 0:
+            print(f"  {path}: no matching row still missing provenance "
+                  f"(renamed, refilled, or removed since resolve) -> skipped",
+                  file=sys.stderr)
         changed += cur.rowcount
     conn.commit()
     conn.close()

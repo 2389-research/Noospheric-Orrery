@@ -985,7 +985,14 @@ class SQLiteCollectionRepository:
                 rel = None
             # Drop repo-level artifacts and any stale/mislinked path that escapes
             # the repo root (relpath can yield "../…") — those don't resolve.
-            if rel is not None and (rel in (".", "") or rel.startswith("..")):
+            #
+            # Compared on a PATH-COMPONENT boundary, not as a string prefix:
+            # `startswith("..")` also rejects legitimate names, because a directory
+            # may simply be called `...` or `..config`. Only `..` itself, or a `../`
+            # leading the path, actually escapes the root.
+            if rel is not None and (
+                rel in (".", "", os.pardir) or rel.startswith(os.pardir + os.sep)
+            ):
                 rel = None
         ref = {"remote": remote, "commit": commit, "path": rel}
         if commit and rel:
