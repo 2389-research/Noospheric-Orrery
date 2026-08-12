@@ -39,11 +39,15 @@ def get_document(document_id: str, auth: AuthStore = Depends(get_auth_store)):
         raise HTTPException(status_code=404, detail="Document not found")
     domains = store.domains.get_domains_for_document(document_id)
     entities = store.entities.get_for_document(document_id)
+    # For code documents: a resolvable GitHub ref so an agent can fetch the actual
+    # source (the graph holds the summary, not the code). None for non-code docs.
+    git_ref = store.collections.get_source_ref(document_id)
     store.close()
     return {
         "id": doc.id, "title": doc.title, "source_path": doc.source_path,
         "content": doc.content, "status": doc.status, "created_at": doc.created_at,
         "content_type": doc.content_type,
+        "git_ref": git_ref,
         "domains": [{"path": d.domain_path, "is_primary": d.is_primary, "confidence": d.confidence} for d in domains],
         "entities": [{"id": e.id, "canonical_name": e.canonical_name, "type": e.type} for e in entities],
     }
