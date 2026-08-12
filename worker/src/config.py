@@ -37,6 +37,24 @@ class Settings:
     # the worker summarize RAW runs in-process; leave it empty and only pre-made
     # summary bundles can be ingested (which need no model calls at all).
     tracker_distill_path: str = ""
+    # Normalization judge — drains the ~0.76-0.84 similarity review backlog with an LLM.
+    # Runs ONLY when the worker is otherwise idle, so it never competes with
+    # ingest/extract/simmer for the (possibly local) model. Modes:
+    #   off    — never runs
+    #   advise — write verdicts only, a human still resolves
+    #   apply  — also auto-resolve confident keeps
+    normalization_judge_mode: str = "advise"
+    # Prefer a local Ollama model when reachable, else the cloud model: local gemma4:26b
+    # matched Haiku on this task in evaluation, so the queue drains for free when Ollama
+    # is up. Re-checked on a TTL rather than once at startup.
+    normalization_judge_prefer_local: bool = True
+    normalization_judge_local_model: str = "gemma4:26b"
+    normalization_judge_model: str = ""      # cloud fallback; empty -> extraction_model
+    normalization_judge_batch: int = 10      # pairs per relay call (one idle chunk)
+    normalization_judge_min_confidence: float = 0.75   # apply threshold
+    # Not 0: greedy decoding loops on a bad generation and never terminates.
+    normalization_judge_temperature: float = 0.3
+    normalization_judge_max_attempts: int = 3  # skip a pair after N failed sweeps
 
 
 # Env var name mapping — keys are Settings field names, values are env var names.
@@ -65,6 +83,14 @@ _ENV_MAP = {
     "judge_panel": "JUDGE_PANEL",
     "judge_deliberate": "JUDGE_DELIBERATE",
     "tracker_distill_path": "TRACKER_DISTILL_PATH",
+    "normalization_judge_mode": "NORMALIZATION_JUDGE_MODE",
+    "normalization_judge_prefer_local": "NORMALIZATION_JUDGE_PREFER_LOCAL",
+    "normalization_judge_local_model": "NORMALIZATION_JUDGE_LOCAL_MODEL",
+    "normalization_judge_model": "NORMALIZATION_JUDGE_MODEL",
+    "normalization_judge_batch": "NORMALIZATION_JUDGE_BATCH",
+    "normalization_judge_min_confidence": "NORMALIZATION_JUDGE_MIN_CONFIDENCE",
+    "normalization_judge_temperature": "NORMALIZATION_JUDGE_TEMPERATURE",
+    "normalization_judge_max_attempts": "NORMALIZATION_JUDGE_MAX_ATTEMPTS",
 }
 
 
@@ -109,4 +135,35 @@ def get_settings() -> Settings:
         else:
             kwargs[f.name] = default
 
-    return Settings(**kwargs)
+    return _validated(Settings(**kwargs))
+
+
+def _validated(s: "Settings") -> "Settings":
+    """Clamp the judge limits to values that mean what they say.
+
+    These reach SQL and a scheduling decision directly, and the failure is silent rather
+    than loud: `LIMIT -1` means NO LIMIT in SQLite, so a batch of -1 makes one "idle"
+    pass judge the ENTIRE backlog — contending with real work, which is the single thing
+    the idle gate exists to prevent. A max_attempts below 1 retries a hopeless pair
+    forever; a confidence threshold outside 0..1 either auto-resolves everything or
+    nothing. Clamped rather than raised, because a bad env var should not stop the worker
+    booting — but it is reported, so the operator sees why their value did not take.
+    """
+    import dataclasses
+
+    fixes: dict = {}
+    if s.normalization_judge_batch < 1:
+        fixes["normalization_judge_batch"] = 1
+    if s.normalization_judge_max_attempts < 1:
+        fixes["normalization_judge_max_attempts"] = 1
+    if not 0.0 <= s.normalization_judge_min_confidence <= 1.0:
+        fixes["normalization_judge_min_confidence"] = min(
+            1.0, max(0.0, s.normalization_judge_min_confidence))
+    if s.normalization_judge_mode not in ("off", "advise", "apply"):
+        fixes["normalization_judge_mode"] = "advise"
+    if fixes:
+        for name, value in fixes.items():
+            print(f"config: {name}={getattr(s, name)!r} is out of range; using {value!r}",
+                  flush=True)
+        s = dataclasses.replace(s, **fixes)
+    return s

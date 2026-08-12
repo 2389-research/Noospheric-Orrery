@@ -30,13 +30,18 @@ _WORKER = _ROOT / "worker" / "src" / "db.py"
 
 # Tables both processes write. Their DDL must match.
 _MIRRORED_TABLES = ["graph_snapshot", "domain_edges", "collections",
-                    "document_collections", "collection_edges"]
+                    "document_collections", "collection_edges",
+                    # The worker WRITES judge verdicts here and the orchestrator serves
+                    # them to the review UI, so a column present in one file and not the
+                    # other means the judge writes somewhere the API cannot read.
+                    "normalization_review_queue"]
 
 # Indexes on that surface. Table DDL alone is not enough: an index dropped from one
 # file costs nothing structurally and everything in latency, so it is exactly the kind
 # of drift that goes unnoticed.
 _MIRRORED_INDEXES = ["idx_document_collections_collection",
-                     "idx_entity_sources_entity", "idx_document_domains_path"]
+                     "idx_entity_sources_entity", "idx_document_domains_path",
+                     "idx_norm_review_pending"]
 
 _ALLOWED_DIVERGENCE: dict[str, str] = {
     # name -> why it is allowed to differ. Empty: nothing diverges today.

@@ -53,6 +53,14 @@ worker/
       simmer_general.py — Run golden set + extraction spec simmering for general spec
       simmer_domain.py  — Same but for a specific domain
       extract_batch.py  — Run a spec against all docs in scope
+      ingest_repo.py    — Summarize a git repo (codesum) into code_intent docs
+      ingest_tracker_runs.py — Same shape via tracksum; a tracker run IS a collection
+      normalization_judge.py — IDLE-ONLY advisory judge over the review backlog. Runs
+                        only when no real job ran that pass: on a local model it would
+                        otherwise contend with extraction for the same GPU, and it is
+                        never the urgent work. `advise` by default — it writes verdicts,
+                        a human resolves. Temperature is deliberately NOT 0 (greedy
+                        decoding loops on a bad generation and never terminates).
 
 frontend/
   src/

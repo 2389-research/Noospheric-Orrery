@@ -403,3 +403,63 @@ def test_a_connection_is_never_returned_quietly_without_wal():
     with pytest.raises(sqlite3.OperationalError, match="could not enable WAL"):
         _enable_wal(conn, attempts=2)
     assert conn.switches >= 2, "should have exhausted its retries before giving up"
+
+
+def test_the_judge_columns_reach_a_pre_existing_database(tmp_path):
+    """A new column needs BOTH the CREATE TABLE entry and a guarded ALTER.
+
+    `CREATE TABLE IF NOT EXISTS` adds nothing to a table that already exists, so declaring
+    `judge_verdict` in SCHEMA alone would leave every existing workspace without it — and
+    the judge would fail with "no such column: judge_verdict" on exactly the databases
+    that have a review backlog worth judging. This is the same failure the collections
+    rename caused, reached by a different route, which is why it is pinned here.
+    """
+    db = str(tmp_path / "old.db")
+    conn = sqlite3.connect(db)
+    # The review queue as it existed BEFORE the judge — no judge_* columns.
+    conn.execute("""CREATE TABLE normalization_review_queue (
+        id TEXT PRIMARY KEY, entity_a_id TEXT, entity_a_name TEXT,
+        entity_b_id TEXT, entity_b_name TEXT, similarity REAL,
+        status TEXT DEFAULT 'pending', resolution TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+    conn.execute("INSERT INTO normalization_review_queue (id, entity_a_name, entity_b_name, "
+                 "similarity) VALUES ('p1', 'llm orchestration', 'llm-orchestration', 0.81)")
+    conn.commit()
+    conn.close()
+
+    init_db(db)
+
+    conn = sqlite3.connect(db)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(normalization_review_queue)")}
+    assert {"judge_verdict", "judge_confidence", "judge_rationale",
+            "judge_attempts"} <= cols, f"judge columns missing from an existing table: {cols}"
+    # The pending row survives, with the new columns readable and empty.
+    row = conn.execute("SELECT judge_verdict, judge_attempts FROM "
+                       "normalization_review_queue WHERE id = 'p1'").fetchone()
+    assert row == (None, 0)
+    # And the status index the sweep depends on exists.
+    idx = {r[1] for r in conn.execute("PRAGMA index_list(normalization_review_queue)")}
+    assert "idx_norm_review_pending" in idx
+    conn.close()
+
+
+def test_the_judge_migration_is_idempotent(tmp_path):
+    """Re-opening must not re-add or reset. Both processes open every workspace."""
+    db = str(tmp_path / "old.db")
+    init_db(db)
+
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO normalization_review_queue (id, similarity, judge_verdict, "
+                 "judge_attempts) VALUES ('p1', 0.8, 'keep', 2)")
+    conn.commit()
+    conn.close()
+
+    from src import db as db_mod
+    db_mod._initialized.discard(db)      # a second process
+    init_db(db)
+
+    conn = sqlite3.connect(db)
+    row = conn.execute("SELECT judge_verdict, judge_attempts FROM "
+                       "normalization_review_queue WHERE id = 'p1'").fetchone()
+    conn.close()
+    assert row == ("keep", 2), "a re-open reset a verdict the judge had written"

@@ -119,8 +119,13 @@ CREATE TABLE IF NOT EXISTS normalization_review_queue (
     similarity REAL,
     status TEXT DEFAULT 'pending',
     resolution TEXT,
+    judge_verdict TEXT,        -- advisory: merge | keep | unsure (normalization judge)
+    judge_confidence REAL,     -- advisory
+    judge_rationale TEXT,      -- advisory
+    judge_attempts INTEGER DEFAULT 0,  -- failed judge sweeps; skip a pair after a cap
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_norm_review_pending ON normalization_review_queue(status);
 
 CREATE TABLE IF NOT EXISTS graph_issues (
     id TEXT PRIMARY KEY,
@@ -518,6 +523,25 @@ def init_db(db_path: str) -> None:
             conn.execute(f"ALTER TABLE normalization_log ADD COLUMN {col} {decl}")
     # Backfill: existing merge-log rows predate `action`
     conn.execute("UPDATE normalization_log SET action = 'merge' WHERE action IS NULL")
+
+    # Advisory verdict columns for the normalization judge. Declared in SCHEMA above AND
+    # added here, because `CREATE TABLE IF NOT EXISTS` adds nothing to a table that
+    # already exists — so on every pre-existing workspace the judge would hit
+    # "no such column: judge_verdict". Exactly the failure the collections rename caused,
+    # reached by a different route.
+    nrq_cols = {r[1] for r in conn.execute(
+        "PRAGMA table_info(normalization_review_queue)").fetchall()}
+    for col in ("judge_verdict", "judge_confidence", "judge_rationale"):
+        if col not in nrq_cols:
+            decl = "REAL" if col == "judge_confidence" else "TEXT"
+            conn.execute(
+                f"ALTER TABLE normalization_review_queue ADD COLUMN {col} {decl}")
+    if "judge_attempts" not in nrq_cols:
+        conn.execute("ALTER TABLE normalization_review_queue "
+                     "ADD COLUMN judge_attempts INTEGER DEFAULT 0")
+    # The queue is read by status on every sweep; without this it scans.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_norm_review_pending "
+                 "ON normalization_review_queue(status)")
 
     _migrate_collection_columns(conn)
 
