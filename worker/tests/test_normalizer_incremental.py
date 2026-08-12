@@ -175,7 +175,7 @@ def test_fresh_scan_when_store_empty(test_db):
     with patch.object(norm, "embed_entities", _embedder(mapping)):
         res = norm.run_batch_normalization(conn)
     assert res["embedding_merges"] == 1   # b merged into a
-    assert res["queued_for_review"] == 1  # a–c queued
+    assert res["queued_for_review"] == 1  # a-c queued
     assert _count(conn) == 3
     # all survivors got embeddings persisted
     assert conn.execute("SELECT COUNT(*) FROM entity_embeddings").fetchone()[0] == 3
