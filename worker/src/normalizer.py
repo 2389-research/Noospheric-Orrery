@@ -65,8 +65,31 @@ REVIEW_THRESHOLD = 0.70        # Between 0.70-0.85: queue for LLM review
 # Below 0.70: definitely different
 
 
+def _load_stored_embeddings(conn: sqlite3.Connection) -> dict[str, np.ndarray]:
+    """Load persisted per-entity vectors from entity_embeddings.
+
+    This table is the durable embedding store: an entity is embedded once, when
+    it first appears, and reused forever. A row's presence also marks the entity
+    as already-processed, so a later normalization run only does work for
+    entities missing here (the incremental gate)."""
+    out: dict[str, np.ndarray] = {}
+    for eid, blob in conn.execute("SELECT entity_id, embedding FROM entity_embeddings"):
+        if blob is not None:
+            out[eid] = np.frombuffer(blob, dtype=np.float32)
+    return out
+
+
 def run_batch_normalization(conn: sqlite3.Connection) -> dict:
-    """Run the full normalization cascade on all entities.
+    """Incremental entity normalization.
+
+    Only entities WITHOUT a stored embedding are treated as new; each run embeds
+    just those, appends them to entity_embeddings, and searches them against the
+    full set (new-vs-all) via a single vectorized inner-product per type. Old
+    entities are never re-embedded and old-vs-old pairs are never re-generated,
+    so an already-adjudicated pair is never revisited and a re-run with nothing
+    new costs ~zero. On a DB whose embedding store is empty (fresh graph) every
+    entity is "new", so the pass degrades to a full from-scratch normalization —
+    identical decisions to the previous all-pairs implementation.
 
     Returns summary of what was done.
     """
@@ -78,121 +101,170 @@ def run_batch_normalization(conn: sqlite3.Connection) -> dict:
         "total_entities_after": 0,
     }
 
-    # Get all entities
     entities = conn.execute(
-        "SELECT id, canonical_name, type FROM entities ORDER BY canonical_name"
+        "SELECT id, canonical_name, type FROM entities WHERE invalid_at IS NULL ORDER BY canonical_name"
     ).fetchall()
     results["total_entities_before"] = len(entities)
-
     if len(entities) < 2:
         results["total_entities_after"] = len(entities)
         return results
 
-    # --- Tier 1: Plural collapse ---
+    stored = _load_stored_embeddings(conn)
+    new_ids = {e[0] for e in entities if e[0] not in stored}
+
+    # --- Tier 1: Plural collapse (new entities only) ---
+    # A new plural whose singular already exists collapses into it. Restricting
+    # to new entities keeps this incremental; old plurals were handled when they
+    # were new.
     all_names = {e[1] for e in entities}
-    for entity in entities:
-        eid, name, etype = entity[0], entity[1], entity[2]
+    for eid, name, etype in entities:
+        if eid not in new_ids:
+            continue
         singular = collapse_plural(name, all_names)
         if singular:
-            # Find the entity with the singular name
             target = conn.execute(
-                "SELECT id FROM entities WHERE canonical_name = ? AND type = ?",
+                "SELECT id FROM entities WHERE canonical_name = ? AND type = ? AND invalid_at IS NULL",
                 (singular, etype)
             ).fetchone()
             if target and target[0] != eid:
                 _merge_entities(conn, from_id=eid, from_name=name,
                                to_id=target[0], to_name=singular, method="plural", similarity=1.0)
                 results["plural_merges"] += 1
+                new_ids.discard(eid)
 
-    # --- Tier 2: Embedding similarity ---
-    # Re-fetch entities (some may have been merged)
+    # Re-fetch (plural merges deleted some) and recompute the new set.
     entities = conn.execute(
-        "SELECT id, canonical_name, type FROM entities ORDER BY canonical_name"
+        "SELECT id, canonical_name, type FROM entities WHERE invalid_at IS NULL ORDER BY canonical_name"
     ).fetchall()
-
     if len(entities) < 2:
         results["total_entities_after"] = len(entities)
         return results
+    stored = _load_stored_embeddings(conn)
+    new_entities = [e for e in entities if e[0] not in stored]
 
-    names = [e[1] for e in entities]
-    ids = [e[0] for e in entities]
-    types = [e[2] for e in entities]
+    # --- Layer 1: embed ONLY new entities. Hold the vectors in memory for Layer
+    # 2 but DON'T persist them yet. A stored embedding is what marks an entity
+    # "already processed", so committing it before adjudication would — on a crash
+    # in between — leave the entity embedded-but-never-compared and silently skip
+    # its merges forever. We persist survivors together with the Layer 2 writes in
+    # one final commit, so a crash just rolls back and the entity stays new. ---
+    if not new_entities:
+        # Nothing new — no pairs to (re)adjudicate.
+        results["total_entities_after"] = len(entities)
+        return results
+    vecs = embed_entities([e[1] for e in new_entities]).astype(np.float32)
+    for e, v in zip(new_entities, vecs, strict=True):  # strict: length mismatch must error, not truncate
+        stored[e[0]] = v
 
-    # Embed all entities
-    embeddings = embed_entities(names)
+    new_id_set = {e[0] for e in new_entities}
 
-    # Store embeddings
-    for i, eid in enumerate(ids):
-        conn.execute(
-            "INSERT OR REPLACE INTO entity_embeddings (entity_id, embedding) VALUES (?, ?)",
-            (eid, embeddings[i].tobytes())
-        )
-    conn.commit()
+    # --- Layer 2: candidate search, per type, new-vs-all via faiss. ---
+    # Merges are within-type, so group by type and build one faiss IndexFlatIP
+    # per type over ALL its vectors (old + new). Vectors are normalized, so inner
+    # product = cosine. range_search returns every neighbor above the review
+    # threshold (no arbitrary top-k cutoff). We only query the NEW entities, so
+    # new-vs-old and new-vs-new are covered while old-vs-old is never generated.
+    # Swap IndexFlatIP → IndexIVFFlat/HNSW here if we ever need sub-quadratic.
+    # Import faiss lazily (not at module top) so it loads only when there's work
+    # AND after torch/sentence-transformers is already initialized — mirrors
+    # orchestrator/pipeline/search.py and avoids the OpenMP double-load abort you
+    # get when faiss and torch both initialize eagerly.
+    import faiss
 
-    # Find similar pairs (only compare within same type)
-    type_groups: dict[str, list[int]] = defaultdict(list)
-    for i, t in enumerate(types):
-        type_groups[t].append(i)
+    by_type: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for eid, name, etype in entities:
+        if eid in stored:
+            by_type[etype].append((eid, name))
 
-    merged_ids = set()
-    for type_name, indices in type_groups.items():
-        if len(indices) < 2:
+    merged_ids: set[str] = set()
+    seen_pairs: set[tuple[str, str]] = set()
+    for members in by_type.values():
+        if len(members) < 2:
             continue
+        ids_t = [m[0] for m in members]
+        names_t = [m[1] for m in members]
+        q_idx = [i for i, eid in enumerate(ids_t) if eid in new_id_set]
+        if not q_idx:
+            continue
+        A = np.ascontiguousarray(np.vstack([stored[eid] for eid in ids_t]), dtype=np.float32)  # (t, d)
+        index = faiss.IndexFlatIP(A.shape[1])
+        index.add(A)
+        Q = np.ascontiguousarray(A[q_idx], dtype=np.float32)  # (m, d), the new rows
+        # lims[r]:lims[r+1] delimits query r's neighbors in (sims, nbrs).
+        lims, sims_all, nbrs_all = index.range_search(Q, REVIEW_THRESHOLD)
 
-        for i_idx in range(len(indices)):
-            i = indices[i_idx]
-            if ids[i] in merged_ids:
+        for r, qi in enumerate(q_idx):
+            qid = ids_t[qi]
+            if qid in merged_ids:
                 continue
-            for j_idx in range(i_idx + 1, len(indices)):
-                j = indices[j_idx]
-                if ids[j] in merged_ids:
+            seg = slice(int(lims[r]), int(lims[r + 1]))
+            # Strongest candidate first so the best merge wins (range_search is unordered).
+            cand = sorted(zip(sims_all[seg], nbrs_all[seg]), key=lambda x: -x[0])
+            for sim, j in cand:
+                j = int(j)
+                if j == qi:
                     continue
-
-                sim = cosine_similarity(embeddings[i], embeddings[j])
+                sim = float(sim)
+                tid = ids_t[j]
+                if tid in merged_ids:
+                    continue
+                pair = (qid, tid) if qid < tid else (tid, qid)
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
 
                 if sim >= AUTO_MERGE_THRESHOLD:
-                    # Auto-merge: keep the one with more sources (= more common)
-                    count_i = conn.execute(
-                        "SELECT COUNT(*) FROM entity_sources WHERE entity_id = ?", (ids[i],)
+                    # Keep the one with more sources (= more common).
+                    count_q = conn.execute(
+                        "SELECT COUNT(*) FROM entity_sources WHERE entity_id = ?", (qid,)
                     ).fetchone()[0]
-                    count_j = conn.execute(
-                        "SELECT COUNT(*) FROM entity_sources WHERE entity_id = ?", (ids[j],)
+                    count_t = conn.execute(
+                        "SELECT COUNT(*) FROM entity_sources WHERE entity_id = ?", (tid,)
                     ).fetchone()[0]
-
-                    if count_i >= count_j:
-                        _merge_entities(conn, from_id=ids[j], from_name=names[j],
-                                       to_id=ids[i], to_name=names[i],
+                    if count_q >= count_t:
+                        _merge_entities(conn, from_id=tid, from_name=names_t[j],
+                                       to_id=qid, to_name=names_t[qi],
                                        method="embedding", similarity=sim)
-                        merged_ids.add(ids[j])
+                        merged_ids.add(tid)
+                        results["embedding_merges"] += 1
                     else:
-                        _merge_entities(conn, from_id=ids[i], from_name=names[i],
-                                       to_id=ids[j], to_name=names[j],
+                        _merge_entities(conn, from_id=qid, from_name=names_t[qi],
+                                       to_id=tid, to_name=names_t[j],
                                        method="embedding", similarity=sim)
-                        merged_ids.add(ids[i])
-                    results["embedding_merges"] += 1
-
-                elif sim >= REVIEW_THRESHOLD:
-                    # Queue for LLM review
+                        merged_ids.add(qid)
+                        results["embedding_merges"] += 1
+                        break  # qid is gone — stop scanning its row
+                else:
+                    # Review range: queue unless this pair was EVER queued before
+                    # (any status) — a resolved pair is not re-surfaced.
                     existing = conn.execute(
                         "SELECT id FROM normalization_review_queue WHERE "
-                        "((entity_a_id = ? AND entity_b_id = ?) OR (entity_a_id = ? AND entity_b_id = ?)) "
-                        "AND status = 'pending'",
-                        (ids[i], ids[j], ids[j], ids[i])
+                        "(entity_a_id = ? AND entity_b_id = ?) OR (entity_a_id = ? AND entity_b_id = ?)",
+                        (qid, tid, tid, qid)
                     ).fetchone()
                     if not existing:
                         conn.execute(
                             "INSERT INTO normalization_review_queue (id, entity_a_id, entity_a_name, entity_b_id, entity_b_name, similarity) "
                             "VALUES (?, ?, ?, ?, ?, ?)",
-                            (str(uuid.uuid4()), ids[i], names[i], ids[j], names[j], sim)
+                            (str(uuid.uuid4()), qid, names_t[qi], tid, names_t[j], sim)
                         )
                         results["queued_for_review"] += 1
 
+    # Persist embeddings for the new entities that SURVIVED adjudication — the
+    # merged-away ones are gone and must not be marked processed. Committed
+    # together with the Layer 2 writes so the whole run is one atomic unit.
+    for e in new_entities:
+        if e[0] in merged_ids:
+            continue
+        conn.execute(
+            "INSERT OR REPLACE INTO entity_embeddings (entity_id, embedding) VALUES (?, ?)",
+            (e[0], stored[e[0]].tobytes())
+        )
+
     conn.commit()
-
-    # Count remaining entities
-    remaining = conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
-    results["total_entities_after"] = remaining
-
+    results["total_entities_after"] = conn.execute(
+        "SELECT COUNT(*) FROM entities WHERE invalid_at IS NULL"
+    ).fetchone()[0]
     return results
 
 
