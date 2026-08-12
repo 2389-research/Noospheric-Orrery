@@ -367,6 +367,39 @@ def migrate_to_collections(conn) -> None:
         conn.commit()
 
 
+def _assert_no_column_conflicts(conn, tables: set[str]) -> None:
+    """Refuse a table carrying BOTH the legacy and the replacement column.
+
+    The same hazard the table-level preflight refuses, one level down: values live
+    under each name and `ALTER TABLE ... RENAME COLUMN` cannot merge them, so there is
+    no safe automatic resolution.
+
+    Left alone it fails in the worst way available — silently and forever. The rename
+    in `_migrate_to_collections` is guarded on `new_col not in cols`, so it skips;
+    nothing else touches the legacy column; and the detector keeps answering `True`
+    because the legacy column still exists. Every `init_db` on every poll pass then
+    takes the write lock, does nothing, and releases it — which is precisely the churn
+    this precheck was added to remove, reintroduced by a database in a state no code
+    path here creates.
+
+    Raised from the read-only pass ON PURPOSE, before `BEGIN IMMEDIATE`: a database
+    that cannot be migrated should not cost a write lock to find that out, once or
+    repeatedly.
+    """
+    for table, old_col, new_col in _LEGACY_COLUMNS:
+        if table not in tables:
+            continue
+        # `table` comes from the module-level _LEGACY_COLUMNS constant, never from
+        # caller input, and PRAGMA takes no bound parameters.
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if old_col in cols and new_col in cols:
+            raise RuntimeError(
+                f"cannot migrate: {table} has both {old_col!r} and {new_col!r}. "
+                f"Values under each would have to be merged by hand — pick the "
+                f"authoritative column, copy anything worth keeping into it, then "
+                f"drop {old_col!r}.")
+
+
 def _collections_migration_needed(conn) -> bool:
     """Is there any repo-era shape left? Read-only, and deliberately so.
 
@@ -375,14 +408,16 @@ def _collections_migration_needed(conn) -> bool:
     `False` when work remains would skip the migration silently, so anything uncertain
     answers `True` and lets the real body decide under the lock.
 
-    The both-names-exist conflict still reaches the body — `old in tables` is what
+    The both-TABLE-names conflict still reaches the body — `old in tables` is what
     triggers it — so a half-migrated database is still refused loudly rather than
-    quietly skipped here.
+    quietly skipped here. The both-COLUMN-names conflict is refused right here, for
+    the reason in `_assert_no_column_conflicts`.
     """
     tables = {r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     if any(old in tables for old, _ in _LEGACY_TABLES):
         return True
+    _assert_no_column_conflicts(conn, tables)
     for table, old_col, _ in _LEGACY_COLUMNS:
         if table in tables and old_col in {
                 r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:

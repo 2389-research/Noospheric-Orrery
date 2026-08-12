@@ -17,11 +17,10 @@ ambiguous) when it is not.
 """
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
 
 from src.db import (
+    _LEGACY_COLUMNS,
     _collections_migration_needed,
     get_connection,
     init_db,
@@ -30,8 +29,13 @@ from src.db import (
 
 
 def _busy_writer(db_path):
-    """A second connection holding the write lock, as a live peer would."""
-    holder = sqlite3.connect(str(db_path))
+    """A second connection holding the write lock, as a live peer would.
+
+    `get_connection` so the peer is opened exactly the way the services open it (WAL,
+    30s busy_timeout), then the timeout is narrowed afterwards: this test asserts that
+    a lock is NOT needed, so it must fail fast rather than sit out the real timeout.
+    """
+    holder = get_connection(str(db_path))
     holder.execute("PRAGMA busy_timeout=100")
     holder.execute("BEGIN IMMEDIATE")
     holder.execute("CREATE TABLE IF NOT EXISTS _holder (x INTEGER)")
@@ -49,7 +53,7 @@ def test_a_migrated_database_opens_while_another_process_is_writing(tmp_path):
 
     holder = _busy_writer(db_path)
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = get_connection(str(db_path))
         conn.execute("PRAGMA busy_timeout=100")   # deliberately short: no waiting it out
         try:
             migrate_to_collections(conn)          # must not need the lock at all
@@ -73,7 +77,7 @@ def test_a_migrated_database_reports_no_work(tmp_path):
 
 def _legacy_db(path) -> None:
     """The repo-era shape, as a pre-rename corpus actually has it."""
-    conn = sqlite3.connect(str(path))
+    conn = get_connection(str(path))
     conn.executescript("""
         CREATE TABLE repos (id TEXT PRIMARY KEY, name TEXT, path TEXT,
                             root_path TEXT, document_count INTEGER, kind TEXT);
@@ -92,7 +96,7 @@ def test_a_legacy_database_still_reports_work_and_migrates(tmp_path):
     db_path = tmp_path / "orrery.db"
     _legacy_db(db_path)
 
-    conn = sqlite3.connect(str(db_path))
+    conn = get_connection(str(db_path))
     try:
         assert _collections_migration_needed(conn) is True
     finally:
@@ -100,7 +104,7 @@ def test_a_legacy_database_still_reports_work_and_migrates(tmp_path):
 
     init_db(str(db_path))
 
-    conn = sqlite3.connect(str(db_path))
+    conn = get_connection(str(db_path))
     try:
         tables = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -138,6 +142,35 @@ def test_a_repo_uses_edge_still_counts_as_work(tmp_path):
         conn.close()
 
 
+def test_a_table_with_both_the_legacy_and_new_column_is_refused(tmp_path):
+    """The column-level twin of the both-table-names refusal.
+
+    Values live under each name and RENAME COLUMN cannot merge them, so there is no
+    safe automatic resolution. Left undetected it fails in the worst available way:
+    the rename is guarded on `new_col not in cols` so it skips, nothing else touches
+    the legacy column, and the detector keeps answering True because that column still
+    exists — so every init_db on every poll pass takes the write lock, does nothing,
+    and releases it. That is the exact churn this precheck removes, reintroduced.
+
+    Refused from the READ-ONLY pass, so it costs no write lock to discover.
+    """
+    table, old_col, new_col = _LEGACY_COLUMNS[0]
+    db_path = tmp_path / "orrery.db"
+    init_db(str(db_path))                       # creates `table` with new_col
+
+    conn = get_connection(str(db_path))
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {old_col} TEXT")
+        conn.commit()
+        with pytest.raises(RuntimeError, match="both"):
+            _collections_migration_needed(conn)
+        with pytest.raises(RuntimeError, match="both"):
+            migrate_to_collections(conn)
+        assert not conn.in_transaction, "took a transaction before refusing"
+    finally:
+        conn.close()
+
+
 def test_a_half_migrated_database_is_still_refused(tmp_path):
     """The precheck must not turn a loud refusal into a quiet skip.
 
@@ -146,7 +179,7 @@ def test_a_half_migrated_database_is_still_refused(tmp_path):
     """
     db_path = tmp_path / "orrery.db"
     init_db(str(db_path))            # creates `collections`
-    conn = sqlite3.connect(str(db_path))
+    conn = get_connection(str(db_path))
     conn.execute("CREATE TABLE repos (id TEXT PRIMARY KEY, name TEXT)")
     conn.commit()
     try:
