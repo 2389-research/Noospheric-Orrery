@@ -333,6 +333,18 @@ def migrate_to_collections(conn) -> None:
     contention happen at the lock instead, where busy_timeout does apply, so the loser
     waits and then observes the migrated schema rather than failing.
     """
+    # Nothing to do is the OVERWHELMINGLY common case, and it must not cost a write
+    # lock. Both services call init_db on every workspace database on every poll pass
+    # (worker: every 5s across all of them), so taking BEGIN IMMEDIATE unconditionally
+    # meant one exclusive lock per workspace per pass, forever, on databases that were
+    # migrated long ago. That is contention manufactured out of nothing, it scales with
+    # the number of workspaces, and it collides with genuinely long writes — an
+    # in-flight extract_batch made the poll loop log "database is locked" and skip that
+    # workspace for the cycle. The check below is pure reads, so it costs nothing and
+    # takes no lock.
+    if not _collections_migration_needed(conn):
+        return
+
     # If a transaction is already open (a caller mid-write), the savepoint alone is
     # correct — and BEGIN would raise. Only take the lock when we are the outermost.
     started = not conn.in_transaction
@@ -353,6 +365,36 @@ def migrate_to_collections(conn) -> None:
         # (executescript, ALTERs) and holding the lock across all of it would widen
         # the window the other process has to wait through.
         conn.commit()
+
+
+def _collections_migration_needed(conn) -> bool:
+    """Is there any repo-era shape left? Read-only, and deliberately so.
+
+    Mirrors every condition `_migrate_to_collections` acts on, so a `False` here means
+    that function would be a no-op. It must stay conservative in one direction: saying
+    `False` when work remains would skip the migration silently, so anything uncertain
+    answers `True` and lets the real body decide under the lock.
+
+    The both-names-exist conflict still reaches the body — `old in tables` is what
+    triggers it — so a half-migrated database is still refused loudly rather than
+    quietly skipped here.
+    """
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if any(old in tables for old, _ in _LEGACY_TABLES):
+        return True
+    for table, old_col, _ in _LEGACY_COLUMNS:
+        if table in tables and old_col in {
+                r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
+            return True
+    if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='index' "
+            "AND name='idx_document_repos_repo'").fetchone():
+        return True
+    if "collection_edges" in tables and conn.execute(
+            "SELECT 1 FROM collection_edges WHERE type='repo_uses' LIMIT 1").fetchone():
+        return True
+    return False
 
 
 def _migrate_to_collections(conn) -> None:
