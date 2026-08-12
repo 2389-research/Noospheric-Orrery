@@ -186,6 +186,40 @@ def test_a_non_sqlite_archive_is_rejected_before_anything_is_written(monkeypatch
     assert json.loads(registry.read_text()) == [], "a bad archive was registered"
 
 
+def test_a_database_damaged_in_transit_is_rejected(monkeypatch, tmp_path):
+    """A schema read is not enough, and this is the archive's most likely damage.
+
+    The file has just crossed a network or a Drive share. Losing pages in the middle
+    leaves the header and `sqlite_master` perfectly readable, so the cheap check passes
+    and a quietly broken corpus gets installed. `PRAGMA integrity_check` walks every
+    page — 2s on the real 865 MB export.
+    """
+    arch = tmp_path / "archive"
+    arch.mkdir()
+    db = arch / "orrery.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE documents (id TEXT, source_path TEXT, body TEXT)")
+        conn.executemany("INSERT INTO documents VALUES (?, '/data/x', ?)",
+                         [(str(i), "padding" * 200) for i in range(4000)])
+        conn.commit()
+
+    # Corrupt a page well past the schema, the way a truncated transfer would.
+    raw = bytearray(db.read_bytes())
+    assert len(raw) > 200 * 4096, "need a multi-page database for this to be meaningful"
+    raw[100 * 4096:120 * 4096] = b"\x00" * (20 * 4096)
+    db.write_bytes(bytes(raw))
+
+    # The cheap check this replaced still passes on the damaged file — that is the point.
+    with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0] > 0
+
+    (arch / "manifest.json").write_text(json.dumps({"workspace": {"id": "swe"}}))
+    data = tmp_path / "data"
+    with pytest.raises(SystemExit):
+        _run_import(monkeypatch, arch, ["--data", str(data)])
+    assert not (data / "workspaces" / "swe" / "orrery.db").exists()
+
+
 @pytest.mark.parametrize("bad", ["../escape", "../../etc/passwd", "a/b", ".", "..", "/abs"])
 def test_a_crafted_manifest_id_cannot_escape_the_workspace_root(monkeypatch, tmp_path, bad):
     """The id defaults to one read out of the archive — i.e. attacker-controlled."""

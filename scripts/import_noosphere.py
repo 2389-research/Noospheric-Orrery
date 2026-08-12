@@ -56,12 +56,23 @@ def _assert_readable_sqlite(path: Path) -> None:
     `is_file()` accepts any bytes at all. Copying those over an existing workspace and
     appending a registry entry, only to discover at the very end that the file is not a
     database, leaves the target strictly worse than it started.
+
+    The check is a full `integrity_check` rather than a schema read, because reading the
+    schema only proves the header and the first pages survived. This database has just
+    travelled — over a network, a USB disk, or someone's Drive — so a file that lost or
+    mangled pages in the middle is the realistic damage, and it still opens and still
+    lists its tables. Measured at 2s on an 865 MB corpus, against installing a corpus
+    that is quietly broken.
     """
     try:
         with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
-            conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+            rows = [r[0] for r in conn.execute("PRAGMA integrity_check")]
     except sqlite3.DatabaseError as exc:
         sys.exit(f"{path} is not a readable SQLite database ({exc})")
+    if rows != ["ok"]:
+        sys.exit(f"{path} failed PRAGMA integrity_check — the copy is damaged, so "
+                 "re-transfer the archive rather than installing it:\n  "
+                 + "\n  ".join(rows[:5]))
 
 
 def _load_manifest(path: Path) -> dict:
