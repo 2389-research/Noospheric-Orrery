@@ -171,6 +171,45 @@ def test_a_table_with_both_the_legacy_and_new_column_is_refused(tmp_path):
         conn.close()
 
 
+def test_a_legacy_table_does_not_let_a_column_conflict_through(tmp_path):
+    """The conflict check must not sit behind the legacy-table early return.
+
+    A database can hold both at once — an un-renamed `repos`, and an edges table whose
+    column migration got half-applied. Returning True for the table first skips the
+    column check entirely: the body then takes the write lock, renames what it can,
+    and steps silently over the conflicting column because that rename is guarded on
+    `new_col not in cols`. The refusal surfaces only on a LATER pass, once the table
+    rename is done — after a lock was taken and partial work committed.
+
+    So: refused on the read-only pass, with no transaction opened, even when a legacy
+    table is present and would otherwise short-circuit the answer.
+    """
+    table, old_col, new_col = _LEGACY_COLUMNS[1]     # collection_edges: from_repo -> source
+    db_path = tmp_path / "orrery.db"
+    conn = get_connection(str(db_path))
+    try:
+        # A legacy table (would return True on its own) ...
+        conn.execute("CREATE TABLE repos (id TEXT PRIMARY KEY, name TEXT)")
+        # ... alongside a table carrying BOTH column names.
+        conn.execute(f"CREATE TABLE {table} ({old_col} TEXT, {new_col} TEXT, "
+                     f"target TEXT, type TEXT, weight REAL)")
+        conn.commit()
+
+        with pytest.raises(RuntimeError, match="both"):
+            _collections_migration_needed(conn)
+        assert not conn.in_transaction, "opened a transaction before refusing"
+
+        with pytest.raises(RuntimeError, match="both"):
+            migrate_to_collections(conn)
+        assert not conn.in_transaction
+        # And the legacy table is untouched — nothing was partially migrated.
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "repos" in tables, "renamed a table before hitting the conflict"
+    finally:
+        conn.close()
+
+
 def test_a_half_migrated_database_is_still_refused(tmp_path):
     """The precheck must not turn a loud refusal into a quiet skip.
 

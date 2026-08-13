@@ -393,9 +393,16 @@ def _collections_migration_needed(conn) -> bool:
     """
     tables = {r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
+    # BEFORE the legacy-table return, not after. A database can hold a legacy TABLE
+    # and a conflicting column pair at once, and returning True first skips this
+    # check entirely: the body then takes the write lock, renames what it can, and
+    # silently steps over the conflicting column because that rename is guarded on
+    # `new_col not in cols`. The refusal only surfaces a pass later, once the table
+    # rename is done — after a lock was taken and partial work committed. The check
+    # is pure reads, so there is no reason for it to be conditional.
+    _assert_no_column_conflicts(conn, tables)
     if any(old in tables for old, _ in _LEGACY_TABLES):
         return True
-    _assert_no_column_conflicts(conn, tables)
     for table, old_col, _ in _LEGACY_COLUMNS:
         if table in tables and old_col in {
                 r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
