@@ -59,6 +59,18 @@ export const api = {
       body: JSON.stringify({ path }),
     }),
   getJobIterations: (jobId: string) => fetchAPI<import("./types").SimmerJobDetail>(`/jobs/${jobId}/iterations`),
+  search: (q: string, opts?: { topK?: number; expand?: boolean }) => {
+    const query = new URLSearchParams({ q });
+    if (opts?.topK) query.set("top_k", String(opts.topK));
+    if (opts?.expand !== undefined) query.set("expand", String(opts.expand));
+    return fetchAPI<{
+      query: string;
+      entities: { id: string; name: string; type: string }[];
+      chunks: { document_id: string; text: string }[];
+      total_entities: number;
+      total_chunks: number;
+    }>(`/search?${query}`);
+  },
   triggerGeneralSimmer: () => fetchAPI<{ job_id: string }>("/simmer/general", { method: "POST" }),
   triggerDomainSimmer: (domain: string) => fetchAPI<{ job_id: string }>(`/simmer/${domain}`, { method: "POST" }),
   triggerDomainImageSimmer: (domain: string) => fetchAPI<{ job_id: string }>(`/simmer/${domain}/image`, { method: "POST" }),

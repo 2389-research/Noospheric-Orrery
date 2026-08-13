@@ -24,14 +24,18 @@ The tour drives the **real app** against a disposable **sandbox workspace**, not
 
 ## Sample Data
 
-Part 1 ingestion uses the existing (currently untracked) `news_small/` folder — 20 short news articles across business/politics/sport/entertainment, ~92K total. This gets committed into the repo as tutorial fixture data (e.g. `frontend/public/tutorial/news_small/` or an orchestrator-side fixtures dir — exact location decided at implementation time).
+Part 1 ingestion uses a 3-file fixture at `frontend/public/tutorial_samples/` — one article each from
+business, politics, and sport, picked from the larger (untracked) `news_small/` folder. Trimmed down
+from an earlier 5-file set for a faster, lighter demo; still spans enough categories to exercise the
+taxonomy-mismatch behavior below with one fewer domain (no `entertainment` sample) but no loss of the
+core point (one anchored domain vs. two that must be invented).
 
 **Known taxonomy mismatch, accepted deliberately**: the current domain taxonomy (`orchestrator/specs/taxonomy.json`) is engineering/org-oriented (`software, business, product, operations, people, research`), not a news-genre taxonomy. Business articles anchor cleanly to the `business` domain; politics/sport/entertainment articles have no matching top-level anchor. The classifier can invent new topics for content that doesn't fit existing anchors (`taxonomy.py`) — the tutorial keeps `news_small/` as-is and treats this as a feature to show off (the taxonomy is open-vocabulary, not a fixed enum), rather than switching to bespoke on-taxonomy sample docs.
 
 ## Quest Flow
 
 ### Part 1 — "First Light" (ingest → entities/domains → simmer → normalize)
-1. **Ingest a document** — upload one or all `news_small/` files via the real documents page, scoped to the sandbox workspace. Completes when `/documents` (sandbox-scoped) shows ≥1 row.
+1. **Ingest a document** — upload one or all of the `tutorial_samples/` files, scoped to the sandbox workspace. Completes when `/documents` (sandbox-scoped) shows ≥1 row.
 2. **Meet your entities** — open a document's reader view / entity list. Completes on first entity-panel view.
 3. **Watch it classify** — see domain(s) assigned, including any invented topics. Completes when `/domains` shows ≥2 distinct domains (existing anchor + at least one invented topic).
 4. **Run a simmer** — trigger a simmer job from the real UI. Completes when the job's status reaches `completed`.
@@ -71,9 +75,9 @@ No quest-completion tracking needed for quest 11 — it's the finale, not a chec
 
 ## Open Items (explicitly deferred, not blocking plan-writing)
 
-- Exact fixture location for `news_small/` inside the repo.
+- ~~Exact fixture location for `news_small/` inside the repo.~~ Resolved: `frontend/public/tutorial_samples/` (3 files, one per anchored/non-anchored domain).
 - Quest 10's fallback graph domain/content.
-- Exact name/location of the `design-your-orrery` skill.
+- ~~Exact name/location of the `design-your-orrery` skill.~~ Resolved: `.claude/skills/design-your-orrery/SKILL.md`.
 
 ## Revision 1 — UX feedback from first demo (2026-08-10)
 
@@ -123,3 +127,68 @@ poll tick of `/documents`/`/domains`/`/entities`. The 3s poll remains as the sou
 everything the ingest response doesn't cover (job status, normalization state) and to reconcile if
 an optimistic update and the polled state ever diverge, but the user sees their first document (and
 its domains) appear the moment the request completes, not up to 3 seconds later.
+
+### Sample-file drag-and-drop (2026-08-11)
+
+Added to the ingest quest: the three `tutorial_samples/` files render as small draggable icons
+(one per category) with a dedicated drop zone, plus click-to-ingest as a non-drag fallback. Each
+icon dims and stops accepting drag/click once its file is ingested. A "load all at once" button
+remains for convenience. All paths funnel through one `ingestSample(name)` call so the existing
+optimistic-update behavior applies regardless of how the file got in.
+
+## Revision 2 — persistent cross-page panel (2026-08-13)
+
+Feedback: the tutorial should not be confined to its own `/tutorial` stepper page. It should live
+as a **panel on the real Upload page**, instructing the user to drag a sample file onto the real
+ingestion dropzone there, then prompt them to go check it out on the real Documents page — and this
+panel should be **persistent across navigation** (Upload, Pipeline, Documents, etc. within a
+workspace), with a minimize/expand toggle, not just present on one dedicated route.
+
+### Where the guidance now lives
+
+- **New quest**: `visit_documents` — completes when the user actually lands on the real Documents
+  page for this workspace while it has ≥1 document. Sits between `ingest` and `meet_entities` in the
+  quest order, directly implementing "prompt the user to go to Documents" from the request.
+- **`useTutorialQuests(noosphereId)`** (`frontend/src/lib/hooks/use-tutorial-quests.ts`): the
+  polling/quest-derivation logic factored out of the `/tutorial` page into a shared hook, so both
+  the standalone stepper page and the new persistent panel compute quest state the same way instead
+  of duplicating it. Covers Part 1's quests (ingest, visit_documents, meet_entities, classify,
+  simmer, normalize) — Part 2/3 (search, collection/star navigation, reflect, get-the-skill) remain
+  specific to the `/tutorial` page for now; the panel's job is the first-contact flow on the real
+  pages, not a full replacement for the guided tour.
+- **`TutorialPanel`** (`frontend/src/components/tutorial-panel.tsx`): a fixed-position
+  (`bottom-left`) floating panel. Minimize/expand state persists in `localStorage`
+  (`tutorial:{id}:panelExpanded`) per workspace, independent of quest progress. Shows the current
+  active quest's guidance text, tailored to the current page (e.g. "drag onto the box below" while
+  actually on Upload, vs. "head to Upload, then drag one of these in" everywhere else, with a
+  "Go to Upload" button). Below that, a compact read-only quest list mirrors the same checkmark
+  pattern as the `/tutorial` page's Quest Log sidebar.
+- **Mounted in `frontend/src/app/n/[noosphereId]/layout.tsx`**, gated by a
+  `tutorial:{id}:enabled` `localStorage` flag — i.e. it renders on every page under `/n/[id]/...`
+  (Upload, Pipeline, Documents, Entities, Orrery), not just `/tutorial`. It does not render for the
+  Magos demo workspace (`isDemo`).
+- **The `/tutorial` entry route now sets that flag and redirects straight to `/n/{id}/upload`**
+  instead of `/n/{id}/tutorial` — the guided flow now starts on the real product page with the panel
+  narrating it, rather than on a separate stepper page. The standalone `/tutorial` stepper page
+  itself is untouched and still reachable directly (e.g. via the nav bar's "✦ Tutorial" link) for
+  Part 2/3 and anyone who wants the all-in-one view.
+
+### Making the drag actually work on the real dropzone
+
+The real Upload page's dropzone (`frontend/src/components/file-upload.tsx`) reads
+`e.dataTransfer.files` — browsers do not let JS populate that for a drag whose source is another
+in-page element (only OS-level file drags carry real `File` objects there). The panel's sample
+icons instead set a custom `"text/tutorial-sample"` data type carrying just the filename.
+`FileUpload`'s `handleDrop` (new) checks for that type first; if present, it fetches the matching
+file from `frontend/public/tutorial_samples/`, builds a `File` from it, and runs it through the
+same `ingestFileArray` path a real OS file drop would use — so from the ingestion pipeline's
+perspective a tutorial-sample drop and a real file drop are identical.
+
+### Known duplication, accepted for now
+
+`use-tutorial-quests.ts` is only consumed by the panel today; the standalone `/tutorial` page keeps
+its own separate, pre-existing state for Part 1 rather than being refactored onto the shared hook in
+this pass, to limit the size of this change. This means the two surfaces track ingest/classify/
+simmer/normalize progress independently and could in principle drift — acceptable short-term since
+both read the same underlying API state, but the `/tutorial` page should be migrated onto
+`useTutorialQuests` in a follow-up rather than left permanently forked.

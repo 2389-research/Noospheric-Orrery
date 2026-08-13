@@ -50,6 +50,13 @@ export function NavBar({
 
       <div className="flex-1" />
 
+      <Link
+        href="/tutorial"
+        className="text-xs tracking-wider px-3 py-1 rounded border border-border/40 text-muted-foreground hover:text-foreground"
+      >
+        ✦ Tutorial
+      </Link>
+
       <UserMenu />
     </nav>
   );

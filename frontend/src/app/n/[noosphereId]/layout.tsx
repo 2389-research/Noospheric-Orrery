@@ -7,6 +7,7 @@ import { useWorkspaces } from "@/lib/hooks/use-workspaces";
 import { setApiWorkspaceId } from "@/lib/api";
 import { NavBar } from "@/components/nav-bar";
 import { DemoModeContext } from "@/lib/hooks/use-demo-mode";
+import { TutorialPanel } from "@/components/tutorial-panel";
 
 const MAGOS_ID = process.env.NEXT_PUBLIC_MAGOS_WORKSPACE_ID;
 const IS_NOOP = process.env.NEXT_PUBLIC_AUTH_MODE === "noop";
@@ -65,6 +66,7 @@ export default function NoosphereLayout({
         </div>
       )}
       <main className="p-6">{children}</main>
+      {!isDemo && <TutorialPanel noosphereId={noosphereId} />}
     </DemoModeContext.Provider>
   );
 }

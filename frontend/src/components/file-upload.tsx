@@ -17,20 +17,7 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
   const [uploadingType, setUploadingType] = useState<"text" | "image" | "any" | null>(null);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
 
-  const handleFiles = useCallback(async (files: FileList | null, type: "text" | "image" | "any" | "all" = "all") => {
-    if (!files || files.length === 0) return;
-    const allowedExts = type === "text" ? TEXT_EXTS : type === "image" ? IMAGE_EXTS : type === "any" ? FILE_EXTS : ALL_EXTS;
-    const fileArr = Array.from(files).filter(f =>
-      allowedExts.some(ext => f.name.toLowerCase().endsWith(ext))
-    );
-    if (fileArr.length === 0) {
-      onError(`No supported files found (${allowedExts.join(", ")})`);
-      return;
-    }
-
-    const inferredType: "text" | "image" | "any" = type === "all"
-      ? (fileArr.some(f => IMAGE_EXTS.some(ext => f.name.toLowerCase().endsWith(ext))) ? "image" : "text")
-      : type;
+  const ingestFileArray = useCallback(async (fileArr: File[], inferredType: "text" | "image" | "any") => {
     setUploadingType(inferredType);
     setProgress({ current: 0, total: fileArr.length });
 
@@ -49,6 +36,39 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
     setProgress({ current: 0, total: 0 });
   }, [onResult, onError]);
 
+  const handleFiles = useCallback(async (files: FileList | null, type: "text" | "image" | "any" | "all" = "all") => {
+    if (!files || files.length === 0) return;
+    const allowedExts = type === "text" ? TEXT_EXTS : type === "image" ? IMAGE_EXTS : type === "any" ? FILE_EXTS : ALL_EXTS;
+    const fileArr = Array.from(files).filter(f =>
+      allowedExts.some(ext => f.name.toLowerCase().endsWith(ext))
+    );
+    if (fileArr.length === 0) {
+      onError(`No supported files found (${allowedExts.join(", ")})`);
+      return;
+    }
+
+    const inferredType: "text" | "image" | "any" = type === "all"
+      ? (fileArr.some(f => IMAGE_EXTS.some(ext => f.name.toLowerCase().endsWith(ext))) ? "image" : "text")
+      : type;
+    await ingestFileArray(fileArr, inferredType);
+  }, [ingestFileArray]);
+
+  // The tutorial panel's sample icons are dragged from elsewhere on the page, not the OS —
+  // browsers won't let JS populate dataTransfer.files for those, so the tutorial drag instead
+  // carries a "text/tutorial-sample" filename that we resolve to the bundled fixture ourselves.
+  const handleDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>, type: "text" | "image" | "any") => {
+    e.preventDefault();
+    const sampleName = e.dataTransfer.getData("text/tutorial-sample");
+    if (sampleName) {
+      const res = await fetch(`/tutorial_samples/${sampleName}`);
+      const blob = await res.blob();
+      const file = new File([blob], sampleName, { type: "text/plain" });
+      await ingestFileArray([file], type);
+      return;
+    }
+    handleFiles(e.dataTransfer.files, type);
+  }, [handleFiles, ingestFileArray]);
+
   return (
     <div className="space-y-4">
       {/* Text documents */}
@@ -61,7 +81,7 @@ export function FileUpload({ onResult, onError }: FileUploadProps) {
           "border-border/40 cursor-pointer hover:border-cyan-500/30 hover:bg-card/30 focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/30"
         }`}
         onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer.files, "text"); }}
+        onDrop={(e) => handleDrop(e, "text")}
         onClick={() => !uploadingType && document.getElementById("text-file-input")?.click()}
         onKeyDown={(e) => { if (!uploadingType && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); document.getElementById("text-file-input")?.click(); } }}
       >
