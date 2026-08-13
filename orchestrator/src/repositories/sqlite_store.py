@@ -950,6 +950,56 @@ class SQLiteCollectionRepository:
         )
         self._conn.commit()
 
+    def get_source_ref(self, document_id):
+        """Resolve a code document to a fetchable GitHub reference
+        ({remote, commit, path, url}). The graph stores the map — the LLM summary
+        plus these git coordinates — not the code; an agent uses the ref to pull
+        the exact source version from GitHub. Returns None for non-repo documents
+        or repos ingested before git provenance was captured.
+
+        This is the shareable counterpart to `documents.source_path`, which is an
+        absolute path inside the ingesting container and does not resolve anywhere
+        else — the limitation scripts/NOOSPHERE.md warns recipients about.
+        """
+        import os
+        from urllib.parse import quote
+        # content_type filter keeps the contract: only code docs get a ref (a
+        # non-code doc is never linked to a repo, but be explicit — null otherwise).
+        row = self._conn.execute(
+            """SELECT c.remote_url, c.commit_sha, c.root_path, d.source_path
+               FROM document_collections dc
+               JOIN collections c ON c.id = dc.collection_id
+               JOIN documents d ON d.id = dc.document_id
+               WHERE dc.document_id = ? AND d.content_type = 'code_intent' LIMIT 1""",
+            (document_id,),
+        ).fetchone()
+        if not row or not row["remote_url"]:
+            return None
+        remote, commit = row["remote_url"], row["commit_sha"]
+        root_path, source_path = row["root_path"], row["source_path"]
+        rel = None
+        if source_path and root_path:
+            try:
+                rel = os.path.relpath(source_path, root_path)
+            except ValueError:
+                rel = None
+            # Drop repo-level artifacts and any stale/mislinked path that escapes
+            # the repo root (relpath can yield "../…") — those don't resolve.
+            #
+            # Compared on a PATH-COMPONENT boundary, not as a string prefix:
+            # `startswith("..")` also rejects legitimate names, because a directory
+            # may simply be called `...` or `..config`. Only `..` itself, or a `../`
+            # leading the path, actually escapes the root.
+            if rel is not None and (
+                rel in (".", "", os.pardir) or rel.startswith(os.pardir + os.sep)
+            ):
+                rel = None
+        ref = {"remote": remote, "commit": commit, "path": rel}
+        if commit and rel:
+            # safe="/" keeps path separators; encodes '#', '?', spaces, etc.
+            ref["url"] = f"https://{remote}/blob/{commit}/{quote(rel, safe='/')}"
+        return ref
+
     def get_collection_routes(self):
         """collection <-> collection edges DERIVED from shared entities.
 
