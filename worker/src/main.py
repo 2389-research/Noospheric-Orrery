@@ -1,11 +1,56 @@
 import os
 import asyncio
+import sqlite3
 import time
 import traceback
 from pathlib import Path
 from .config import get_settings
 from .db import init_db, get_connection
-from .jobs.runner import pick_next_job, mark_job_running, mark_job_completed, mark_job_failed
+from .jobs.runner import (
+    pick_next_job, mark_job_running, mark_job_completed, mark_job_failed,
+    reset_orphaned_jobs,
+)
+
+
+def _record_terminal_state(db_path: str, job_id: str, *, completed: bool,
+                           error: str = "", attempts: int = 5) -> bool:
+    """Write a job's terminal status, retrying a locked database.
+
+    The status write is tiny, but it lost a race once — a migration held the write
+    lock — and the completion of a job that had already done its work (26 docs, 135
+    entities extracted and committed) was never recorded, so the row sat 'running'
+    forever. Worse, the old code recorded the outcome inside the same try that ran the
+    job: when the completion write raised, the except tried to mark the job FAILED,
+    that raised the same lock, and the whole thing fell through to the generic "Error
+    polling" handler — the outcome of finished work vanished into a line that looked
+    like an unrelated poll hiccup.
+
+    So the recording is separated from running the job, and retried on a locked/busy
+    error (each attempt on a fresh connection, since a failed commit leaves the old one
+    unusable). If it still cannot be written, it is announced as CRITICAL and named —
+    not swallowed — and the startup reconciler will settle the row on the next restart.
+    """
+    for attempt in range(attempts):
+        conn = None
+        try:
+            conn = get_connection(db_path)
+            if completed:
+                mark_job_completed(conn, job_id)
+            else:
+                mark_job_failed(conn, job_id, error)
+            return True
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() and "busy" not in str(e).lower():
+                raise
+            time.sleep(0.2 * (attempt + 1))
+        finally:
+            if conn is not None:
+                conn.close()
+    what = "completion" if completed else "failure"
+    print(f"CRITICAL: could not record {what} of job {job_id} after {attempts} "
+          f"attempts (database stayed locked); the row is left 'running' and will be "
+          f"reconciled on the next worker restart", flush=True)
+    return False
 
 
 def _configure_gateway_for_simmer_sdk() -> None:
@@ -84,6 +129,25 @@ async def poll_loop():
     relay = Relay.from_settings(settings)
     last_sweep = 0.0  # 0 → sweep on the first iteration
 
+    # Recover jobs orphaned by a previous worker before entering the loop. A 'running'
+    # job at startup cannot be resumed (its process is gone), so it would otherwise sit
+    # 'running' forever — including the one this fix's own failure mode already
+    # stranded. Runs on every workspace; a locked DB here is skipped, not fatal.
+    for db_path in _find_workspace_dbs(settings.db_path):
+        conn = None
+        try:
+            init_db(db_path)
+            conn = get_connection(db_path)
+            n = reset_orphaned_jobs(conn)
+            if n:
+                print(f"reconciled {n} orphaned running job(s) in "
+                      f"{Path(db_path).parent.name}", flush=True)
+        except Exception as e:
+            print(f"orphan reconcile skipped for {db_path}: {e}", flush=True)
+        finally:
+            if conn is not None:
+                conn.close()
+
     while True:
         # Scan all workspace DBs for queued jobs
         db_paths = _find_workspace_dbs(settings.db_path)
@@ -101,17 +165,23 @@ async def poll_loop():
                     print(f"Picked up job {job['id']} ({job['type']}) in workspace {ws_name}", flush=True)
                     mark_job_running(conn, job["id"])
                     conn.close()
+
+                    # Run the job, THEN record its outcome as a separate, retried step.
+                    # Keeping the two apart is the whole point: a lock while recording
+                    # the result must not be mistaken for the job failing, and must not
+                    # be able to leave the row 'running' silently.
+                    error = None
                     try:
                         await handle_job(job, db_path)
-                        conn = get_connection(db_path)
-                        mark_job_completed(conn, job["id"])
-                        print(f"Job {job['id']} completed", flush=True)
                     except Exception as e:
-                        conn = get_connection(db_path)
-                        mark_job_failed(conn, job["id"], traceback.format_exc())
+                        error = traceback.format_exc()
                         print(f"Job {job['id']} failed: {e}", flush=True)
-                    finally:
-                        conn.close()
+
+                    if error is None:
+                        if _record_terminal_state(db_path, job["id"], completed=True):
+                            print(f"Job {job['id']} completed", flush=True)
+                    else:
+                        _record_terminal_state(db_path, job["id"], completed=False, error=error)
                 else:
                     conn.close()
             except Exception as e:
