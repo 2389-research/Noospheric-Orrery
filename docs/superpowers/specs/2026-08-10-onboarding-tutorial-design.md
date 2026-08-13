@@ -268,3 +268,46 @@ re-polling `/graph`). Verified end-to-end: ingest → dirty flag reads `1` immed
 This fix is in `orchestrator/src/routes/ingest.py`, outside the tutorial's own files, but is
 recorded here because it was found and fixed in service of making the `view_orrery` quest work at
 all — without it, that quest's very first real-world exercise would always show an empty galaxy.
+
+## Revision 4 — add-more-files prompt after Orrery (2026-08-13)
+
+Feedback, after confirming Revision 3 works: once the user has seen the Orrery, the panel should
+actively ask if they want to add more files, and going back to Upload should show the same sample
+icons from the beginning of the tutorial — not just a message with no way to act on it.
+
+### Quest reordering (`use-tutorial-quests.ts`)
+
+`add_more_files` moved to sit right after `view_orrery` in the quest array (still `optional: true`,
+still excluded from `activeQuest` selection — it does not block `classify`/`simmer`/`normalize` from
+becoming active). This is purely a display-order change; the array order only affects where it shows
+up in the quest list, not when its own prompt appears (see below).
+
+### New: per-file ingested state, not just a count
+
+Previously the hook only exposed `documentCount`; the panel had no way to know *which* of the three
+sample files were already ingested, so the ingest quest's icons could only be all-active or (once the
+quest was done) not rendered at all. Added `documentTitles: string[]` to the hook (document titles
+from `/documents`, already fetched — just wasn't kept before). `SampleIcons` (new, factored out of
+the inline JSX) now dims and disables exactly the files whose name appears in `documentTitles`,
+regardless of which quest is currently active — the same icon logic that already existed on the
+standalone `/tutorial` page's `ingestedSamples` set, now shared by the panel too.
+
+### New: "want to add more files?" prompt, decoupled from the required-quest flow
+
+The panel used to only show the sample icons while `ingest` was the active required quest — once
+ingest was satisfied (1 file), the icons disappeared from the panel entirely, even though
+`add_more_files` (2+ files) was still incomplete. Added a `showAddMorePrompt` condition
+(`viewOrrery.done && !addMoreFiles.done`) that renders a standing card — "Want to add more files?
+Same as before — drag one onto the ingestion box on Upload," with the same `SampleIcons` block and a
+"Go to Upload" button — independent of whatever the current *required* active quest is (by the time
+this shows, that's `classify`/`simmer`/`normalize`, none of which relate to file count). This nudge
+naturally disappears once a second file is ingested (`add_more_files.done`), without ever having
+blocked or delayed classify/simmer/normalize.
+
+### Why not just re-show the original ingest card
+
+The original ingest card's copy ("Drag one of these onto the ingestion box below to get started")
+is written for a first-time user with zero context; reusing it verbatim after Orrery would be
+confusing ("get started" when they're clearly already started). The add-more-files prompt has its
+own copy while sharing the same `SampleIcons` component and drag/drop mechanics — same interaction,
+different framing for where the user actually is in the flow.

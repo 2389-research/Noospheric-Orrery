@@ -32,6 +32,7 @@ function key(noosphereId: string, name: string) {
 
 export function useTutorialQuests(noosphereId: string) {
   const [documentCount, setDocumentCount] = useState(0);
+  const [documentTitles, setDocumentTitles] = useState<string[]>([]);
   const [domains, setDomains] = useState<{ path: string; document_count: number }[]>([]);
   const [entityCount, setEntityCount] = useState(0);
   const [normalizeDone, setNormalizeDone] = useState(false);
@@ -51,6 +52,7 @@ export function useTutorialQuests(noosphereId: string) {
         api.getEntities({ limit: 50 }),
       ]);
       setDocumentCount(docs.length);
+      setDocumentTitles(docs.map((d) => d.title));
       setDomains(doms.map((d) => ({ path: d.path, document_count: d.document_count })));
       setEntityCount(ents.length);
     } catch {
@@ -104,13 +106,6 @@ export function useTutorialQuests(noosphereId: string) {
       done: visitedDocuments,
     },
     {
-      id: "add_more_files",
-      title: "Add more files",
-      lore: "More sources, more constellations.",
-      done: documentCount > 1,
-      optional: true,
-    },
-    {
       id: "open_document",
       title: "Click the file you just added",
       lore: "Every extracted name, traced back to the sentence it came from.",
@@ -121,6 +116,13 @@ export function useTutorialQuests(noosphereId: string) {
       title: "See the live view in Orrery",
       lore: "The galaxy map, watching itself grow.",
       done: visitedOrrery,
+    },
+    {
+      id: "add_more_files",
+      title: "Add more files",
+      lore: "More sources, more constellations.",
+      done: documentCount > 1,
+      optional: true,
     },
     {
       id: "classify",
@@ -147,6 +149,7 @@ export function useTutorialQuests(noosphereId: string) {
   return {
     quests,
     documentCount,
+    documentTitles,
     domains,
     entityCount,
     refresh,

@@ -4,7 +4,8 @@
 // it survives navigation across Upload/Pipeline/Documents/etc. Only renders when this
 // workspace was entered via the /tutorial flow (see the "tutorial:{id}:enabled" flag set by
 // frontend/src/app/tutorial/page.tsx). See docs/superpowers/specs/2026-08-10-onboarding-tutorial-design.md,
-// "Revision 2 — persistent cross-page panel" and "Revision 3 — Documents → Orrery handoff".
+// "Revision 2 — persistent cross-page panel", "Revision 3 — Documents → Orrery handoff", and
+// "Revision 4 — add-more-files prompt after Orrery".
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useTutorialQuests } from "@/lib/hooks/use-tutorial-quests";
@@ -24,14 +25,49 @@ function isDocumentDetailPath(pathname: string) {
   return /\/documents\/[^/]+$/.test(pathname);
 }
 
+function SampleIcons({ onUpload, ingestedTitles }: { onUpload: boolean; ingestedTitles: string[] }) {
+  return (
+    <div className="flex gap-2">
+      {SAMPLE_FILES.map((name) => {
+        const done = ingestedTitles.includes(name);
+        const active = onUpload && !done;
+        return (
+          <div
+            key={name}
+            draggable={active}
+            onDragStart={(e) => e.dataTransfer.setData("text/tutorial-sample", name)}
+            className={`flex flex-col items-center gap-1 w-14 p-1.5 rounded border text-center ${
+              done
+                ? "border-border/20 opacity-40"
+                : active
+                  ? "border-border/50 cursor-grab hover:bg-accent/40"
+                  : "border-border/20 opacity-50"
+            }`}
+            title={done ? `${name} — already ingested` : active ? `Drag to ingest ${name}` : "Go to Upload to drag this in"}
+          >
+            <span className="text-lg">📄</span>
+            <span className="text-[9px] text-muted-foreground truncate w-full">{name.split("-")[0]}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
   const pathname = usePathname();
   const router = useRouter();
   const [enabled, setEnabled] = useState(false);
   const [expanded, setExpanded] = useState(true);
 
-  const { quests, documentCount, markVisitedDocuments, markOpenedDocument, markVisitedOrrery } =
-    useTutorialQuests(noosphereId);
+  const {
+    quests,
+    documentCount,
+    documentTitles,
+    markVisitedDocuments,
+    markOpenedDocument,
+    markVisitedOrrery,
+  } = useTutorialQuests(noosphereId);
 
   useEffect(() => {
     setEnabled(localStorage.getItem(enabledKey(noosphereId)) === "1");
@@ -66,8 +102,14 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
   const requiredQuests = quests.filter((q) => !q.optional);
   const optionalQuests = quests.filter((q) => q.optional);
   const activeQuest = requiredQuests.find((q) => !q.done) ?? null;
+  const addMoreFiles = quests.find((q) => q.id === "add_more_files");
+  const viewOrrery = quests.find((q) => q.id === "view_orrery");
   const onUpload = pathname.endsWith("/upload");
   const onDocumentsList = pathname.endsWith("/documents");
+
+  // Once the user has seen the Orrery, offer "add more files?" as a standing, non-blocking
+  // nudge — separate from the required-quest flow below, until they've added a second file.
+  const showAddMorePrompt = viewOrrery?.done && addMoreFiles && !addMoreFiles.done;
 
   return (
     <div className="fixed bottom-4 left-4 z-50 w-72">
@@ -96,24 +138,7 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
                   ? "Drag one of these onto the ingestion box below to get started."
                   : "Head to Upload, then drag one of these onto the ingestion box."}
               </p>
-              <div className="flex gap-2">
-                {SAMPLE_FILES.map((name) => (
-                  <div
-                    key={name}
-                    draggable={onUpload}
-                    onDragStart={(e) => e.dataTransfer.setData("text/tutorial-sample", name)}
-                    className={`flex flex-col items-center gap-1 w-14 p-1.5 rounded border text-center ${
-                      onUpload ? "border-border/50 cursor-grab hover:bg-accent/40" : "border-border/20 opacity-50"
-                    }`}
-                    title={onUpload ? `Drag to ingest ${name}` : "Go to Upload to drag this in"}
-                  >
-                    <span className="text-lg">📄</span>
-                    <span className="text-[9px] text-muted-foreground truncate w-full">
-                      {name.split("-")[0]}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              <SampleIcons onUpload={onUpload} ingestedTitles={documentTitles} />
               {!onUpload && (
                 <button
                   className="text-xs px-2 py-1 rounded border border-border/40 hover:bg-accent/40"
@@ -185,6 +210,23 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
               All caught up — visit <code>/n/{noosphereId}/tutorial</code> for search, the galaxy
               map, and building your own domain.
             </p>
+          )}
+
+          {showAddMorePrompt && (
+            <div className="space-y-2 pt-2 border-t border-border/30">
+              <p className="text-xs">
+                Want to add more files? Same as before — drag one onto the ingestion box on Upload.
+              </p>
+              <SampleIcons onUpload={onUpload} ingestedTitles={documentTitles} />
+              {!onUpload && (
+                <button
+                  className="text-xs px-2 py-1 rounded border border-border/40 hover:bg-accent/40"
+                  onClick={() => router.push(`/n/${noosphereId}/upload`)}
+                >
+                  Go to Upload
+                </button>
+              )}
+            </div>
           )}
 
           {optionalQuests.length > 0 && (
