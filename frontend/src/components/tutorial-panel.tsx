@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useTutorialQuests } from "@/lib/hooks/use-tutorial-quests";
 
-const SAMPLE_FILES = ["business-001.txt", "politics-296.txt", "sport-056.txt"];
+const SAMPLE_FILES = ["entertainment-002.txt", "politics-296.txt", "sport-056.txt"];
 
 function enabledKey(id: string) {
   return `tutorial:${id}:enabled`;

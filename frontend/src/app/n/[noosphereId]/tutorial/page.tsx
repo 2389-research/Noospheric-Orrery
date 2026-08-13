@@ -11,7 +11,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 
 const SAMPLE_FILES = [
-  "business-001.txt",
+  "entertainment-002.txt",
   "politics-296.txt",
   "sport-056.txt",
 ];
@@ -343,8 +343,9 @@ export default function TutorialPage() {
         {activeQuest?.id === "classify" && (
           <QuestCard title="Part 1 — Watch it classify">
             <p className="text-xs text-muted-foreground">
-              Business articles anchor to an existing domain — politics/sport/entertainment may show
-              up as invented topics, since the taxonomy is open-vocabulary, not a fixed list.
+              None of these article topics match an existing top-level domain exactly, so the
+              classifier invents new topics for them — the taxonomy is open-vocabulary, not a fixed
+              list.
             </p>
             <div className="space-y-1">
               {domains.map((d) => (

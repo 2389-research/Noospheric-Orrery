@@ -30,7 +30,7 @@ from an earlier 5-file set for a faster, lighter demo; still spans enough catego
 taxonomy-mismatch behavior below with one fewer domain (no `entertainment` sample) but no loss of the
 core point (one anchored domain vs. two that must be invented).
 
-**Known taxonomy mismatch, accepted deliberately**: the current domain taxonomy (`orchestrator/specs/taxonomy.json`) is engineering/org-oriented (`software, business, product, operations, people, research`), not a news-genre taxonomy. Business articles anchor cleanly to the `business` domain; politics/sport/entertainment articles have no matching top-level anchor. The classifier can invent new topics for content that doesn't fit existing anchors (`taxonomy.py`) — the tutorial keeps `news_small/` as-is and treats this as a feature to show off (the taxonomy is open-vocabulary, not a fixed enum), rather than switching to bespoke on-taxonomy sample docs.
+**Known taxonomy mismatch, accepted deliberately**: the current domain taxonomy (`orchestrator/specs/taxonomy.json`) is engineering/org-oriented (`software, business, product, operations, people, research`), not a news-genre taxonomy. None of the three current samples (entertainment/politics/sport, as of Revision 7) match a top-level anchor exactly, so the classifier invents new topics for all of them (`taxonomy.py`) — the tutorial treats this as a feature to show off (the taxonomy is open-vocabulary, not a fixed enum) rather than switching to bespoke on-taxonomy sample docs. (Earlier revisions of this doc described a `business` sample anchoring cleanly to the `business` domain — that sample was swapped out in Revision 7 for one with fewer numbers; the point about open-vocabulary classification still holds without it, since even a single invented-topic-only document still produces ≥2 domains.)
 
 ## Quest Flow
 
@@ -361,3 +361,21 @@ polled API state or a route change.
 New `search` card: "Try the search bar for a keyword — e.g. `birmingham`" (with a "Go to Orrery"
 button when not already there, matching the existing pattern) — placed between `view_orrery` and
 the generic "Next: …" fallback, same structure as every other named-quest card.
+
+## Revision 7 — swapped the business sample for a low-number one (2026-08-13)
+
+Feedback: drop the `business-001.txt` sample; pick a `news_small/` article that doesn't have a lot
+of numbers in it.
+
+Checked digit counts across `news_small/`'s business and entertainment articles
+(`grep -oE '[0-9]' file | wc -l`): `business-001.txt` had 65 digits (stock/earnings figures) vs.
+`entertainment-002.txt` at just 1. Swapped `business-001.txt` out for `entertainment-002.txt`
+("Jarre joins fairytale celebration" — a Jean-Michel Jarre/Copenhagen/Hans Christian Andersen
+concert piece) in `frontend/public/tutorial_samples/`, and updated the `SAMPLE_FILES` constant in
+both `tutorial-panel.tsx` and the standalone `/tutorial` page. Verified: ingest against a fresh
+sandbox extracts 24 real entities from it, same as the other two samples.
+
+Sample set is now `entertainment-002.txt`, `politics-296.txt`, `sport-056.txt` — no `business/*`
+sample remains, so the taxonomy-mismatch point from the original "Sample Data" section (one anchored
+domain vs. invented ones) is worth re-checking next time domains are examined; entertainment/politics/
+sport may now all land as invented topics with nothing anchoring to an existing top-level domain.
