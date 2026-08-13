@@ -10,6 +10,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Respons
 from orrery_relay import Relay
 
 from ..config import get_settings
+from ..db import mark_graph_dirty
 from ..dependencies import get_auth_store, AuthStore
 from ..models import IngestResult, DirectoryIngestRequest
 from ..pipeline.chunker import chunk_document
@@ -201,6 +202,13 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
         except Exception as e:
             print(f"Search index update after ingest: {e}")
 
+    # This document (and any entities/domains it produced) is new data the cached
+    # /graph snapshot doesn't reflect yet — without this, single-document ingest
+    # (unlike normalize/corrections/batch-extract) never invalidates the snapshot,
+    # so the galaxy silently never updates after the first background rebuild.
+    mark_graph_dirty(store.conn)
+    store.conn.commit()
+
     return {
         "document_id": doc_id,
         "title": title,
@@ -326,6 +334,9 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
             store.conn.commit()
     except Exception as e:
         print(f"SigLIP embedding after image ingest: {e}", flush=True)
+
+    mark_graph_dirty(store.conn)
+    store.conn.commit()
 
     return {
         "document_id": doc_id, "title": title, "domains": domains,

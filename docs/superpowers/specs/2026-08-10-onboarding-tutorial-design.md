@@ -241,3 +241,30 @@ The standalone `/tutorial` page's own Part 1 state (separate from `useTutorialQu
 this pass — it still has its own `meet_entities`-shaped quest and no Orrery-visit quest. This widens
 the gap between the two surfaces beyond what Revision 2 flagged; migrating `/tutorial` onto the
 shared hook is now more overdue, not less.
+
+## Bug fix (not a tutorial-design change): `/graph` never invalidated after single-document ingest
+
+While testing the `view_orrery` quest above, the Orrery came up empty for a sandbox workspace that
+demonstrably had a document and 35 entities. Root cause, found in `orchestrator/src/routes/ingest.py`:
+`/graph` is served from a cached snapshot (`graph_snapshot` table) that a background sweep rebuilds
+only for workspaces flagged `dirty` (`orchestrator/src/main.py`, `_rebuild_dirty_snapshots`). Every
+other graph-mutating write path calls `mark_graph_dirty(conn)` — `normalize.py`, `corrections.py`,
+and the worker's `extract_batch.py` — **except single-document ingest**, which never flagged the
+snapshot dirty at all. The very first sweep after server startup builds an empty snapshot (nothing
+ingested yet) and clears the dirty bit; every ingest after that point is invisible to `/graph`
+forever, for any workspace, not just tutorial sandboxes. This is a pre-existing product bug, not
+something introduced by the tutorial — the tutorial's `view_orrery` quest just happened to be the
+first thing in this session to actually look at a freshly-ingested workspace's Orrery.
+
+**Fix**: added `mark_graph_dirty(store.conn)` + `store.conn.commit()` at the end of both
+`_ingest_document` and `_ingest_image` in `orchestrator/src/routes/ingest.py`, matching the exact
+call-then-commit pattern every other caller of `mark_graph_dirty` already uses (the commit matters —
+`mark_graph_dirty` only executes an `UPDATE`, and every repository write in this codebase commits
+per-call, so a dirty-flag write left uncommitted is silently lost when the connection closes; this
+was caught by checking the flag in the workspace's SQLite file directly after ingest, not just by
+re-polling `/graph`). Verified end-to-end: ingest → dirty flag reads `1` immediately → after the next
+20s background sweep, `/graph` for that workspace reports real node counts instead of zero.
+
+This fix is in `orchestrator/src/routes/ingest.py`, outside the tutorial's own files, but is
+recorded here because it was found and fixed in service of making the `view_orrery` quest work at
+all — without it, that quest's very first real-world exercise would always show an empty galaxy.
