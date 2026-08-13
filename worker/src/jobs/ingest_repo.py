@@ -62,7 +62,23 @@ def _git_coordinates(root_path: str) -> tuple[str | None, str | None]:
     def _run(*args: str) -> str | None:
         try:
             r = subprocess.run(  # noqa: S603 — fixed argv, no shell
-                ["git", "-C", root_path, *args],  # noqa: S607
+                # `-c safe.directory=<root_path>` or EVERY git call here fails in
+                # Docker. The repo arrives on a bind mount owned by the host user
+                # while this process runs as `worker`, and git refuses a repository
+                # it sees as someone else's ("detected dubious ownership"). The
+                # entrypoint's `chown -R /data` is meant to cover this but does not
+                # stick on macOS bind mounts, and it is followed by `|| true`. Since
+                # every failure here is indistinguishable from "not a checkout", the
+                # result was silent: repos ingested in Docker simply had no
+                # provenance, which is the one thing that gets an agent from a graph
+                # node back to the real source.
+                #
+                # Scoped to the directory the operator explicitly asked to ingest,
+                # deliberately NOT the global `safe.directory=*`: that switches the
+                # ownership check off for every repository the process ever touches,
+                # and repo-local config is executable surface. Verified that an
+                # unrelated checkout is still refused with this set.
+                ["git", "-c", f"safe.directory={root_path}", "-C", root_path, *args],  # noqa: S607
                 capture_output=True, text=True, timeout=10,
             )
         except (OSError, subprocess.SubprocessError):

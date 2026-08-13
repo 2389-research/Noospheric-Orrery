@@ -333,6 +333,18 @@ def migrate_to_collections(conn) -> None:
     contention happen at the lock instead, where busy_timeout does apply, so the loser
     waits and then observes the migrated schema rather than failing.
     """
+    # Nothing to do is the OVERWHELMINGLY common case, and it must not cost a write
+    # lock. Both services call init_db on every workspace database on every poll pass
+    # (worker: every 5s across all of them), so taking BEGIN IMMEDIATE unconditionally
+    # meant one exclusive lock per workspace per pass, forever, on databases that were
+    # migrated long ago. That is contention manufactured out of nothing, it scales with
+    # the number of workspaces, and it collides with genuinely long writes — an
+    # in-flight extract_batch made the poll loop log "database is locked" and skip that
+    # workspace for the cycle. The check below is pure reads, so it costs nothing and
+    # takes no lock.
+    if not _collections_migration_needed(conn):
+        return
+
     # If a transaction is already open (a caller mid-write), the savepoint alone is
     # correct — and BEGIN would raise. Only take the lock when we are the outermost.
     started = not conn.in_transaction
@@ -353,6 +365,78 @@ def migrate_to_collections(conn) -> None:
         # (executescript, ALTERs) and holding the lock across all of it would widen
         # the window the other process has to wait through.
         conn.commit()
+
+
+def _assert_no_column_conflicts(conn, tables: set[str]) -> None:
+    """Refuse a table carrying BOTH the legacy and the replacement column.
+
+    The same hazard the table-level preflight refuses, one level down: values live
+    under each name and `ALTER TABLE ... RENAME COLUMN` cannot merge them, so there is
+    no safe automatic resolution.
+
+    Left alone it fails in the worst way available — silently and forever. The rename
+    in `_migrate_to_collections` is guarded on `new_col not in cols`, so it skips;
+    nothing else touches the legacy column; and the detector keeps answering `True`
+    because the legacy column still exists. Every `init_db` on every poll pass then
+    takes the write lock, does nothing, and releases it — which is precisely the churn
+    this precheck was added to remove, reintroduced by a database in a state no code
+    path here creates.
+
+    Raised from the read-only pass ON PURPOSE, before `BEGIN IMMEDIATE`: a database
+    that cannot be migrated should not cost a write lock to find that out, once or
+    repeatedly.
+    """
+    for table, old_col, new_col in _LEGACY_COLUMNS:
+        if table not in tables:
+            continue
+        # `table` comes from the module-level _LEGACY_COLUMNS constant, never from
+        # caller input, and PRAGMA takes no bound parameters.
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if old_col in cols and new_col in cols:
+            raise RuntimeError(
+                f"cannot migrate: {table} has both {old_col!r} and {new_col!r}. "
+                f"Values under each would have to be merged by hand — pick the "
+                f"authoritative column, copy anything worth keeping into it, then "
+                f"drop {old_col!r}.")
+
+
+def _collections_migration_needed(conn) -> bool:
+    """Is there any repo-era shape left? Read-only, and deliberately so.
+
+    Mirrors every condition `_migrate_to_collections` acts on, so a `False` here means
+    that function would be a no-op. It must stay conservative in one direction: saying
+    `False` when work remains would skip the migration silently, so anything uncertain
+    answers `True` and lets the real body decide under the lock.
+
+    The both-TABLE-names conflict still reaches the body — `old in tables` is what
+    triggers it — so a half-migrated database is still refused loudly rather than
+    quietly skipped here. The both-COLUMN-names conflict is refused right here, for
+    the reason in `_assert_no_column_conflicts`.
+    """
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    # BEFORE the legacy-table return, not after. A database can hold a legacy TABLE
+    # and a conflicting column pair at once, and returning True first skips this
+    # check entirely: the body then takes the write lock, renames what it can, and
+    # silently steps over the conflicting column because that rename is guarded on
+    # `new_col not in cols`. The refusal only surfaces a pass later, once the table
+    # rename is done — after a lock was taken and partial work committed. The check
+    # is pure reads, so there is no reason for it to be conditional.
+    _assert_no_column_conflicts(conn, tables)
+    if any(old in tables for old, _ in _LEGACY_TABLES):
+        return True
+    for table, old_col, _ in _LEGACY_COLUMNS:
+        if table in tables and old_col in {
+                r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
+            return True
+    if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='index' "
+            "AND name='idx_document_repos_repo'").fetchone():
+        return True
+    if "collection_edges" in tables and conn.execute(
+            "SELECT 1 FROM collection_edges WHERE type='repo_uses' LIMIT 1").fetchone():
+        return True
+    return False
 
 
 def _migrate_to_collections(conn) -> None:
