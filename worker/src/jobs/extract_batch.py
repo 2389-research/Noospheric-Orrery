@@ -155,8 +155,29 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
                 for a, b in combinations(sorted(set(eids)), 2):
                     pair_counts[(a, b)] = pair_counts.get((a, b), 0) + 1
             for (a, b), weight in pair_counts.items():
-                conn.execute("INSERT INTO relationships (id, from_entity, to_entity, type, weight) VALUES (?, ?, ?, 'co_occurs', ?)",
-                    (str(uuid.uuid4()), a, b, weight))
+                # Accumulate into the ONE aggregated co_occurs row for this pair
+                # instead of inserting a fresh row per document. A pair seen in N
+                # documents used to leave N rows (all weight 1): ~22% of the rows on
+                # the real corpus, and every reader that treats a row as an edge saw
+                # the pair N times with weight 1 instead of once with weight N.
+                #
+                # The aggregated code-intent edge is the one with source_chunk NULL.
+                # The per-chunk rows the upload path writes (non-null source_chunk)
+                # are left alone — document deletion keys on those. `invalid_at IS
+                # NULL` so a human-invalidated edge is never revived by adding weight
+                # to it (readers ignore invalidated rows, so that weight would vanish);
+                # if only an invalidated row exists, a fresh valid one is inserted,
+                # exactly as the old unconditional insert did.
+                cur = conn.execute(
+                    "UPDATE relationships SET weight = weight + ? "
+                    "WHERE from_entity = ? AND to_entity = ? AND type = 'co_occurs' "
+                    "AND source_chunk IS NULL AND invalid_at IS NULL",
+                    (weight, a, b))
+                if cur.rowcount == 0:
+                    conn.execute(
+                        "INSERT INTO relationships (id, from_entity, to_entity, type, weight) "
+                        "VALUES (?, ?, ?, 'co_occurs', ?)",
+                        (str(uuid.uuid4()), a, b, weight))
 
         new_status = "enriched" if scope == "domain" else "extracted"
         conn.execute("UPDATE documents SET status = ? WHERE id = ?", (new_status, doc_id))

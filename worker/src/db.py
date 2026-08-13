@@ -81,6 +81,13 @@ CREATE TABLE IF NOT EXISTS relationships (
     weight REAL,
     source_chunk TEXT REFERENCES chunks(id)
 );
+-- Every co-occurrence read filters by from/to entity, and extraction now accumulates
+-- into an existing pair row instead of inserting a fresh one — both were full table
+-- scans without these. The pair index serves the (from,to,type) equality lookup and
+-- the `from_entity IN (...)` arm of the neighbourhood read; the `to` index serves its
+-- `OR to_entity IN (...)` arm.
+CREATE INDEX IF NOT EXISTS idx_relationships_pair ON relationships(from_entity, to_entity, type);
+CREATE INDEX IF NOT EXISTS idx_relationships_to ON relationships(to_entity);
 
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
