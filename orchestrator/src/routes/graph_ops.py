@@ -66,14 +66,19 @@ def _get_adjacency(conn, entity_ids: list[str]) -> dict[str, list[dict]]:
     rows = []
     for chunk in _chunks(entity_ids, 400):   # 400 ids -> 800 bound params
         ph = ",".join("?" * len(chunk))
+        # SUM + GROUP BY the entity pair: a pair can span several rows (per-chunk
+        # rows from the upload path, plus the aggregated code-intent row), and each
+        # is one contribution to the SAME edge. Reading them as separate edges
+        # returned the neighbour repeatedly with a fraction of its true weight.
         rows += conn.execute(f"""
             SELECT r.from_entity, r.to_entity, e1.canonical_name as from_name, e1.type as from_type,
-                   e2.canonical_name as to_name, e2.type as to_type, r.weight
+                   e2.canonical_name as to_name, e2.type as to_type, SUM(r.weight) as weight
             FROM relationships r
             JOIN entities e1 ON r.from_entity = e1.id
             JOIN entities e2 ON r.to_entity = e2.id
             WHERE r.type = 'co_occurs' AND (r.from_entity IN ({ph}) OR r.to_entity IN ({ph}))
               AND r.invalid_at IS NULL AND e1.invalid_at IS NULL AND e2.invalid_at IS NULL
+            GROUP BY r.from_entity, r.to_entity
         """, list(chunk) + list(chunk)).fetchall()
 
     wanted = set(entity_ids)
@@ -307,12 +312,16 @@ async def find_paths(
         if len(path) > max_depth + 1:
             break
 
+        # GROUP BY the neighbour: a pair can span several rows, and without folding
+        # them the same neighbour is visited repeatedly — redundant traversal and
+        # duplicate paths for what is one edge.
         neighbors = conn.execute("""
             SELECT CASE WHEN r.from_entity = ? THEN r.to_entity ELSE r.from_entity END as neighbor_id,
-                   r.weight
+                   SUM(r.weight) as weight
             FROM relationships r
             WHERE (r.from_entity = ? OR r.to_entity = ?) AND r.type = 'co_occurs'
               AND r.invalid_at IS NULL
+            GROUP BY neighbor_id
         """, (current, current, current)).fetchall()
 
         for row in neighbors:

@@ -41,7 +41,11 @@ _MIRRORED_TABLES = ["graph_snapshot", "domain_edges", "collections",
 # of drift that goes unnoticed.
 _MIRRORED_INDEXES = ["idx_document_collections_collection",
                      "idx_entity_sources_entity", "idx_document_domains_path",
-                     "idx_norm_review_pending"]
+                     "idx_norm_review_pending",
+                     # The worker writes co-occurrence edges and the orchestrator reads
+                     # them for the graph; both need the same pair indexes or one side
+                     # full-scans a table the other keeps indexed.
+                     "idx_relationships_pair", "idx_relationships_to"]
 
 _ALLOWED_DIVERGENCE: dict[str, str] = {
     # name -> why it is allowed to differ. Empty: nothing diverges today.
