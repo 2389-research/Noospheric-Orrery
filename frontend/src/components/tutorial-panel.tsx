@@ -82,14 +82,19 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
   }, [pathname, documentCount, markVisitedDocuments]);
 
   // Mark "opened a document" when the user actually drills into one from that list.
+  // Gated on documentCount > 0: nothing should advance if there's genuinely no document to
+  // open — same reasoning as the visitedOrrery guard below.
   useEffect(() => {
-    if (isDocumentDetailPath(pathname)) markOpenedDocument();
-  }, [pathname, markOpenedDocument]);
+    if (isDocumentDetailPath(pathname) && documentCount > 0) markOpenedDocument();
+  }, [pathname, documentCount, markOpenedDocument]);
 
-  // Mark "visited Orrery" on arrival at the real galaxy view.
+  // Mark "visited Orrery" on arrival at the real galaxy view — but only once something has
+  // actually been ingested. Browsing to Orrery/Pipeline/etc. before the ingest quest is done is
+  // always allowed (nothing here blocks navigation), it just must not silently advance the
+  // tutorial past a step the user hasn't actually done yet.
   useEffect(() => {
-    if (pathname.endsWith("/orrery")) markVisitedOrrery();
-  }, [pathname, markVisitedOrrery]);
+    if (pathname.endsWith("/orrery") && documentCount > 0) markVisitedOrrery();
+  }, [pathname, documentCount, markVisitedOrrery]);
 
   if (!enabled) return null;
 

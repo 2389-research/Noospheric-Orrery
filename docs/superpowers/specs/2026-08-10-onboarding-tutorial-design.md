@@ -311,3 +311,22 @@ is written for a first-time user with zero context; reusing it verbatim after Or
 confusing ("get started" when they're clearly already started). The add-more-files prompt has its
 own copy while sharing the same `SampleIcons` component and drag/drop mechanics — same interaction,
 different framing for where the user actually is in the flow.
+
+## Revision 5 — don't advance quests from free browsing before ingest (2026-08-13)
+
+Feedback: before any document is ingested, the user should be free to browse to any other page
+(Orrery, Pipeline, etc. — nothing should block navigation), but doing so must not silently advance
+the tutorial past steps the user hasn't actually done.
+
+Before this revision, `markOpenedDocument` and `markVisitedOrrery` (`tutorial-panel.tsx`) fired on
+route match alone (`isDocumentDetailPath(pathname)` / `pathname.endsWith("/orrery")`), with no check
+on whether there was anything to open/see yet. In practice `open_document`'s route can't really be
+hit with zero documents (there's nothing to click into), but `view_orrery` could: a curious user
+free-browsing to `/orrery` before ingesting anything would have silently marked that quest done,
+later showing "add more files?" or letting `classify`/`simmer`/`normalize` become active despite the
+user never having actually completed `ingest`.
+
+**Fix**: both effects now also require `documentCount > 0`, matching the guard `markVisitedDocuments`
+already had from Revision 2/3. Verified the page still loads and navigates freely with zero
+documents (curl confirms `200`/normal routing) — this only changes whether visiting a page silently
+completes a quest, never whether the page itself is reachable.
