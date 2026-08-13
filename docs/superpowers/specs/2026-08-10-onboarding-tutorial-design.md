@@ -192,3 +192,52 @@ this pass, to limit the size of this change. This means the two surfaces track i
 simmer/normalize progress independently and could in principle drift — acceptable short-term since
 both read the same underlying API state, but the `/tutorial` page should be migrated onto
 `useTutorialQuests` in a follow-up rather than left permanently forked.
+
+## Revision 3 — Documents → Orrery handoff (2026-08-13)
+
+Feedback: after the "See it in Documents" quest, the panel should prompt the user to **click on the
+file they just added** (not just land on the list), without making the Documents list itself go
+away — and "ingest more files" should be listed as an **optional** goal, not a blocking step. After
+clicking into the document and seeing its extracted entities, the panel should prompt the user to
+go see the live view in **Orrery**.
+
+**From this revision on, every code change to the tutorial gets a corresponding entry in this file**
+— that's now a standing rule for this feature, not a one-off.
+
+### Quest chain changes (`use-tutorial-quests.ts`)
+
+- **`open_document`** replaces the old `meet_entities` quest. It completes when the user navigates
+  to a document *detail* route (`/n/{id}/documents/{docId}` — one segment past the plain list route,
+  detected via `isDocumentDetailPath()` in the panel), which is exactly where extracted entities are
+  shown (`documents/[id]/page.tsx`, the "Entities · N" section). Landing on the plain Documents list
+  does not satisfy this — only opening a specific document does.
+- **`view_orrery`** is new: completes on arrival at `/n/{id}/orrery`. Inserted after
+  `open_document`, so the flow is now `ingest → visit_documents → open_document → view_orrery →
+  classify → simmer → normalize`.
+- **`add_more_files`** is new and **optional** (`Quest.optional: true`, a new field). It completes
+  once `documentCount > 1`. Optional quests are excluded from `activeQuest` selection entirely — the
+  panel never blocks on them or prompts for them as "next" — but they render in their own "Optional"
+  section in the panel and quest list, always visible once relevant, so the user can see there's more
+  to try without it gating anything.
+
+### Panel behavior (`tutorial-panel.tsx`)
+
+- Visiting the Documents *list* still only marks `visit_documents` (unchanged) — it does **not**
+  navigate away or hide the list; the panel is a floating overlay, so "don't make the documents view
+  go away" was already true structurally, but this revision makes the wording/quest text explicit
+  about not rushing the user past the list ("Click the file you just added" rather than an implicit
+  auto-advance).
+- New guidance copy for `open_document` ("Click the file you just added to see everything it
+  extracted") and `view_orrery` ("Now see it live in the Orrery — every entity you just met, as a
+  star"), each with a "Go to X" button when not already on the relevant page, matching the existing
+  pattern for `ingest`/`visit_documents`.
+- `requiredQuests`/`optionalQuests` split: the quest list at the bottom of the panel now renders in
+  two groups (an "Optional" section above the main list) instead of one flat list.
+
+### Known gap carried forward
+
+The standalone `/tutorial` page's own Part 1 state (separate from `useTutorialQuests`, see Revision
+2's "Known duplication") was **not** updated with `open_document`/`view_orrery`/`add_more_files` in
+this pass — it still has its own `meet_entities`-shaped quest and no Orrery-visit quest. This widens
+the gap between the two surfaces beyond what Revision 2 flagged; migrating `/tutorial` onto the
+shared hook is now more overdue, not less.

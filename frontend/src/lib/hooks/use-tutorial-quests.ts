@@ -2,23 +2,28 @@
 
 // Shared quest-state polling, used by both the standalone /tutorial page and the
 // persistent TutorialPanel. See docs/superpowers/specs/2026-08-10-onboarding-tutorial-design.md
-// ("Revision 2 — persistent cross-page panel").
+// ("Revision 2 — persistent cross-page panel", "Revision 3 — Documents → Orrery handoff").
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 
 export type QuestId =
   | "ingest"
   | "visit_documents"
-  | "meet_entities"
+  | "open_document"
+  | "view_orrery"
   | "classify"
   | "simmer"
-  | "normalize";
+  | "normalize"
+  | "add_more_files";
 
 export interface Quest {
   id: QuestId;
   title: string;
   lore: string;
   done: boolean;
+  /** Optional quests are shown alongside the active required quest but never
+   *  block progression and are never picked as the active quest themselves. */
+  optional?: boolean;
 }
 
 function key(noosphereId: string, name: string) {
@@ -31,7 +36,8 @@ export function useTutorialQuests(noosphereId: string) {
   const [entityCount, setEntityCount] = useState(0);
   const [normalizeDone, setNormalizeDone] = useState(false);
   const [visitedDocuments, setVisitedDocuments] = useState(false);
-  const [enteredReader, setEnteredReader] = useState(false);
+  const [openedDocument, setOpenedDocument] = useState(false);
+  const [visitedOrrery, setVisitedOrrery] = useState(false);
   const [simmerDone, setSimmerDone] = useState(false);
   const [simmerSkipped, setSimmerSkipped] = useState(false);
 
@@ -57,6 +63,8 @@ export function useTutorialQuests(noosphereId: string) {
       /* ignore */
     }
     setVisitedDocuments(localStorage.getItem(key(noosphereId, "visited_documents")) === "1");
+    setOpenedDocument(localStorage.getItem(key(noosphereId, "opened_document")) === "1");
+    setVisitedOrrery(localStorage.getItem(key(noosphereId, "visited_orrery")) === "1");
   }, [noosphereId]);
 
   useEffect(() => {
@@ -70,6 +78,16 @@ export function useTutorialQuests(noosphereId: string) {
   const markVisitedDocuments = useCallback(() => {
     localStorage.setItem(key(noosphereId, "visited_documents"), "1");
     setVisitedDocuments(true);
+  }, [noosphereId]);
+
+  const markOpenedDocument = useCallback(() => {
+    localStorage.setItem(key(noosphereId, "opened_document"), "1");
+    setOpenedDocument(true);
+  }, [noosphereId]);
+
+  const markVisitedOrrery = useCallback(() => {
+    localStorage.setItem(key(noosphereId, "visited_orrery"), "1");
+    setVisitedOrrery(true);
   }, [noosphereId]);
 
   const quests: Quest[] = [
@@ -86,10 +104,23 @@ export function useTutorialQuests(noosphereId: string) {
       done: visitedDocuments,
     },
     {
-      id: "meet_entities",
-      title: "Meet your entities",
-      lore: "Names resolve into nodes. The graph begins to remember.",
-      done: enteredReader || entityCount > 0,
+      id: "add_more_files",
+      title: "Add more files",
+      lore: "More sources, more constellations.",
+      done: documentCount > 1,
+      optional: true,
+    },
+    {
+      id: "open_document",
+      title: "Click the file you just added",
+      lore: "Every extracted name, traced back to the sentence it came from.",
+      done: openedDocument,
+    },
+    {
+      id: "view_orrery",
+      title: "See the live view in Orrery",
+      lore: "The galaxy map, watching itself grow.",
+      done: visitedOrrery,
     },
     {
       id: "classify",
@@ -120,7 +151,8 @@ export function useTutorialQuests(noosphereId: string) {
     entityCount,
     refresh,
     markVisitedDocuments,
-    setEnteredReader,
+    markOpenedDocument,
+    markVisitedOrrery,
     simmerDone,
     setSimmerDone,
     simmerSkipped,
