@@ -6,6 +6,13 @@ dependencies = [
     "anthropic[bedrock]>=0.40.0",
     "sentence-transformers>=3.0.0",
     "torch>=2.0.0",
+    # Candidate search in normalizer.py. NOT optional: without it the first
+    # normalization pass after an extraction raises ImportError, and the import is
+    # deliberately lazy (inside the function) so a missing wheel would not surface
+    # until then. The orchestrator already depends on faiss for search; the worker
+    # needs its own declaration because neither package imports the other.
+    "faiss-cpu>=1.7.0",
+    "numpy>=1.26.0",
     # simmer-sdk: install from PyPI or local path (see worker/Dockerfile)
     # "simmer-sdk>=0.2.0",
     "orrery-relay",
