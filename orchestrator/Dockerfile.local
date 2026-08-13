@@ -24,4 +24,14 @@ COPY orchestrator/specs/ specs/
 RUN uv sync --frozen --no-cache
 
 EXPOSE 8000
-CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# Run as a non-root user with the SAME uid (1000) the worker uses. Both services write
+# the same /data, so a shared uid means a workspace this service creates is writable by
+# the worker — otherwise a root-owned DB is unopenable by the worker and every job in it
+# fails with "readonly database". The entrypoint chowns /data (as root) then drops to
+# `worker`, mirroring worker/entrypoint.sh.
+RUN useradd -m -u 1000 -s /bin/bash worker \
+    && mkdir -p /data && chown -R worker:worker /app /data
+COPY orchestrator/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

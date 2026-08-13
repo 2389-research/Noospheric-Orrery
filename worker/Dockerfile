@@ -32,8 +32,11 @@ COPY orchestrator/specs/taxonomy.json /app/worker/taxonomy.json
 # "No module named 'openai'" when ANTHROPIC_BACKEND=ollama.
 RUN uv pip install --no-cache-dir "simmer-sdk[local] @ git+https://github.com/2389-research/simmer-sdk.git@main"
 
-# Non-root user
-RUN useradd -m -s /bin/bash worker
+# Non-root user. The uid is pinned to 1000 and MUST match the orchestrator's
+# (orchestrator/Dockerfile.local): both services write the same /data, and a shared uid
+# is what lets each write the workspace files the other created. A bare `useradd` lands
+# on 1000 in this base image today, but pinning makes the match a contract, not luck.
+RUN useradd -m -u 1000 -s /bin/bash worker
 RUN mkdir -p /data && chown -R worker:worker /app /data
 
 COPY worker/entrypoint.sh /entrypoint.sh
