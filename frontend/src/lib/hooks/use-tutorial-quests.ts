@@ -11,6 +11,7 @@ export type QuestId =
   | "visit_documents"
   | "open_document"
   | "view_orrery"
+  | "search"
   | "classify"
   | "simmer"
   | "normalize"
@@ -30,6 +31,22 @@ function key(noosphereId: string, name: string) {
   return `tutorial:${noosphereId}:${name}`;
 }
 
+/** Whether this workspace was entered via the /tutorial flow — same flag TutorialPanel
+ *  checks before rendering. Real (non-tutorial) pages that want to report a tutorial
+ *  action (e.g. "the user just searched") should check this first, so a real user's
+ *  real search doesn't write tutorial state that nothing ever reads. */
+export function isTutorialActive(noosphereId: string): boolean {
+  if (typeof window === "undefined") return false;
+  return localStorage.getItem(key(noosphereId, "enabled")) === "1";
+}
+
+/** Called from the real Orrery page's search handler on a successful search —
+ *  not a hook, so pages that don't otherwise use useTutorialQuests can still report this. */
+export function markSearched(noosphereId: string): void {
+  if (!isTutorialActive(noosphereId)) return;
+  localStorage.setItem(key(noosphereId, "searched"), "1");
+}
+
 export function useTutorialQuests(noosphereId: string) {
   const [documentCount, setDocumentCount] = useState(0);
   const [documentTitles, setDocumentTitles] = useState<string[]>([]);
@@ -39,6 +56,7 @@ export function useTutorialQuests(noosphereId: string) {
   const [visitedDocuments, setVisitedDocuments] = useState(false);
   const [openedDocument, setOpenedDocument] = useState(false);
   const [visitedOrrery, setVisitedOrrery] = useState(false);
+  const [searched, setSearched] = useState(false);
   const [simmerDone, setSimmerDone] = useState(false);
   const [simmerSkipped, setSimmerSkipped] = useState(false);
 
@@ -67,6 +85,7 @@ export function useTutorialQuests(noosphereId: string) {
     setVisitedDocuments(localStorage.getItem(key(noosphereId, "visited_documents")) === "1");
     setOpenedDocument(localStorage.getItem(key(noosphereId, "opened_document")) === "1");
     setVisitedOrrery(localStorage.getItem(key(noosphereId, "visited_orrery")) === "1");
+    setSearched(localStorage.getItem(key(noosphereId, "searched")) === "1");
   }, [noosphereId]);
 
   useEffect(() => {
@@ -116,6 +135,12 @@ export function useTutorialQuests(noosphereId: string) {
       title: "See the live view in Orrery",
       lore: "The galaxy map, watching itself grow.",
       done: visitedOrrery,
+    },
+    {
+      id: "search",
+      title: "Search for a keyword",
+      lore: "A query lights up exactly what it touches.",
+      done: searched,
     },
     {
       id: "add_more_files",

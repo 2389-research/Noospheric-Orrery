@@ -330,3 +330,34 @@ user never having actually completed `ingest`.
 already had from Revision 2/3. Verified the page still loads and navigates freely with zero
 documents (curl confirms `200`/normal routing) — this only changes whether visiting a page silently
 completes a quest, never whether the page itself is reachable.
+
+## Revision 6 — search quest after Orrery (2026-08-13)
+
+Feedback: after seeing the live view, prompt the user to search for a keyword in the real search
+bar (the Orrery page's own search box, not a separate search page), suggesting a real example
+("birmingham" — a real hit in `tutorial_samples/sport-056.txt`, confirmed via
+`/search?q=birmingham` returning the `birmingham` entity + 3 chunks).
+
+### New `search` quest (`use-tutorial-quests.ts`)
+
+Inserted right after `view_orrery`, before the optional `add_more_files`. Unlike the other quests
+so far, this one can't be detected from `pathname` or from data already being polled (`/documents`,
+`/domains`, `/entities`, `/normalize/summary`) — a search is a same-page action with no route change
+and no dedicated "did a search happen" endpoint.
+
+**Detection mechanism (new pattern for this tutorial)**: rather than adding a hook subscription to
+the real Orrery page, added one line to its existing `handleSearch` (`orrery/page.tsx`) calling a
+new standalone `markSearched(noosphereId)` — not a React hook, just a plain function importable
+from `use-tutorial-quests.ts` so a page that doesn't otherwise use the hook can still report a
+tutorial-relevant action. It writes the same `tutorial:{id}:searched` localStorage key the hook
+already polls for every other quest, guarded by a new `isTutorialActive(noosphereId)` check (same
+`tutorial:{id}:enabled` flag `TutorialPanel` itself checks) so a real user's real search on a real
+workspace never writes tutorial-only state that nothing reads. This is the template for any future
+quest whose completion signal lives inside a real page's existing local logic rather than in
+polled API state or a route change.
+
+### Panel guidance
+
+New `search` card: "Try the search bar for a keyword — e.g. `birmingham`" (with a "Go to Orrery"
+button when not already there, matching the existing pattern) — placed between `view_orrery` and
+the generic "Next: …" fallback, same structure as every other named-quest card.

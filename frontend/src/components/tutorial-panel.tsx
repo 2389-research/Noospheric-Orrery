@@ -203,8 +203,26 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
             </div>
           )}
 
+          {activeQuest?.id === "search" && (
+            <div className="space-y-2">
+              <p className="text-xs">
+                {pathname.endsWith("/orrery")
+                  ? <>Try the search bar for a keyword — e.g. <code>birmingham</code>.</>
+                  : <>Back in Orrery, try the search bar for a keyword — e.g. <code>birmingham</code>.</>}
+              </p>
+              {!pathname.endsWith("/orrery") && (
+                <button
+                  className="text-xs px-2 py-1 rounded border border-border/40 hover:bg-accent/40"
+                  onClick={() => router.push(`/n/${noosphereId}/orrery`)}
+                >
+                  Go to Orrery
+                </button>
+              )}
+            </div>
+          )}
+
           {activeQuest &&
-            !["ingest", "visit_documents", "open_document", "view_orrery"].includes(activeQuest.id) && (
+            !["ingest", "visit_documents", "open_document", "view_orrery", "search"].includes(activeQuest.id) && (
               <p className="text-xs text-muted-foreground">
                 Next: <span className="text-foreground">{activeQuest.title}</span>
               </p>

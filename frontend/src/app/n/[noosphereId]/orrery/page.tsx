@@ -13,6 +13,7 @@ import { useSearchBroadcast } from "@/lib/use-search-broadcast";
 import { isSameOriginMessage } from "@/lib/viz-message";
 import { MagosOverlay } from "@/components/magos-overlay";
 import { ScreensaverSettingsPanel } from "@/components/screensaver-settings-panel";
+import { markSearched } from "@/lib/hooks/use-tutorial-quests";
 
 interface SelectedNode {
   nodeType: string;
@@ -345,6 +346,7 @@ export default function VizPage() {
       const resp = await fetch(`/api/search?q=${encodeURIComponent(searchQuery.trim())}&top_k=20&expand=false&include_images=${includeImages}`, { headers });
       const results: SearchResult = await resp.json();
       setSearchResults(results);
+      if (noosphereId) markSearched(noosphereId);
 
       // Fire glow in active viz
       const entityNames = (results.entities || []).slice(0, 10).map(e => e.name);
