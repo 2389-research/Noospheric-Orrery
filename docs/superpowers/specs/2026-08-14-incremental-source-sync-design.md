@@ -37,8 +37,10 @@ retract deleted docs — for both vaults and repos."*
 
 **Non-goals (Spec 1)**
 - The repo adapter and its partial re-summarization thresholds — that is **Spec 2** (§13).
-- Consolidating the orchestrator's inline `_ingest_document` and the worker's extraction into
-  one shared package — larger refactor, documented as future work (§12).
+- Consolidating the orchestrator's and worker's full **extraction** stacks (classifier,
+  normalizer, extractor) into one shared package — larger refactor, future work (§12). Note:
+  Spec 1 *does* unify the narrow **co-occurrence write** across both services (§9), because
+  leaving two co-occurrence representations double-counts once a recompute runs globally.
 - Any change to the `/graph` read path or the cached snapshot format. The frontend is untouched.
 
 ## 3. Key insight — "a batch is just a series of docs"
@@ -63,8 +65,11 @@ shared surface.
 
 Therefore Spec 1 realizes the unification **inside the worker**: factor `upsert_document` out of
 `extract_batch`, and have the vault/sync jobs call it. The orchestrator's interactive inline
-upload route is left as-is for now (it already writes retractable per-chunk co-occurrence rows,
-so it is not the problem child). Fully merging the two extraction stacks is future work (§12).
+upload route keeps its own extraction stack — but its **co-occurrence write is converted** to the
+same recompute-from-`entity_sources` helper (§9), because two coexisting co-occurrence
+representations double-count once a recompute runs globally. That recompute helper is the one new
+piece of cross-service surface; it is mirrored in both services like the schema itself. Fully
+merging the two *extraction* stacks remains future work (§12).
 
 ## 4. Architecture — three layers, and what changes
 
@@ -93,6 +98,17 @@ the existing idempotent `ALTER TABLE` migration block (same pattern as `role` /
 - `source_id TEXT` — FK to `watched_sources.id`, nullable (a doc may be unmanaged). Lets a sweep
   enumerate "the docs I currently own" to compute deletions.
 - Index `idx_documents_source_path ON documents(source_path)` — identity lookups join on it.
+
+> **`documents` becomes a newly-mirrored table.** It is *not* currently in `_MIRRORED_TABLES`;
+> once the worker writes `invalid_at`/`modified_at`/`source_id` and the orchestrator reads them,
+> it is cross-service surface — add `documents` (and `idx_documents_source_path`) to the mirror
+> sets, and keep the DDL byte-identical in both `db.py` files.
+
+> **`invalid_at` read-site sweep (implementation task).** Adding the column is not enough — every
+> read that lists or joins `documents` must add `WHERE invalid_at IS NULL` or it will surface a
+> ghost row. Enumerate and patch: the documents list/detail routes, the reader-spans route, the
+> graph-build document/`entity_sources` joins, and **search** (which per CLAUDE.md does not yet
+> thread `invalid_at` even for entities). This is an explicit checklist item, not incidental.
 
 **`watched_sources`** (new, mirrored):
 ```sql
@@ -140,11 +156,17 @@ upsert_document(store, *, source_path, title, content, source_id,
 ```
 
 Steps:
-1. Compute `content_hash`. Look up the active document by `(noosphere, source_path)`.
+1. Compute `content_hash`. Look up the active document by `source_path` **within this workspace
+   DB**. **Adoption rule:** match a doc with `source_id = <this source>` (already managed) OR
+   `source_id IS NULL` (an unmanaged manual upload at the same path) — in the latter case set its
+   `source_id` to adopt it rather than create a duplicate. Never match a doc owned by a *different*
+   source; two sources claiming one path is a config error surfaced in `watched_sources.last_error`.
 2. **Unchanged** → return `skipped`.
 3. **Update** → retract the old version's derived rows first, then re-ingest the new content:
    - Collect `affected_entities` = entities in the old doc's `entity_sources`.
-   - Delete the old doc's `chunks`, `entity_sources`, and its **own** co-occurrence rows.
+   - Delete the old doc's `chunks` and `entity_sources`. Co-occurrence rows are **not** deleted
+     per-doc here — under the §9 invariant they are owned solely by the recompute, which retracts
+     the old contribution when it re-derives from the now-updated `entity_sources`.
    - Re-chunk, re-classify, re-extract, re-normalize (same spec-driven path `extract_batch`
      already uses), producing new `entity_sources`. Add the new doc's entities to
      `affected_entities`.
@@ -163,47 +185,67 @@ extraction + co-occurrence block is deleted in favor of the primitive.
 
 ## 8. Deletion semantics (soft-delete)
 
-A path a source used to have but no longer does → **soft-delete**, never hard-delete:
-- Set `documents.invalid_at = CURRENT_TIMESTAMP`.
-- Retract its derived contributions exactly as the update path does (delete its `chunks` /
-  `entity_sources` / own co-occurrence rows; collect `affected_entities`; recompute §9).
-- Entities left with zero remaining `entity_sources` after retraction are soft-deleted
-  (`entities.invalid_at`) so no ghost nodes linger. This reuses the corrections `invalid_at`
-  machinery; the action is reversible.
+A path a source used to have but no longer does → the **document** is soft-deleted and its
+derived rows retracted:
+- Set `documents.invalid_at = CURRENT_TIMESTAMP` (the doc row survives, so a re-appearing file
+  re-attaches to the same identity and audit history is kept).
+- Delete its `chunks` and `entity_sources`; collect `affected_entities`; recompute co-occurrence
+  (§9), which drops the deleted doc's edge contribution.
+- Entities left with zero remaining `entity_sources` are soft-deleted (`entities.invalid_at`) so
+  no ghost nodes linger.
+- **Reversibility scope (corrected):** this is *not* a corrections-style fully-reversible undo —
+  the deleted doc's `chunks`/`entity_sources` are hard-removed, so a re-appearing file re-ingests
+  fresh at the same `source_path` rather than being restored. That soft-deleting a doc and pruning
+  its `entity_sources` does not corrupt an existing human merge/undo recorded in
+  `normalization_log` is a test obligation (§12).
 
-## 9. Co-occurrence recompute — decision (b), scoped
+## 9. Co-occurrence recompute — decision (b), one invariant across all paths
 
-Co-occurrence is a **deterministic projection of `entity_sources`** (which carries
-`entity_id, document_id, chunk_id`): two entities co-occur when they share a `chunk_id`. Rather
-than mutate an aggregate incrementally, we **delete the affected aggregated rows and re-derive
-them** from `entity_sources`, scoped to the entities the changed document touched.
+**Invariant:** every `relationships` row of `type='co_occurs'` is a **pure projection of
+`entity_sources`** — *no ingestion path writes co-occurrence rows directly; the recompute is
+their sole writer.* This is what makes update/delete clean, and it is why the orchestrator upload
+path's direct co-occurrence write (`upsert_cooccurrence` in `sqlite_store.py`) is **replaced** by
+a recompute call (§3). Two writers with different representations double-count once a global
+recompute runs — the blocking flaw this design must not ship with.
 
-Recompute for a set `A` of affected entities:
-1. Delete aggregated co-occurrence rows (`type='co_occurs'`, the sync representation) where
-   `from_entity IN A OR to_entity IN A` **and** the row is not human-invalidated
-   (`invalid_at IS NULL` rows are rebuilt; invalidated rows are left untouched so a human
-   decision is never revived).
-2. Re-derive from `entity_sources` over active (non-invalid) entities:
+Two entities co-occur when they share a `chunk_id` (`entity_sources` carries
+`entity_id, document_id, chunk_id`). Recompute for a set `A` of affected entities:
+
+1. **Delete** the projected rows to rebuild:
+   ```sql
+   DELETE FROM relationships
+   WHERE type = 'co_occurs' AND invalid_at IS NULL
+     AND (from_entity IN (A) OR to_entity IN (A));
+   ```
+   `invalid_at IS NULL` preserves human-invalidated edges (a corrections decision is never
+   revived). No `source_chunk` scoping is needed: under the invariant there is **no** second
+   representation to protect — all valid `co_occurs` rows are projected and safe to rebuild.
+2. **Re-derive** from `entity_sources` over active (non-invalid) entities and insert one row per
+   pair:
    ```sql
    SELECT s1.entity_id AS a, s2.entity_id AS b, COUNT(DISTINCT s1.chunk_id) AS w
    FROM entity_sources s1
-   JOIN entity_sources s2 ON s1.chunk_id = s2.chunk_id AND s1.entity_id < s2.entity_id
+   JOIN entity_sources s2
+     ON s1.chunk_id = s2.chunk_id AND s1.entity_id < s2.entity_id
    WHERE (s1.entity_id IN (A) OR s2.entity_id IN (A))
    GROUP BY a, b;
    ```
-   Insert one aggregated `co_occurs` row per pair with the summed weight.
+   Skip any pair that already has a surviving *invalidated* `co_occurs` row (don't insert a valid
+   duplicate beside a human-invalidated edge). Documents with `emits_cooccurrence = False`
+   contribute no `entity_sources` in the sync path, so they never enter the projection.
 
-**Cost:** bounded by the neighborhood of `A`, not the whole graph. Its cost on the real corpus
-should be measured during implementation; if it is material on large collections, batch the
-recompute once per sweep (union of all `A` across the sweep's changed docs) rather than per doc.
+**Where the helper lives.** The recompute is pure SQL against a connection, called by both the
+worker (`upsert_document`) and the orchestrator (upload route). Like `db.py`, it is mirrored in
+both services and covered by a mirror test — the one new piece of shared surface Spec 1 adds
+(narrower than merging the extraction stacks, which stays out of scope).
 
-**Representation reconciliation (explicit design detail):** today there are two co-occurrence
-representations — the worker's aggregated `source_chunk IS NULL` rows and the orchestrator upload
-path's per-chunk `source_chunk` rows. A given document is produced by exactly one path, so they
-do not double-count for the same doc. Spec 1's sync path owns the aggregated representation. The
-recompute above must therefore scope to the aggregated rows only and leave per-chunk upload rows
-alone (graph readers already `SUM` weights across rows). Verifying no reader double-counts across
-the two representations is a test obligation (§11).
+**Cost:** bounded by the neighborhood of `A`, not the whole graph. Measure on the real corpus; if
+material on large collections, batch the recompute once per sweep over the union of all `A`.
+
+**One-time migration.** Existing rows written by the old two-representation code (aggregated
+`source_chunk IS NULL` from `extract_batch`; per-pair `source_chunk` from uploads) are reconciled
+to the projection by a **full recompute per workspace** on first run after deploy (bounded, pure
+SQL, no LLM). Human-invalidated rows are preserved. Call this out in §13.
 
 ## 10. The spine
 
@@ -217,6 +259,14 @@ is where "which repos, at what cadence" lives — just rows.
 tick: select `enabled` sources where `last_scanned_at + cadence_hours` is due, and enqueue a
 `scan_source` job per source (so scans are ordinary jobs, retryable via the #74 machinery, and
 visible in `/jobs`). Set `last_status='running'` on claim.
+
+**Per-DB routing (workspaces are separate SQLite files).** `watched_sources` lives **in each
+workspace DB**, so `(source_id, source_path)` identity is unambiguous within a file and no
+cross-DB coordination is needed. The registry route writes to the target workspace's DB (the
+route is already workspace-scoped). The worker sweep **already iterates `db_paths`** — for each
+workspace DB it reads that DB's own `watched_sources` and enqueues `scan_source` jobs into the
+same DB, so jobs land where their data is. The `watched_sources.noosphere` column is therefore a
+label/sanity field, not a routing key (identity is per-file); keep it for provenance/logging.
 
 **`scan_source` job (worker).** The adapter dispatch:
 1. Resolve the adapter by `type`.
@@ -241,21 +291,34 @@ content-hash-dedup script.
 ## 12. Testing
 
 - **Orchestrator (native pytest):** registry route CRUD; migration adds the new columns
-  idempotently; schema-mirror test includes `watched_sources` + the new `documents` columns/index.
+  idempotently; schema-mirror test includes `documents` (newly mirrored) + `watched_sources` +
+  `idx_documents_source_path`; the upload route's co-occurrence now equals the projection (assert
+  an interactive upload's edges match a from-scratch projection of `entity_sources`); the recompute
+  helper's mirror test (byte-identical in both services); the `invalid_at` read-site sweep
+  (§5) — a soft-deleted doc must not appear in the documents list, reader, graph build, or search.
 - **Worker (docker `uv run`, per CLAUDE.md):** `upsert_document` create/update/delete paths;
-  co-occurrence recompute correctness (update a doc, assert affected edges match a full
-  from-scratch recompute; assert unaffected edges are byte-identical); soft-delete retracts edges
-  and orphans; deletion-set computation; **no-double-count across the two co-occurrence
-  representations**; the vault adapter's create/change/delete on a temp vault fixture.
-- **Regression guard:** refactoring `extract_batch` onto the primitive must leave a fresh repo
-  ingest's graph identical to today's (golden co-occurrence counts on a fixture repo).
+  **projection invariant** — after any create/update/delete, every valid `co_occurs` row is
+  reproducible by a full from-scratch projection of `entity_sources`, and no valid row coexists
+  with a human-invalidated one (this replaces the old "no double-count across two representations"
+  test, since there is now one representation); update leaves unaffected edges byte-identical;
+  soft-delete retracts edges + orphans and does **not** corrupt a `normalization_log` merge/undo;
+  deletion-set computation; the adoption rule (a vault scan adopts an unmanaged upload at the same
+  path rather than duplicating); the vault adapter's create/change/delete on a temp vault fixture.
+- **Regression guard:** refactoring `extract_batch` + the upload path onto the projection must
+  leave a fresh repo ingest's *and* a fresh single-upload's graph co-occurrence identical to a
+  from-scratch projection (golden counts on fixtures).
 
 ## 13. Migration / back-compat
 
 - New columns default NULL / sensible values; existing rows unaffected. Existing documents have
   `source_id IS NULL` → treated as unmanaged, never touched by a sweep until adopted by a source.
 - The change to path-based identity affects **only** the sync path. The interactive upload route
-  keeps content-hash dedup, so existing behavior is unchanged for manual uploads.
+  keeps content-hash dedup for *identity*, but its co-occurrence **write** changes to the shared
+  projection helper (§9) — behavior-preserving for edge weights, verified by the golden test.
+- **One-time co-occurrence reconciliation** (§9): on first run after deploy, a full recompute per
+  workspace rewrites all `co_occurs` rows as the projection of `entity_sources`, collapsing the
+  old aggregated + per-pair rows into one representation. Bounded, pure SQL, preserves
+  `invalid_at` rows. Idempotent — safe to re-run.
 
 ## 14. Risks / open questions
 
