@@ -138,6 +138,27 @@ def test_soft_deleted_entity_produces_no_edges(tmp_path):
     conn.commit()
     recompute_cooccurrence(conn, ["a", "b"]); conn.commit()
     assert conn.execute("SELECT COUNT(*) c FROM relationships WHERE type='co_occurs'").fetchone()["c"] == 0
+
+
+def test_non_emitting_summary_doc_produces_no_edges(tmp_path):
+    """A summary/rollup doc (document_collections.emits_cooccurrence=0) writes
+    entity_sources but must NOT project edges — the hub-node guard. Entities OVERLAP
+    with a leaf doc, so a disjoint-entity fixture would miss this (see review)."""
+    db = str(tmp_path / "t.db"); init_db(db); conn = get_connection(db)
+    conn.execute("INSERT INTO collections (id, name, path, root_path) VALUES ('c1','r','r','/r')")
+    # leaf doc L (emits=1): a & b share chunk kL
+    _mk(conn, "a", "L", "kL"); _mk(conn, "b", "L", "kL")
+    conn.execute("INSERT INTO document_collections (document_id, collection_id, role, emits_cooccurrence) "
+                 "VALUES ('L','c1','leaf',1)")
+    # summary doc G (emits=0): a, b, c all in chunk kG — would spuriously link a-c,b-c,a-b
+    _mk(conn, "a", "G", "kG"); _mk(conn, "b", "G", "kG"); _mk(conn, "c", "G", "kG")
+    conn.execute("INSERT INTO document_collections (document_id, collection_id, role, emits_cooccurrence) "
+                 "VALUES ('G','c1','root',0)")
+    conn.commit()
+    recompute_cooccurrence(conn, ["a", "b", "c"]); conn.commit()
+    rows = {(r["from_entity"], r["to_entity"]): r["weight"] for r in conn.execute(
+        "SELECT from_entity, to_entity, weight FROM relationships WHERE type='co_occurs'")}
+    assert rows == {("a", "b"): 1}   # only the leaf's edge, weight 1 (not 2, no a-c/b-c)
 ```
 
 - [ ] **Step 2: Run it, expect failure**
@@ -167,7 +188,12 @@ def recompute_cooccurrence(conn, affected_entity_ids):
         f"AND (from_entity IN ({ph}) OR to_entity IN ({ph}))",
         ids + ids,
     )
-    # 2. Re-derive from entity_sources over ACTIVE entities only.
+    # 2. Re-derive from entity_sources over ACTIVE entities only, HONORING the
+    #    emits_cooccurrence gate. A chunk belongs to exactly one document, so the two
+    #    entity_sources rows of a pair share that document — gate once, on s1's document.
+    #    Summary/rollup docs (document_collections.emits_cooccurrence=0) write
+    #    entity_sources but must NOT emit edges; a doc with no collection row defaults to
+    #    emit (COALESCE→1). This mirrors extract_batch's write gate and get_collection_routes.
     rows = conn.execute(
         f"""
         SELECT s1.entity_id AS a, s2.entity_id AS b, COUNT(DISTINCT s1.chunk_id) AS w
@@ -177,6 +203,8 @@ def recompute_cooccurrence(conn, affected_entity_ids):
         JOIN entities e1 ON e1.id = s1.entity_id AND e1.invalid_at IS NULL
         JOIN entities e2 ON e2.id = s2.entity_id AND e2.invalid_at IS NULL
         WHERE s1.chunk_id IS NOT NULL
+          AND COALESCE((SELECT MIN(emits_cooccurrence) FROM document_collections
+                        WHERE document_id = s1.document_id), 1) = 1
           AND (s1.entity_id IN ({ph}) OR s2.entity_id IN ({ph}))
         GROUP BY a, b
         """,
@@ -207,13 +235,11 @@ Run: `cd orchestrator && pytest tests/test_cooccurrence_projection.py -v` → al
 In `orchestrator/tests/test_schema_mirror.py` add (adapt to the file's existing read helpers):
 
 ```python
-import inspect, importlib
+import pathlib, re
 
 def test_recompute_cooccurrence_is_mirrored():
-    import src.db as odb
-    wdb = importlib.import_module("worker_src_db_for_mirror")  # or read worker/src/db.py text
-    # Simplest robust check: compare the function SOURCE text between the two files.
-    import pathlib, re
+    """The helper is byte-identical across the two db.py copies (same guarantee as the
+    mirrored tables)."""
     def _fn(path):
         t = pathlib.Path(path).read_text()
         m = re.search(r"\ndef recompute_cooccurrence\(.*?(?=\n\S)", t, re.S)
@@ -223,7 +249,7 @@ def test_recompute_cooccurrence_is_mirrored():
     assert _fn(root / "orchestrator/src/db.py") == _fn(root / "worker/src/db.py")
 ```
 
-(If the file already has a helper that reads both db.py texts, reuse it instead of the above.)
+(If `test_schema_mirror.py` already has a helper that reads both db.py texts, reuse it.)
 
 - [ ] **Step 6: Run + commit**
 
@@ -235,26 +261,36 @@ git commit -m "feat(graph): recompute_cooccurrence — co_occurs as a pure proje
 
 ---
 
-### Task 2: Convert the orchestrator upload path to the projection
+### Task 2: Convert the orchestrator upload paths to the projection
 
-**Files:** Modify `orchestrator/src/routes/ingest.py:134-138` and `:174-180`; Test `orchestrator/tests/test_ingest_projection.py` (create).
+There are **three** `upsert_cooccurrence` writers in `ingest.py`, and the §9 "sole writer"
+invariant requires converting **all** of them: the text path (`_ingest_document`, lines 134-138
+and 174-180) **and** the image path (`_ingest_image`, lines 297-301). Convert both in this task.
+
+**Files:** Modify `orchestrator/src/routes/ingest.py:134-138`, `:174-180`, `:297-301`; Test `orchestrator/tests/test_ingest_projection.py` (create).
 
 - [ ] **Step 1: Failing test** — ingest one document via `_ingest_document`, assert its `co_occurs` rows equal a from-scratch `recompute_cooccurrence` over all entities and all have `source_chunk IS NULL`. (Use `test_store`; stub the relay/extractor via the existing test patterns in `tests/` — grep `extract_document` in tests for the established monkeypatch.)
 
 - [ ] **Step 2: Run, expect fail** (edges still carry `source_chunk`).
 
-- [ ] **Step 3: Implement.** Replace both `compute_cooccurrence_edges(...)` + `upsert_cooccurrence` loops (lines 134-138 and 174-180) with a single recompute over the doc's entities. After the extraction loop builds `chunk_entities`, collect the entity ids and call the helper:
+- [ ] **Step 3: Implement (text path).** In `_ingest_document`, remove **both** `compute_cooccurrence_edges(...)` + `upsert_cooccurrence` loops (lines 134-138 and 174-180). Place a **single** recompute **after the domain cascade finishes** (after ~line 184) — `chunk_entities` is not fully populated until the `for domain_path` loop appends domain entities (169-171), so recomputing earlier would miss them:
 
 ```python
 from ..db import recompute_cooccurrence   # add to imports
-# ...after entity_sources are written (replaces the two upsert_cooccurrence loops):
+# ...after the domain-cascade loop, once chunk_entities is fully built:
 affected = {eid for eids in chunk_entities.values() for eid in eids}
 if affected:
     recompute_cooccurrence(store.conn, list(affected))
     store.conn.commit()
 ```
 
-Delete the now-unused `compute_cooccurrence_edges` import if nothing else uses it (grep first).
+`store.conn` is confirmed to exist (used at ingest.py:202, 309, 325).
+
+- [ ] **Step 4: Implement (image path).** Do the same in `_ingest_image` (lines 297-301) — it already writes `entity_sources` (line ~290), so a recompute over its entities is a drop-in replacement for the `compute_cooccurrence_edges` loop.
+
+- [ ] **Step 5:** Now that all three sites are gone, delete the unused `compute_cooccurrence_edges` import (grep to confirm no remaining callers).
+
+- [ ] **Step 6: Run, expect pass. Commit.**
 
 - [ ] **Step 4: Run, expect pass.**
 - [ ] **Step 5: Commit** `refactor(ingest): upload path writes co_occurs via the projection helper`.
@@ -375,6 +411,8 @@ Implement per spec §6–§9:
 - [ ] **Step 1–5 (TDD):** tests for each branch — create returns `created` + projected edges; re-call with same content → `skipped`; re-call with changed content → `updated`, old entities gone, edges match a from-scratch projection; adoption of an `source_id IS NULL` doc at the same path (no duplicate). Run in container. **Commit per green branch.**
 
 > This is the largest task. Keep `upsert_document` free of vault/repo specifics — it takes `content` and metadata only. The featurizers (Phase 3, Spec 2) produce those.
+>
+> **Factoring caveat:** the worker's classify+extract logic is currently written **inline** inside `run_extract_batch` (`worker/src/jobs/extract_batch.py`), not as a reusable function. So "reuse the worker's classify+extract path" means **extracting that inline block into a callable** (e.g. `_extract_and_store(conn, relay, settings, doc_id, chunks, emits_cooccurrence)`) as the first step of this task, then calling it from both `upsert_document` and the refactored `extract_batch` (Task 10). Budget for that extraction; don't expect a ready-made function.
 
 ---
 
@@ -412,6 +450,7 @@ Implement the spec §10 loop:
 
 **Files:** Modify `worker/src/config.py` + `orchestrator/src/config.py` (add `source_scan_interval_seconds: int = 900` and its `_ENV_MAP` entry `SOURCE_SCAN_INTERVAL_SECONDS`); modify `worker/src/main.py:233-241` (add a second sweep alongside the judge sweep). Test `worker/tests/test_source_sweep.py`.
 
+- [ ] Add `import uuid` and `import json` to `worker/src/main.py` (it currently imports neither; `get_connection` is already imported at line 8).
 - [ ] Add, next to the judge sweep, a `last_source_sweep` timer and:
 ```python
 if now - last_source_sweep >= settings.source_scan_interval_seconds:
@@ -425,15 +464,17 @@ if now - last_source_sweep >= settings.source_scan_interval_seconds:
                 " (julianday('now') - julianday(last_scanned_at))*24 >= cadence_hours)"
             ).fetchall()
             for r in due:
-                # enqueue a scan_source job in THIS db (jobs are per-workspace)
-                conn.execute("INSERT INTO jobs (id, type, target, status, payload) "
+                # enqueue a scan_source job in THIS db (jobs are per-workspace). The real
+                # jobs table column is `config`, NOT `payload` (db.py:99-109); the worker
+                # reads job["config"] (extract_batch.py:18). target = the source id.
+                conn.execute("INSERT INTO jobs (id, type, target, status, config) "
                              "VALUES (?, 'scan_source', ?, 'queued', ?)",
                              (str(uuid.uuid4()), r["id"], json.dumps({"source_id": r["id"]})))
             conn.commit()
         finally:
             conn.close()
 ```
-(Match the real `jobs` insert columns — grep `INSERT INTO jobs` / `jobs.create` for the exact shape.)
+(Verified against the six existing `INSERT INTO jobs` sites, e.g. `sqlite_store.py:586`, `worker/src/jobs/ingest_repo.py:373`.)
 
 - [ ] **TDD:** seed a due source, run one sweep iteration (factor the sweep into a testable function), assert a `scan_source` job is enqueued; a not-yet-due source enqueues nothing. **Commit.**
 
