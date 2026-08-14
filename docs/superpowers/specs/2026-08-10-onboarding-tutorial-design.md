@@ -640,3 +640,30 @@ room under where Lex's head sits. `relaxed.png` is used unconditionally here (no
 this is a fixed "at rest" pose for the collapsed state, independent of which quest is active or
 whether a cheer is in progress; cheering still only shows in the *expanded* bubble, matching
 existing behavior (the minimized capsule has never reflected cheer state).
+
+## Revision 17 — relaxed.png had no alpha channel; regenerated transparency (2026-08-14)
+
+Bug report: the mascot's white background showed up on the live site instead of being transparent.
+
+**Root cause**: `file frontend/public/mascot/relaxed.png` reported `8-bit/color RGB` — the file had
+**no alpha channel at all**, unlike every other mascot asset (`happy.png` etc., all `RGBA`). This is
+not a CSS/frontend bug; a PNG with no alpha channel cannot render transparent regardless of how it's
+styled. (The Read tool's own image preview renders a checkerboard for *any* light/white background,
+transparent or not, which is why the file looked fine when reviewed in Revision 16 — the checkerboard
+wasn't evidence of real transparency, just the viewer's placeholder pattern.)
+
+**Fix — background removed programmatically, not by hand**: installed Pillow into a throwaway venv
+(`/tmp/.../imgvenv`, outside the repo) and ran a flood-fill from the image's four border edges,
+converting near-white pixels (`min(r,g,b) >= 225`, feathered over a 30-value range for smooth edges)
+to transparent, but only pixels *reachable from the border* — this avoids accidentally punching holes
+in white-ish highlights inside the character (checked: the eyes are cyan, the robe is red/gold/black,
+nothing on the character itself is near-white, so this was a safe assumption, confirmed by inspecting
+sample pixel values at the corners vs. the character interior before running it).
+
+**Verified before applying**: composited the result over a solid dark background and inspected the
+edges for white halo/fringing (none found); found one small white fleck near the neck-tube highlight,
+confirmed by cropping the *original* file at the same coordinates that it's a genuine specular
+highlight in the artwork (isolated from the border flood-fill, correctly left opaque), not a leftover
+background patch. Backed up the original file to the scratchpad before overwriting
+`frontend/public/mascot/relaxed.png`, then confirmed via `file` that the repo copy is now `RGBA`,
+and via `curl` that the frontend serves the updated `RGBA` file (not a stale cached copy).
