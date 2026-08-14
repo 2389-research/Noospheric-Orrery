@@ -37,7 +37,11 @@ _MIRRORED_TABLES = ["graph_snapshot", "domain_edges", "collections",
                     "normalization_review_queue",
                     # The worker's generate_commentary job WRITES here and the
                     # orchestrator's GET /commentary reads it — same hazard.
-                    "node_commentary"]
+                    "node_commentary",
+                    # Incremental source sync: the worker writes invalid_at/modified_at/
+                    # source_id on documents (via migration ALTERs in both files) and both
+                    # services read watched_sources — both are now cross-service surface.
+                    "documents", "watched_sources"]
 
 # Indexes on that surface. Table DDL alone is not enough: an index dropped from one
 # file costs nothing structurally and everything in latency, so it is exactly the kind
@@ -48,7 +52,9 @@ _MIRRORED_INDEXES = ["idx_document_collections_collection",
                      # The worker writes co-occurrence edges and the orchestrator reads
                      # them for the graph; both need the same pair indexes or one side
                      # full-scans a table the other keeps indexed.
-                     "idx_relationships_pair", "idx_relationships_to"]
+                     "idx_relationships_pair", "idx_relationships_to",
+                     # Sync identity lookups join documents on source_path.
+                     "idx_documents_source_path"]
 
 _ALLOWED_DIVERGENCE: dict[str, str] = {
     # name -> why it is allowed to differ. Empty: nothing diverges today.

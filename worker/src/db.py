@@ -12,10 +12,10 @@ CREATE TABLE IF NOT EXISTS documents (
     content TEXT,
     content_hash TEXT,
     metadata TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    status TEXT DEFAULT 'pending',
     content_type TEXT DEFAULT 'text',
-    thumbnail_path TEXT
+    thumbnail_path TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status TEXT DEFAULT 'pending'
 );
 CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash);
 
@@ -290,6 +290,24 @@ CREATE TABLE IF NOT EXISTS collection_edges (
     type TEXT NOT NULL,
     weight REAL DEFAULT 1.0,
     PRIMARY KEY (source, target, type)
+);
+
+-- A WATCHED SOURCE is a vault dir or a repo the worker re-scans on a cadence to keep
+-- the graph in sync (spec 2026-08-14 incremental-source-sync). Lives per-workspace DB,
+-- so (source_id, source_path) identity is unambiguous within a file. The worker sweep
+-- reads its own DB's rows and enqueues scan_source jobs into the same DB.
+CREATE TABLE IF NOT EXISTS watched_sources (
+    id TEXT PRIMARY KEY,
+    type TEXT,                    -- 'vault' | 'repo'
+    uri TEXT,                     -- vault dir (as the worker sees it) | git url/path
+    noosphere TEXT,               -- workspace this source feeds (provenance/logging only)
+    cadence_hours REAL DEFAULT 24,
+    config_json TEXT,             -- adapter-specific (ext filter, branch, thresholds…)
+    enabled INTEGER DEFAULT 1,
+    last_scanned_at TIMESTAMP,
+    last_status TEXT,             -- 'ok' | 'error' | 'running'
+    last_error TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -590,6 +608,14 @@ def init_db(db_path: str) -> None:
         conn.execute("ALTER TABLE documents ADD COLUMN content_type TEXT DEFAULT 'text'")
     if "thumbnail_path" not in cols:
         conn.execute("ALTER TABLE documents ADD COLUMN thumbnail_path TEXT")
+    # Incremental source sync: stamped on update-in-place; soft-delete marker;
+    # FK (nullable) to the watched_sources row that owns this doc.
+    if "modified_at" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN modified_at TIMESTAMP")
+    if "invalid_at" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN invalid_at TIMESTAMP")
+    if "source_id" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN source_id TEXT")
     # Migrate specs table
     spec_cols = {r[1] for r in conn.execute("PRAGMA table_info(specs)").fetchall()}
     if "media_type" not in spec_cols:
@@ -660,6 +686,8 @@ def init_db(db_path: str) -> None:
     # domain_path), which cannot be seeked by path — so the planner falls back to
     # scanning.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_document_domains_path ON document_domains(domain_path)")
+    # Sync identity lookups join documents on source_path.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_source_path ON documents(source_path)")
     # Seed the single snapshot row (dirty, empty) so a writer can flip the bit with a
     # plain UPDATE before the first build has ever run.
     conn.execute("INSERT OR IGNORE INTO graph_snapshot (id, dirty) VALUES ('current', 1)")
