@@ -522,3 +522,34 @@ a generic `Next: {title}` line and `IDLE_POSE`/`QUEST_POSE` lookup guarded for a
 guarantees, since `default` is reached only when `activeQuest` is truthy but unmatched). Fixed with
 an explicit `activeQuest &&` guard rather than a non-null assertion, to stay honest about the type
 rather than silencing the checker.
+
+## Revision 12 — classify moved up, mascot renamed to "Lex" (2026-08-14)
+
+Two changes:
+
+1. **Quest order**: `classify` ("Watch it classify") moved from between `add_more_files` and
+   `simmer` to right after `ingest`, in `use-tutorial-quests.ts`'s `quests` array. New required-quest
+   order: `ingest → classify → visit_documents → open_document → view_orrery → search →
+   [add_more_files, optional] → simmer → normalize`. `activeQuest` is `requiredQuests.find(q =>
+   !q.done)`, so this changes when classify becomes the active guidance quest (right after the
+   user's first document, since domain classification happens synchronously during ingest) rather
+   than after most of Part 1/2 was already done.
+
+2. **Renamed the mascot from "Tutorial" to "Lex"** everywhere it's a persona label, not a route or
+   sandbox name: the bubble header (`✦ Tutorial` → `✦ Lex`), the minimized capsule (now `Lex ·
+   {quest title}` instead of just the quest title), and the nav bar's entry link (`✦ Tutorial` →
+   `✦ Lex`, still routing to `/tutorial` — the URL itself is unchanged, only the display label).
+   "Tutorial Sandbox — …" (the auto-generated workspace name in `frontend/src/app/tutorial/page.tsx`)
+   was deliberately left alone — that's a workspace/data label, not the character.
+
+   **Also added a quest-title line inside the bubble**, requested as "move tutorial title to before
+   Ingest a document": previously the bubble only showed the generic "✦ Tutorial" header with no
+   visible quest name unless cheering; now every state shows `✦ Lex` then, on its own line right
+   below (before the dialogue paragraphs), the current quest's title (or "All caught up" / the
+   completed quest + ✓ while cheering) — so "Lex" always appears before "Ingest a document" (or
+   whichever quest is active), not just implicitly via ordering.
+
+   Cleaned up resulting duplication: the `default` switch case's dialogue line no longer repeats
+   `Next: {title}` (title is now shown above it already) — replaced with a generic "Head there when
+   you're ready." The `undefined` (all-quests-done) case's line no longer repeats "All caught up"
+   either, since that phrase is now the title line itself.

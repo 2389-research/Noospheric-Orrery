@@ -119,6 +119,12 @@ export function useTutorialQuests(noosphereId: string) {
       done: documentCount > 0,
     },
     {
+      id: "classify",
+      title: "Watch it classify",
+      lore: "Constellations form where none were named before.",
+      done: domains.length >= 2,
+    },
+    {
       id: "visit_documents",
       title: "See it in Documents",
       lore: "Your first upload, filed and findable.",
@@ -152,12 +158,6 @@ export function useTutorialQuests(noosphereId: string) {
       // second file, which is the opposite of what an always-available option should do.
       done: false,
       optional: true,
-    },
-    {
-      id: "classify",
-      title: "Watch it classify",
-      lore: "Constellations form where none were named before.",
-      done: domains.length >= 2,
     },
     {
       id: "simmer",

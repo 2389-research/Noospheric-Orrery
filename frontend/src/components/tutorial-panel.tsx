@@ -245,13 +245,15 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
         return {
           pose: IDLE_POSE,
           lines: [
-            <>All caught up — visit <code>/n/{noosphereId}/tutorial</code> for search, the galaxy map, and building your own domain.</>,
+            <>Visit <code>/n/{noosphereId}/tutorial</code> for search, the galaxy map, and building your own domain.</>,
           ],
         };
       default:
         return {
           pose: (activeQuest && QUEST_POSE[activeQuest.id]) ?? IDLE_POSE,
-          lines: [<>Next: <span className="text-foreground">{activeQuest?.title}</span></>],
+          // Title itself is rendered above these lines (see the bubble's title row), so no
+          // need to repeat it here — just a light nudge for quests without dedicated copy yet.
+          lines: ["Head there when you're ready."],
         };
     }
   })();
@@ -271,7 +273,7 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={`/mascot/${displayPose}`} alt="" className="w-8 h-auto" />
-          <span className="text-xs">{activeQuest ? activeQuest.title : "All caught up"}</span>
+          <span className="text-xs">Lex · {activeQuest ? activeQuest.title : "All caught up"}</span>
         </button>
       ) : (
         <div className="space-y-2">
@@ -290,12 +292,17 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
             >
               <div className="flex items-center justify-between">
                 <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                  {cheering ? `${quests.find((q) => q.id === cheerQuestId)?.title} ✓` : "✦ Tutorial"}
+                  ✦ Lex
                 </span>
                 <button onClick={toggle} className="text-[10px] text-muted-foreground hover:text-foreground">
                   minimize
                 </button>
               </div>
+              <p className={`text-xs font-medium ${cheering ? "text-emerald-400" : "text-foreground"}`}>
+                {cheering
+                  ? `${quests.find((q) => q.id === cheerQuestId)?.title} ✓`
+                  : activeQuest?.title ?? "All caught up"}
+              </p>
               {displayLines.map((line, i) => (
                 <p key={i} className={`text-xs ${i > 0 ? "text-muted-foreground" : ""}`}>
                   {line}
