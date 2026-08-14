@@ -208,14 +208,14 @@ async def get_shared_context(
     docs_b = set()
     doc_titles = {}
     rows_a = conn.execute(
-        "SELECT DISTINCT d.id, d.title FROM entity_sources es JOIN documents d ON es.document_id = d.id WHERE es.entity_id = ?",
+        "SELECT DISTINCT d.id, d.title FROM entity_sources es JOIN documents d ON es.document_id = d.id WHERE es.entity_id = ? AND d.invalid_at IS NULL",
         (ea.id,),
     ).fetchall()
     for r in rows_a:
         docs_a.add(r["id"])
         doc_titles[r["id"]] = r["title"]
     rows_b = conn.execute(
-        "SELECT DISTINCT d.id, d.title FROM entity_sources es JOIN documents d ON es.document_id = d.id WHERE es.entity_id = ?",
+        "SELECT DISTINCT d.id, d.title FROM entity_sources es JOIN documents d ON es.document_id = d.id WHERE es.entity_id = ? AND d.invalid_at IS NULL",
         (eb.id,),
     ).fetchall()
     for r in rows_b:
@@ -464,7 +464,7 @@ async def explore_domain(
     doc_rows = conn.execute("""
         SELECT d.id, d.title, d.content_type FROM documents d
         JOIN document_domains dd ON d.id = dd.document_id
-        WHERE dd.domain_path = ? ORDER BY d.created_at DESC
+        WHERE dd.domain_path = ? AND d.invalid_at IS NULL ORDER BY d.created_at DESC
     """, (domain_path,)).fetchall()
     documents = [{"id": r["id"], "title": r["title"], "content_type": r["content_type"] or "text"} for r in doc_rows]
 

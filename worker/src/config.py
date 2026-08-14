@@ -23,6 +23,7 @@ class Settings:
     ollama_url: str = "http://localhost:11434"
     worker_poll_interval: int = 5
     judge_sweep_interval_seconds: int = 900  # periodic advisory-judge sweep cadence (~15 min)
+    source_scan_interval_seconds: int = 900  # how often the sweep checks watched_sources for due scans
     db_path: str = "/data/orrery.db"
     documents_dir: str = "/data/documents"
     specs_dir: str = "/data/specs"
@@ -75,6 +76,7 @@ _ENV_MAP = {
     "ollama_url": "OLLAMA_URL",
     "worker_poll_interval": "WORKER_POLL_INTERVAL",
     "judge_sweep_interval_seconds": "JUDGE_SWEEP_INTERVAL_SECONDS",
+    "source_scan_interval_seconds": "SOURCE_SCAN_INTERVAL_SECONDS",
     "db_path": "DB_PATH",
     "documents_dir": "DOCUMENTS_DIR",
     "specs_dir": "SPECS_DIR",

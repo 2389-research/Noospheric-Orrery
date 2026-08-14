@@ -87,7 +87,7 @@ def _collection_structure(store, collection_id: str, max_files: int) -> dict:
     docs = conn.execute(
         "SELECT d.id, d.title, d.content, d.source_path, dc.role, dc.parent_path "
         "FROM documents d JOIN document_collections dc ON d.id = dc.document_id "
-        "WHERE dc.collection_id = ?",
+        "WHERE dc.collection_id = ? AND d.invalid_at IS NULL",
         (collection_id,),
     ).fetchall()
 
@@ -236,7 +236,7 @@ def _collection_summary(store, collection_id: str, limit: int) -> dict:
         "SELECT d.content FROM documents d "
         "JOIN document_collections dc ON dc.document_id = d.id "
         "WHERE dc.collection_id = ? AND dc.role = 'root' "
-        "AND d.content_type = 'code_intent' LIMIT 1",
+        "AND d.content_type = 'code_intent' AND d.invalid_at IS NULL LIMIT 1",
         (collection_id,),
     ).fetchone()
 

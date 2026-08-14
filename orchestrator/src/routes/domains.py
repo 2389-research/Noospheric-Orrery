@@ -20,6 +20,7 @@ def list_domains(auth: AuthStore = Depends(get_auth_store)):
                    SUM(CASE WHEN d.content_type != 'image' OR d.content_type IS NULL THEN 1 ELSE 0 END) as text_count
             FROM document_domains dd
             JOIN documents d ON dd.document_id = d.id
+            WHERE d.invalid_at IS NULL
             GROUP BY dd.domain_path
         """).fetchall()
         for r in rows:

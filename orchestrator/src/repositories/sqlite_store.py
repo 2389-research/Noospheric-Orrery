@@ -35,7 +35,7 @@ class SQLiteDocumentRepository(DocumentRepository):
         self._conn = conn
 
     def count(self):
-        return self._conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        return self._conn.execute("SELECT COUNT(*) FROM documents WHERE invalid_at IS NULL").fetchone()[0]
 
     def create(self, id, title, content, content_hash, source_path=None, content_type="text"):
         self._conn.execute(
@@ -46,7 +46,7 @@ class SQLiteDocumentRepository(DocumentRepository):
         return id
 
     def get(self, doc_id):
-        row = self._conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        row = self._conn.execute("SELECT * FROM documents WHERE id = ? AND invalid_at IS NULL", (doc_id,)).fetchone()
         if not row:
             return None
         return Document(
@@ -69,7 +69,7 @@ class SQLiteDocumentRepository(DocumentRepository):
             batch = ids[i:i + 900]
             placeholders = ",".join("?" * len(batch))
             rows = self._conn.execute(
-                f"SELECT id, title, content_type FROM documents WHERE id IN ({placeholders})",
+                f"SELECT id, title, content_type FROM documents WHERE id IN ({placeholders}) AND invalid_at IS NULL",
                 batch,
             ).fetchall()
             for r in rows:
@@ -80,6 +80,7 @@ class SQLiteDocumentRepository(DocumentRepository):
         rows = self._conn.execute(
             "SELECT d.*, GROUP_CONCAT(dd.domain_path) as domains FROM documents d "
             "LEFT JOIN document_domains dd ON d.id = dd.document_id "
+            "WHERE d.invalid_at IS NULL "
             "GROUP BY d.id ORDER BY d.created_at DESC LIMIT ? OFFSET ?",
             (limit, offset),
         ).fetchall()
@@ -106,7 +107,7 @@ class SQLiteDocumentRepository(DocumentRepository):
     def get_for_domain(self, domain_path, status_filter=None):
         query = """SELECT d.* FROM documents d
             JOIN document_domains dd ON d.id = dd.document_id
-            WHERE dd.domain_path = ?"""
+            WHERE dd.domain_path = ? AND d.invalid_at IS NULL"""
         params = [domain_path]
         if status_filter:
             placeholders = ",".join("?" * len(status_filter))
@@ -120,6 +121,7 @@ class SQLiteDocumentRepository(DocumentRepository):
         rows = self._conn.execute(
             "SELECT d.id, d.title, d.content_type, GROUP_CONCAT(dd.domain_path) as domains "
             "FROM documents d LEFT JOIN document_domains dd ON d.id = dd.document_id "
+            "WHERE d.invalid_at IS NULL "
             "GROUP BY d.id ORDER BY d.created_at DESC LIMIT ?", (limit,)
         ).fetchall()
         result = []
@@ -464,7 +466,7 @@ class SQLiteEntitySourceRepository(EntitySourceRepository):
             SELECT DISTINCT d.id, d.title
             FROM entity_sources es
             JOIN documents d ON es.document_id = d.id
-            WHERE es.entity_id = ?
+            WHERE es.entity_id = ? AND d.invalid_at IS NULL
             ORDER BY d.title
         """, (entity_id,)).fetchall()
         return [{"id": r["id"], "title": r["title"]} for r in rows]
@@ -523,7 +525,7 @@ class SQLiteRelationshipRepository(RelationshipRepository):
         # Documents
         doc_rows = self._conn.execute("""
             SELECT DISTINCT d.id, d.title, d.content_type FROM entity_sources es
-            JOIN documents d ON es.document_id = d.id WHERE es.entity_id = ?
+            JOIN documents d ON es.document_id = d.id WHERE es.entity_id = ? AND d.invalid_at IS NULL
             ORDER BY d.title
         """, (entity_id,)).fetchall()
         doc_ids = [r["id"] for r in doc_rows]

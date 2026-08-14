@@ -10,7 +10,7 @@ def get_stats(auth: AuthStore = Depends(get_auth_store)):
     image_count = 0
     try:
         image_count = store.conn.execute(
-            "SELECT COUNT(*) FROM documents WHERE content_type = 'image'"
+            "SELECT COUNT(*) FROM documents WHERE content_type = 'image' AND invalid_at IS NULL"
         ).fetchone()[0]
     except Exception:
         pass

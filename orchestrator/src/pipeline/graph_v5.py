@@ -184,7 +184,7 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
                 for n in collection_nodes]
     collection_positions = _collection_positions(store, collection_boxes, domain_positions)
 
-    total_documents = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+    total_documents = conn.execute("SELECT COUNT(*) FROM documents WHERE invalid_at IS NULL").fetchone()[0]
     document_nodes = [
         {"id": d.id, "type": "document", "subtype": getattr(d, "content_type", "text"),
          "label": d.title,

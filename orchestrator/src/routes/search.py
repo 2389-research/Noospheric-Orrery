@@ -70,7 +70,7 @@ def _search_images(conn, query: str, top_k: int = 10) -> list[dict]:
                 SELECT c.id, c.text, c.image_embedding, d.id as doc_id, d.title, d.source_path
                 FROM chunks c
                 JOIN documents d ON c.document_id = d.id
-                WHERE d.content_type = 'image' AND c.image_embedding IS NOT NULL
+                WHERE d.content_type = 'image' AND c.image_embedding IS NOT NULL AND d.invalid_at IS NULL
             """).fetchall()
             if rows:
                 scored = []
@@ -98,7 +98,7 @@ def _search_images(conn, query: str, top_k: int = 10) -> list[dict]:
             SELECT c.id, c.text, c.embedding, d.id as doc_id, d.title, d.source_path
             FROM chunks c
             JOIN documents d ON c.document_id = d.id
-            WHERE d.content_type = 'image' AND c.embedding IS NOT NULL
+            WHERE d.content_type = 'image' AND c.embedding IS NOT NULL AND d.invalid_at IS NULL
         """).fetchall()
 
         if rows:
@@ -123,7 +123,7 @@ def _search_images(conn, query: str, top_k: int = 10) -> list[dict]:
         SELECT d.id, d.title, c.text
         FROM documents d
         JOIN chunks c ON c.document_id = d.id
-        WHERE d.content_type = 'image' AND c.text LIKE ?
+        WHERE d.content_type = 'image' AND c.text LIKE ? AND d.invalid_at IS NULL
         LIMIT ?
     """, (query_like, top_k)).fetchall()
 

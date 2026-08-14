@@ -32,6 +32,9 @@ class Settings:
     # Seconds between background sweeps that rebuild dirty graph snapshots.
     # 0 disables the loop (the inline build in /graph still covers correctness).
     graph_snapshot_rebuild_interval: int = 20
+    # How often the worker sweep checks watched_sources for due scans (~15 min).
+    # Read here too so both services agree on the field (the sweep runs in the worker).
+    source_scan_interval_seconds: int = 900
 
 
 def _xdg_data_dir() -> str:
