@@ -1,13 +1,14 @@
-# ABOUTME: extract_batch accumulates co-occurrence into one row per pair, not one per doc.
-# ABOUTME: A pair in N docs used to leave N rows (all weight 1) — ~22% of the real table.
-"""Co-occurrence is an aggregate, not a log.
+# ABOUTME: extract_batch writes co_occurs as a pure projection of entity_sources.
+# ABOUTME: One row per pair, source_chunk NULL, weight = shared-chunk count.
+"""Co-occurrence is a projection, not a log.
 
-The old write inserted a fresh `co_occurs` row for every document a pair appeared in, so
-a pair seen in N documents left N rows of weight 1 — bloat, and wrong weight for every
-reader that treats a row as an edge. Extraction now accumulates into the single
-aggregated row (the one with `source_chunk` NULL), leaving the upload path's per-chunk
-rows — which document deletion keys on — untouched, and never reviving an invalidated
-edge by adding weight a reader can't see.
+Spec 1 (incremental-source-sync) collapses the old two-representation scheme — an
+aggregated `source_chunk` NULL row from extract_batch plus per-chunk rows from the
+upload path — into a single representation: every valid `co_occurs` row is a pure
+projection of `entity_sources`, written only by `recompute_cooccurrence`. Two entities
+co-occur when they share a chunk; weight is the number of shared chunks; every projected
+row carries `source_chunk = NULL`. A human-invalidated edge (a corrections decision) is
+preserved and never revived by re-extraction.
 """
 import json
 import uuid
@@ -64,55 +65,53 @@ def _cooccurs(conn):
 
 async def test_a_pair_in_many_docs_is_one_row_with_summed_weight(tmp_path, monkeypatch):
     db_path = str(tmp_path / "t.db")
-    _seed(db_path, n=4)                       # alpha+beta co-occur in all 4 docs
+    _seed(db_path, n=4)                       # alpha+beta co-occur in 4 distinct chunks
 
     await _run(db_path, monkeypatch)
 
     conn = get_connection(db_path)
     rows = _cooccurs(conn)
     conn.close()
-    assert len(rows) == 1, f"expected one aggregated row, got {len(rows)}"
-    assert rows[0]["weight"] == 4, "weights were not accumulated across documents"
-    assert rows[0]["source_chunk"] is None, "the aggregated code-intent edge is source_chunk NULL"
+    assert len(rows) == 1, f"expected one projected row, got {len(rows)}"
+    assert rows[0]["weight"] == 4, "weight is the shared-chunk count across documents"
+    assert rows[0]["source_chunk"] is None, "every projected row is source_chunk NULL"
 
 
-async def test_a_per_chunk_upload_row_is_left_untouched(tmp_path, monkeypatch):
-    """The upload path writes per-chunk rows (non-null source_chunk) that document
-    deletion depends on. Accumulation targets only the NULL-source_chunk row, so an
-    existing per-chunk row for the same pair must survive, giving two rows that
-    readers sum."""
+async def test_a_legacy_per_chunk_row_is_reconciled_into_the_projection(tmp_path, monkeypatch):
+    """Under the single-representation invariant there is no second row to protect. A
+    legacy per-chunk row (non-null source_chunk) left by the old upload path is a VALID
+    co_occurs row, so the recompute drops it and rebuilds the one projected row — no
+    coexisting representations, no double-count."""
     db_path = str(tmp_path / "t.db")
     _seed(db_path, n=1)
-    # Extract once so alpha/beta exist with stable ids, then plant a per-chunk row.
-    await _run(db_path, monkeypatch)
+    await _run(db_path, monkeypatch)          # alpha/beta now exist with stable ids
     conn = get_connection(db_path)
     a, b, _, _ = _cooccurs(conn)[0]
+    # Plant a legacy per-chunk row for the same pair, as the old upload path would have.
     conn.execute("INSERT INTO relationships (id, from_entity, to_entity, type, weight, source_chunk) "
                  "VALUES (?, ?, ?, 'co_occurs', 9, 'some-chunk')", (str(uuid.uuid4()), a, b))
-    # Re-open the doc's scope and extract again: the aggregated row gains weight, the
-    # per-chunk row does not.
     conn.execute("UPDATE documents SET status = 'classified'")
     conn.commit()
     conn.close()
     await _run(db_path, monkeypatch)
 
     conn = get_connection(db_path)
-    rows = {r["source_chunk"]: r["weight"] for r in _cooccurs(conn)}
+    rows = _cooccurs(conn)
     conn.close()
-    assert rows.get("some-chunk") == 9, "the per-chunk upload row was modified"
-    assert rows.get(None) == 2, "the aggregated row did not accumulate (1 + 1)"
+    assert len(rows) == 1, "the legacy per-chunk row must be reconciled, not left alongside"
+    assert rows[0]["source_chunk"] is None, "the surviving row is the projection"
+    assert rows[0]["weight"] == 1, "weight is the shared-chunk count (one doc, one chunk)"
 
 
-async def test_an_invalidated_edge_is_not_revived_by_accumulation(tmp_path, monkeypatch):
-    """A human-invalidated co_occurs row is invisible to readers (they filter
-    invalid_at IS NULL). Adding weight to it would silently drop that weight — so
-    accumulation skips it and a fresh valid row is created, matching the old insert."""
+async def test_an_invalidated_edge_is_not_revived(tmp_path, monkeypatch):
+    """A human-invalidated co_occurs row is a corrections decision. Re-extraction must
+    never revive it: the projection skips any pair that still has an invalidated row, so
+    no fresh valid edge is created for it."""
     db_path = str(tmp_path / "t.db")
     _seed(db_path, n=1)
     await _run(db_path, monkeypatch)
     conn = get_connection(db_path)
-    a, b, _, _ = _cooccurs(conn)[0]
-    # Invalidate the aggregated row a human removed via corrections.
+    # Invalidate the edge a human removed via corrections.
     conn.execute("UPDATE relationships SET invalid_at = CURRENT_TIMESTAMP WHERE type = 'co_occurs'")
     conn.execute("UPDATE documents SET status = 'classified'")
     conn.commit()
@@ -122,11 +121,7 @@ async def test_an_invalidated_edge_is_not_revived_by_accumulation(tmp_path, monk
 
     conn = get_connection(db_path)
     rows = conn.execute(
-        "SELECT weight, invalid_at FROM relationships WHERE type = 'co_occurs' "
-        "ORDER BY invalid_at IS NULL").fetchall()
+        "SELECT weight, invalid_at FROM relationships WHERE type = 'co_occurs'").fetchall()
     conn.close()
-    assert len(rows) == 2, "should be the invalidated row plus a fresh valid one"
-    valid = [r for r in rows if r["invalid_at"] is None]
-    assert len(valid) == 1 and valid[0]["weight"] == 1, "did not create a fresh valid edge"
-    invalid = [r for r in rows if r["invalid_at"] is not None]
-    assert invalid[0]["weight"] == 1, "weight was added to the invalidated (invisible) row"
+    assert len(rows) == 1, "no fresh valid row — the invalidated edge stands alone"
+    assert rows[0]["invalid_at"] is not None, "the surviving row is the invalidated one"
