@@ -15,6 +15,7 @@ and threshold-gated module/root regeneration are layered on top of this in follo
 import asyncio
 import json
 import os
+import subprocess
 import uuid
 
 from orrery_codesum import summarize_repo, make_summarize_fn
@@ -25,6 +26,17 @@ from .scan_source import apply_deletions
 
 _UNCLASSIFIED = "unclassified/needs-review"
 _ROLE = {"file": "leaf", "module": "group", "repo": "root"}
+
+
+def _git_head_sha(root_path: str) -> str | None:
+    """Current HEAD sha, or None if `root_path` is not a resolvable git checkout.
+    Used to short-circuit a scan when the working tree hasn't moved since last sync."""
+    try:
+        out = subprocess.run(["git", "-C", root_path, "rev-parse", "HEAD"],
+                             capture_output=True, text=True, timeout=10)
+    except Exception:  # noqa: BLE001 — git missing / not a repo -> no short-circuit
+        return None
+    return out.stdout.strip() or None if out.returncode == 0 else None
 
 
 def _resolve_collection(conn, root_path: str, source_config: dict) -> tuple[str, str]:
@@ -70,6 +82,16 @@ async def sync_repo(conn, relay, settings, ws, source_config, source_id) -> dict
     root_path = ws["uri"]
     collection_id, coll_path = _resolve_collection(conn, root_path, source_config)
 
+    # Source-level short-circuit (spec §4/§15): if HEAD hasn't moved since the last
+    # successful sync, nothing changed — skip codesum entirely (zero model calls). The
+    # commit_sha doubles as the git provenance ref, so storing it here keeps that fresh.
+    head_sha = _git_head_sha(root_path)
+    stored = conn.execute("SELECT commit_sha FROM collections WHERE id = ?", (collection_id,)).fetchone()
+    stored_sha = stored["commit_sha"] if stored else None
+    if head_sha and stored_sha and head_sha == stored_sha:
+        return {"actions": {"created": 0, "updated": 0, "skipped": 0, "conflict": 0},
+                "deleted": 0, "unchanged": True}
+
     # codesum traversal is synchronous and issues one blocking model call per file/
     # module/repo — run it off the event loop so the poll loop keeps ticking.
     summarize_fn = make_summarize_fn(relay, settings.extraction_model)
@@ -93,4 +115,10 @@ async def sync_repo(conn, relay, settings, ws, source_config, source_id) -> dict
         actions[res["action"]] = actions.get(res["action"], 0) + 1
 
     deleted = apply_deletions(conn, source_id, seen_paths)
+
+    # Record the synced commit so the next scan can short-circuit (and so the graph's
+    # git ref points at the code these summaries actually describe).
+    if head_sha:
+        conn.execute("UPDATE collections SET commit_sha = ? WHERE id = ?", (head_sha, collection_id))
+
     return {"actions": actions, "deleted": deleted}

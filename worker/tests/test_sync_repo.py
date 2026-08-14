@@ -109,3 +109,66 @@ def _from_scratch(conn):
     conn.execute("DELETE FROM relationships WHERE type='co_occurs' AND invalid_at IS NULL")
     recompute_cooccurrence(conn, active); conn.commit()
     return _valid_edges(conn)
+
+
+@pytest.mark.asyncio
+async def test_scan_short_circuits_when_head_sha_unchanged(tmp_path, monkeypatch):
+    repo = tmp_path / "r"; repo.mkdir()
+    db = str(tmp_path / "t.db"); init_db(db); conn = get_connection(db)
+    conn.execute("INSERT INTO watched_sources (id, type, uri) VALUES ('src1', 'repo', ?)", (str(repo),))
+    conn.commit(); conn.close()
+
+    calls = {"n": 0}
+    def fake_summarize(root, fn, name):
+        calls["n"] += 1
+        return [{"repo": "r", "path": "a.py", "level": "file", "parent_path": ".", "intent": "file ALPHA BETA"}]
+
+    monkeypatch.setattr(scan_source_mod, "Relay", FakeRelay)
+    monkeypatch.setattr(sync_repo_mod, "make_summarize_fn", lambda relay, model: (lambda *a, **k: ""))
+    monkeypatch.setattr(sync_repo_mod, "summarize_repo", fake_summarize)
+    monkeypatch.setattr(sync_repo_mod, "classify_document", _fake_classify)
+
+    sha = {"v": "sha-1"}
+    monkeypatch.setattr(sync_repo_mod, "_git_head_sha", lambda p: sha["v"])
+
+    # First scan: full run, codesum called once, sha recorded on the collection.
+    await _scan(db)
+    assert calls["n"] == 1
+    conn = get_connection(db)
+    assert conn.execute("SELECT commit_sha FROM collections").fetchone()["commit_sha"] == "sha-1"
+    conn.close()
+
+    # HEAD unchanged -> short-circuit: codesum NOT called again.
+    await _scan(db)
+    assert calls["n"] == 1
+
+    # HEAD moves -> full re-summarize.
+    sha["v"] = "sha-2"
+    await _scan(db)
+    assert calls["n"] == 2
+    conn = get_connection(db)
+    assert conn.execute("SELECT commit_sha FROM collections").fetchone()["commit_sha"] == "sha-2"
+    conn.close()
+
+
+@pytest.mark.asyncio
+async def test_non_git_source_never_short_circuits(tmp_path, monkeypatch):
+    repo = tmp_path / "r"; repo.mkdir()
+    db = str(tmp_path / "t.db"); init_db(db); conn = get_connection(db)
+    conn.execute("INSERT INTO watched_sources (id, type, uri) VALUES ('src1', 'repo', ?)", (str(repo),))
+    conn.commit(); conn.close()
+
+    calls = {"n": 0}
+    def fake_summarize(root, fn, name):
+        calls["n"] += 1
+        return [{"repo": "r", "path": "a.py", "level": "file", "parent_path": ".", "intent": "file ALPHA BETA"}]
+
+    monkeypatch.setattr(scan_source_mod, "Relay", FakeRelay)
+    monkeypatch.setattr(sync_repo_mod, "make_summarize_fn", lambda relay, model: (lambda *a, **k: ""))
+    monkeypatch.setattr(sync_repo_mod, "summarize_repo", fake_summarize)
+    monkeypatch.setattr(sync_repo_mod, "classify_document", _fake_classify)
+    monkeypatch.setattr(sync_repo_mod, "_git_head_sha", lambda p: None)   # not a git repo
+
+    await _scan(db)
+    await _scan(db)
+    assert calls["n"] == 2   # no sha -> always re-summarizes
