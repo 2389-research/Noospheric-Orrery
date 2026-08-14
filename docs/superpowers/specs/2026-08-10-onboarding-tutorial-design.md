@@ -475,3 +475,50 @@ mascot-narrated-onboarding architecture.
 The cheer bubble renders as a sibling above the collapsible panel body (`mb-2` above the
 `{!expanded ? ... : ...}` block), so it's visible whether the panel is expanded or minimized — a
 completion that happens while the panel is collapsed still gets celebrated, not silently swallowed.
+
+## Revision 11 — always-present mascot, tips folded into its dialogue (2026-08-14)
+
+Feedback: two changes. (1) The mascot should always be visibly present when not cheering, not just
+appear transiently on completion. (2) All the explanatory tip text that used to live as separate
+paragraphs in the panel body (e.g. the simmer "around 20 documents" note) should move into the
+mascot's own dialogue instead.
+
+### Restructured around one `guidance` object
+
+Replaced the per-quest `{activeQuest?.id === "x" && (...)}` blocks (each with its own inline
+instruction paragraph, tip paragraph, and button) with a single `guidance` value computed by a
+`switch (activeQuest?.id)`, returning `{ pose, lines, button?, showSampleIcons? }`. Every quest's
+copy — including tips that were previously separate `<p className="text-muted-foreground">` blocks
+outside any bubble (the simmer document-count tip is the example named in the request) — now lives
+in `lines`, an array of paragraphs rendered *inside* the mascot's speech bubble. `QUEST_POSE`
+(renamed from the Revision 10 `CHEER_POSE`, now used for both idle guidance and cheering — same
+character, just a different expression per quest) supplies the pose to match.
+
+### The mascot itself is now unconditional while expanded
+
+Previously the mascot image only rendered inside the `cheer &&` block — absent entirely outside a
+completion moment. Now the mascot + speech bubble render every time the panel is expanded,
+regardless of `cheerQuestId`: `displayPose`/`displayLines` pick between the cheer content (while
+`cheering`) and `guidance`'s content (otherwise), but the image and bubble structure itself is
+always there. Even the minimized capsule button now shows a small mascot thumbnail next to the
+current quest title, instead of just a plain "✦ Tutorial" pill — "always there" holds in both panel
+states, not only the expanded one.
+
+### Interactive elements stay separate from dialogue
+
+`SampleIcons` and the "Go to X" button are still rendered as their own elements below the speech
+bubble, not inside it — they're actions, not something the mascot "says." `guidance.showSampleIcons`
+(set only for the `ingest` case) and the standing `showAddMorePrompt` both gate the icons row; the
+add-more-files reminder text itself, though, now appears as a trailing paragraph inside the bubble
+(below the main guidance lines, separated by a top border) rather than as its own separate card —
+folding it in alongside every other tip, per the same request.
+
+### Known rough edge
+
+The `default` switch case (quests with no dedicated card — `classify`, `normalize`) falls back to
+a generic `Next: {title}` line and `IDLE_POSE`/`QUEST_POSE` lookup guarded for a possibly-null
+`activeQuest` (a real `tsc --noEmit` error caught before commit — TypeScript can't narrow
+`activeQuest` across the `switch (activeQuest?.id)` cases the way the runtime logic actually
+guarantees, since `default` is reached only when `activeQuest` is truthy but unmatched). Fixed with
+an explicit `activeQuest &&` guard rather than a non-null assertion, to stay honest about the type
+rather than silencing the checker.
