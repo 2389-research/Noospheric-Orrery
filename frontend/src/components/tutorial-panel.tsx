@@ -287,14 +287,22 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
   return (
     <div className="fixed bottom-4 left-4 z-50 w-72">
       {!expanded ? (
-        <button
-          onClick={toggle}
-          className="flex items-center gap-2 pl-1 pr-3 py-1 rounded-full border border-border/50 bg-card/90 backdrop-blur hover:bg-accent/40 shadow-lg"
-        >
+        <div className="relative w-fit">
+          {/* Lex rests his head and arms on top of the minimized panel, looking at you —
+              positioned to overlap the pill's top edge rather than sit inline with the text. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={`/mascot/${displayPose}`} alt="" className="w-8 h-auto" />
-          <span className="text-xs">Lex · {activeQuest ? activeQuest.title : "All caught up"}</span>
-        </button>
+          <img
+            src="/mascot/relaxed.png"
+            alt=""
+            className="absolute -top-9 left-1 w-16 h-auto z-10 pointer-events-none drop-shadow-lg"
+          />
+          <button
+            onClick={toggle}
+            className="pl-14 pr-3 py-2 rounded-full border border-border/50 bg-card/90 backdrop-blur hover:bg-accent/40 shadow-lg"
+          >
+            <span className="text-xs">Lex · {activeQuest ? activeQuest.title : "All caught up"}</span>
+          </button>
+        </div>
       ) : (
         <div className="space-y-2">
           {/* The mascot is always here, guiding or cheering — never absent while expanded. */}

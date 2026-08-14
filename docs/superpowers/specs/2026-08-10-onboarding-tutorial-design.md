@@ -617,3 +617,26 @@ every other quest, which never had this problem since only `ingest` branches on
 `introAcknowledged`). Left the minimized capsule's `Lex · {title}` text unchanged — that's a
 persistent status summary, not the intro screen itself, and showing the eventual quest name there
 while collapsed isn't the same leak.
+
+## Revision 16 — Lex resting on the minimized panel (2026-08-14)
+
+Feedback: when the panel is minimized, Lex should appear resting his head and arms on top of it,
+looking at the user — not just a small inline thumbnail next to the status text.
+
+**No image-generation tool is available in this environment** — the assistant cannot produce new
+mascot art itself. The user supplied a new asset directly: `frontend/public/mascot/relaxed.png`
+(head-on-hands, forearms resting on a surface, looking at the viewer — matching the request almost
+exactly as-is), reviewed via the `Read` tool before wiring it in, per this project's "never
+distribute what you haven't seen" practice even for assets the user provides directly.
+
+### Minimized state restructured
+
+Previously the minimized state was a single `<button>` containing an inline mascot thumbnail
+(whichever `displayPose` was current) plus text, side by side. Replaced with a `relative` wrapper
+div containing: `relaxed.png`, absolutely positioned (`-top-9 left-1`, `w-16`, `pointer-events-none`)
+so it overlaps the pill's top edge from above rather than sitting inline with the text — creating
+the "resting on top of the panel" look — and the pill `<button>` itself, now with `pl-14` to leave
+room under where Lex's head sits. `relaxed.png` is used unconditionally here (not `displayPose`) —
+this is a fixed "at rest" pose for the collapsed state, independent of which quest is active or
+whether a cheer is in progress; cheering still only shows in the *expanded* bubble, matching
+existing behavior (the minimized capsule has never reflected cheer state).
