@@ -27,6 +27,21 @@
 - **Schema-mirror invariant:** any table/index/shared helper written by one service and read by the other must be **byte-identical** in `orchestrator/src/db.py` and `worker/src/db.py`, and listed in `orchestrator/tests/test_schema_mirror.py`. Edit both copies in the same step, always.
 - **WAL:** never open SQLite directly — use `get_connection()` (sets `busy_timeout` then `journal_mode=WAL`).
 - **Commit after every green step.** Work on the branch `feat/incremental-source-sync-spec` (the spec already lives there).
+- **Shared test helper — build it in Task 1, reuse it everywhere.** The core invariant is "every valid `co_occurs` row is a pure projection of `entity_sources`." Make it a reusable assertion and call it at the end of *every* create/update/delete/skip test:
+  ```python
+  def assert_graph_equals_projection(conn):
+      """The materialized co_occurs edges == a from-scratch emits-aware projection."""
+      before = sorted((r["from_entity"], r["to_entity"], r["weight"]) for r in conn.execute(
+          "SELECT from_entity,to_entity,weight FROM relationships "
+          "WHERE type='co_occurs' AND invalid_at IS NULL"))
+      ids = [r["id"] for r in conn.execute("SELECT id FROM entities WHERE invalid_at IS NULL")]
+      recompute_cooccurrence(conn, ids); conn.commit()
+      after = sorted((r["from_entity"], r["to_entity"], r["weight"]) for r in conn.execute(
+          "SELECT from_entity,to_entity,weight FROM relationships "
+          "WHERE type='co_occurs' AND invalid_at IS NULL"))
+      assert before == after, "materialized graph diverged from the projection"
+  ```
+  ⚠️ This only catches the emits-gate bug when the fixture contains a **summary doc that shares entities with a leaf** — a disjoint-entity fixture passes vacuously (exactly how the existing worker test misses it). Every golden/regression fixture below MUST include an overlapping leaf+summary pair.
 
 ---
 
@@ -301,7 +316,7 @@ if affected:
 
 **Files:** Modify `worker/src/jobs/extract_batch.py:150-180`; Test `worker/tests/test_extract_batch_projection.py` (create; runs in container).
 
-- [ ] **Step 1: Failing test** — after `run_extract_batch` on a small fixture, assert every `co_occurs` row has `source_chunk IS NULL` and weights equal a from-scratch projection. (Mirror an existing `worker/tests/test_extract_batch*.py` for fixture/monkeypatch setup.)
+- [ ] **Step 1: Failing test** — after `run_extract_batch` on a small fixture, assert every `co_occurs` row has `source_chunk IS NULL` and `assert_graph_equals_projection`. **The fixture MUST include a leaf doc and a summary doc (`emits_cooccurrence=0`) that share entities** — mirror `test_extract_batch_code_intent.py:72-93` for the `document_collections` seeding, but make the entities **overlap** (the existing test uses disjoint entities and so cannot catch the emits-gate regression). Assert no edge touches a summary-only pair and leaf weights are not inflated.
 - [ ] **Step 2: Run in container, expect fail.**
 - [ ] **Step 3: Implement.** Replace the `if emits:` block's `pair_counts`/`UPDATE...weight+`/`INSERT` (lines 152-180) with, after the doc's `entity_sources` are written:
 
@@ -420,7 +435,7 @@ Implement per spec §6–§9:
 
 **Files:** Modify `worker/src/jobs/extract_batch.py`; run the full worker suite as the regression guard.
 
-- [ ] Replace the inline per-doc extract+project body with a call to `upsert_document` per doc (passing the doc's `emits_cooccurrence` from `document_collections`). The golden co-occurrence counts on a fixture repo must be unchanged. Run full worker suite in-container. **Commit.**
+- [ ] Replace the inline per-doc extract+project body with a call to `upsert_document` per doc (passing the doc's `emits_cooccurrence` from `document_collections`). The golden co-occurrence counts on the overlapping leaf+summary fixture (Task 3) must be unchanged, and `assert_graph_equals_projection` must hold. Run full worker suite in-container. **Commit.**
 
 ---
 
