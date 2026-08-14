@@ -14,4 +14,17 @@
 # corpus: only mis-owned paths (a fresh bind mount, or a pre-existing root-owned DB) are
 # touched, and an already-correct tree costs a stat walk.
 find /data \! -user worker -exec chown worker:worker {} + 2>/dev/null || true
+
+# FAIL CLOSED. The repair above is best-effort (its errors are suppressed so transient
+# find noise doesn't abort startup), so verify the invariant it exists to guarantee: if
+# anything under /data is STILL not owned by worker, do not start the service as worker
+# on top of files it cannot write — that is exactly the readonly-database failure (#70)
+# this entrypoint prevents, and silently starting into it is worse than not starting.
+leftover=$(find /data \! -user worker -print -quit 2>/dev/null)
+if [ -n "$leftover" ]; then
+    echo "FATAL: /data still holds files not owned by 'worker' (e.g. ${leftover}); the" \
+         "ownership repair did not complete, and starting as 'worker' would recreate the" \
+         "readonly-database failure (#70). Fix the mount's ownership and restart." >&2
+    exit 1
+fi
 exec su worker -c "cd /app/orchestrator && uv run uvicorn src.main:app --host 0.0.0.0 --port 8000"
