@@ -337,9 +337,11 @@ def test_apply_merge_collapses_and_recomputes_weight(test_db):
     # loser's sources moved to survivor
     assert conn.execute("SELECT COUNT(*) FROM entity_sources WHERE entity_id='l'").fetchone()[0] == 0
     # exactly ONE active s–x edge, weight = distinct chunks where (s or l) co-occurs with x = {c1,c3} = 2
-    rows = conn.execute("SELECT weight FROM relationships WHERE type='co_occurs' AND invalid_at IS NULL "
+    rows = conn.execute("SELECT weight, source_chunk FROM relationships WHERE type='co_occurs' AND invalid_at IS NULL "
                         "AND ((from_entity='s' AND to_entity='x') OR (from_entity='x' AND to_entity='s'))").fetchall()
     assert len(rows) == 1 and rows[0][0] == 2
+    # uniform projection: the recomputed corrections-path edge carries source_chunk NULL
+    assert rows[0][1] is None
     # no active edge references the loser
     assert conn.execute("SELECT COUNT(*) FROM relationships WHERE (from_entity='l' OR to_entity='l') AND invalid_at IS NULL").fetchone()[0] == 0
     # merge_map alias set
