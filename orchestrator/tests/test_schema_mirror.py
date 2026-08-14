@@ -34,7 +34,10 @@ _MIRRORED_TABLES = ["graph_snapshot", "domain_edges", "collections",
                     # The worker WRITES judge verdicts here and the orchestrator serves
                     # them to the review UI, so a column present in one file and not the
                     # other means the judge writes somewhere the API cannot read.
-                    "normalization_review_queue"]
+                    "normalization_review_queue",
+                    # The worker's generate_commentary job WRITES here and the
+                    # orchestrator's GET /commentary reads it — same hazard.
+                    "node_commentary"]
 
 # Indexes on that surface. Table DDL alone is not enough: an index dropped from one
 # file costs nothing structurally and everything in latency, so it is exactly the kind
