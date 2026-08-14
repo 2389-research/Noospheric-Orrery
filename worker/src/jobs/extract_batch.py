@@ -2,11 +2,10 @@
 # ABOUTME: Calls the extraction model per chunk and stores entities + co-occurrence edges.
 
 import json
-import uuid
 from orrery_relay import Relay
 from ..db import get_connection, mark_graph_dirty, recompute_cooccurrence
 from ..config import get_settings
-from ..identity_filter import is_identity_noise
+from .upsert_document import extract_document_entities
 
 async def run_extract_batch(job: dict, db_path: str) -> None:
     settings = get_settings()
@@ -70,69 +69,19 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
         doc_path = (ident[0] or "") if ident else ""
         collection_name = (ident[1] or "") if ident else ""
 
-        chunk_entities: dict[str, list[str]] = {}
-
-        for chunk in chunks:
-            chunk_id, chunk_text = chunk[0], chunk[1]
-            response = await relay.complete(
-                model=settings.extraction_model, max_tokens=4096,
-                messages=[{"role": "user", "content": f"{spec}\n\nTEXT:\n{chunk_text}\n\nRespond with JSON only: {{\"entities\": [{{\"name\": \"...\", \"type\": \"...\"}}]}}"}],
-            )
-            text = response.text
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-            try:
-                parsed = json.loads(text)
-            except json.JSONDecodeError:
-                continue
-            # Past the raw JSON there is still no guarantee of shape: a flaky model
-            # can return a bare list, or a null where the object was asked for.
-            entities = parsed.get("entities", []) if isinstance(parsed, dict) else []
-            if not isinstance(entities, list):
-                entities = []
-
-            for entity in entities:
-                # Skip malformed entries rather than crashing the whole batch on one:
-                # a bare string or a name-less object would raise on .get(...)/lower(),
-                # and one bad element in one chunk would abandon every remaining doc.
-                if not isinstance(entity, dict) or not isinstance(entity.get("name"), str):
-                    continue
-                name = entity["name"].lower().strip()
-                etype = entity.get("type") if isinstance(entity.get("type"), str) else "Thing"
-                if not name:
-                    continue
-
-                # Drop file-path / self-name entities before they enter the graph.
-                # They co-occur with everything in their own document by construction,
-                # so once stored they are permanent hub nodes joining unrelated areas.
-                if is_identity_noise(name, doc_path=doc_path, collection_name=collection_name):
-                    continue
-
-                is_new = False
-                row = conn.execute("SELECT to_entity_id FROM merge_map WHERE from_name = ?", (name,)).fetchone()
-                if row:
-                    entity_id = row[0]
-                else:
-                    row = conn.execute("SELECT id FROM entities WHERE canonical_name = ? AND type = ?", (name, etype)).fetchone()
-                    if row:
-                        entity_id = row[0]
-                    else:
-                        entity_id = str(uuid.uuid4())
-                        conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES (?, ?, ?)", (entity_id, name, etype))
-                        is_new = True
-
-                extraction_pass = "domain-specific" if scope == "domain" else "general"
-                conn.execute(
-                    "INSERT INTO entity_sources (entity_id, document_id, chunk_id, extraction_pass, spec_version, job_id) VALUES (?, ?, ?, ?, ?, ?)",
-                    (entity_id, doc_id, chunk_id, extraction_pass, spec_version, job_id),
-                )
-                chunk_entities.setdefault(chunk_id, []).append(entity_id)
-
-                total_entities += 1
-                if is_new:
-                    new_entities += 1
-                else:
-                    matched_entities += 1
+        # Extraction is shared with upsert_document (spec 2026-08-14 §7): one
+        # implementation of "chunk text -> resolved entity_sources", so the batch path
+        # and the sync path cannot drift. extract_batch keeps its own chunking /
+        # classification (docs arrive already chunked + classified); only the per-chunk
+        # extraction body is the shared primitive.
+        res = await extract_document_entities(
+            conn, relay, settings, doc_id=doc_id,
+            chunks=[(c[0], c[1]) for c in chunks], spec=spec, spec_version=spec_version,
+            scope=scope, job_id=job_id, doc_path=doc_path, collection_name=collection_name)
+        chunk_entities = res["chunk_entities"]
+        total_entities += res["total"]
+        new_entities += res["new"]
+        matched_entities += res["matched"]
 
         # Co-occurrence is a pure projection of entity_sources (db.recompute_cooccurrence).
         # The helper honours `emits_cooccurrence` on BOTH endpoints: a root or group
