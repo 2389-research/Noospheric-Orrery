@@ -553,3 +553,29 @@ Two changes:
    `Next: {title}` (title is now shown above it already) — replaced with a generic "Head there when
    you're ready." The `undefined` (all-quests-done) case's line no longer repeats "All caught up"
    either, since that phrase is now the title line itself.
+
+## Revision 13 — correction (nav bar stays "Tutorial") + Lex's introduction and personality (2026-08-14)
+
+Correction to Revision 12: the nav bar's top-right entry link should stay **"✦ Tutorial"** — only
+the minimizable guide widget itself (bottom-left panel) is "Lex." Reverted `nav-bar.tsx` back to
+"✦ Tutorial"; the panel's bubble header and minimized capsule keep the "Lex" label from Revision 12,
+unchanged.
+
+### Introduction
+
+Added Lex's self-introduction as the first line of the `ingest` quest's dialogue (his first
+appearance, since ingest is always the first active quest): "Oh — a visitor! I'm Lex. A small space
+priest, humble in most things, except my thirst for human knowledge — of that I have never had
+enough." Placed *before* the functional instruction lines, so the very first thing a new user sees
+from him is who he is, not an instruction.
+
+### Personality pass on cheer lines
+
+Reworked several `CHEER_LINE` entries to read as genuine excitement about *new knowledge specifically*
+— "New knowledge! Already? I'm delighted." (ingest), "New knowledge, sorted into its own little
+constellation. Marvelous." (classify) — rather than generic completion praise ("First light! Nicely
+done.", "Constellations, forming as we speak."), per the character brief: humble, thirsty for human
+knowledge, excited specifically when new knowledge is generated (not just excited about task
+completion in general). Left `search`, `open_document`, `normalize` largely as-is — those are about
+finding/tracing/cleaning existing knowledge rather than *new* knowledge appearing, so the original
+phrasing already fit the distinction.

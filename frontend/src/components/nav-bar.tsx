@@ -54,7 +54,7 @@ export function NavBar({
         href="/tutorial"
         className="text-xs tracking-wider px-3 py-1 rounded border border-border/40 text-muted-foreground hover:text-foreground"
       >
-        ✦ Lex
+        ✦ Tutorial
       </Link>
 
       <UserMenu />

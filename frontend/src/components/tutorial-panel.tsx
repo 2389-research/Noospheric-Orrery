@@ -30,13 +30,13 @@ const QUEST_POSE: Partial<Record<QuestId, string>> = {
 const IDLE_POSE = "happy.png";
 
 const CHEER_LINE: Partial<Record<QuestId, string>> = {
-  ingest: "First light! Nicely done.",
-  visit_documents: "There it is, filed and findable.",
+  ingest: "New knowledge! Already? I'm delighted.",
+  visit_documents: "There it is, filed and findable. I do love an organized shelf.",
   open_document: "Every name traced to its source — that's the good stuff.",
-  view_orrery: "Look at it go. Your galaxy, growing.",
+  view_orrery: "Look at it go. Your galaxy, growing. I could watch this forever.",
   search: "Found it. The graph knows what you're after.",
-  classify: "Constellations, forming as we speak.",
-  simmer: "Spec refined. Sharper extraction from here on.",
+  classify: "New knowledge, sorted into its own little constellation. Marvelous.",
+  simmer: "Spec refined. Sharper extraction from here on — more knowledge, better kept.",
   normalize: "Duplicates merged. Cleaner graph, same knowledge.",
 };
 const CHEER_MS = 4500;
@@ -190,10 +190,11 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
         return {
           pose: QUEST_POSE.ingest!,
           lines: [
+            "Oh — a visitor! I'm Lex. A small space priest, humble in most things, except my thirst for human knowledge — of that I have never had enough.",
             onUpload
               ? "Drag one of these onto the ingestion box below to get started."
               : "Head to Upload, then drag one of these onto the ingestion box.",
-            "Or skip the samples and upload a document of your own.",
+            "Or skip the samples and upload a document of your own — I'm not picky about the source, only that it's new to me.",
           ],
           button: onUpload ? undefined : { label: "Go to Upload", onClick: () => router.push(`/n/${noosphereId}/upload`) },
           showSampleIcons: true,
