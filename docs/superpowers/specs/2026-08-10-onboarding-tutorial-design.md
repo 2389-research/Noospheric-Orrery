@@ -422,3 +422,15 @@ Three pieces of feedback in one pass:
    reasonable real-world "worth doing" heuristic rather than inventing a number, and is phrased as
    a suggestion ("a good point to start it... you can also just try it now"), not a hard requirement,
    since nothing in the code actually blocks running it sooner.
+
+## Revision 9 — mention own files in the "add more files" prompt too (2026-08-14)
+
+Feedback: the "want to add more files?" prompt only mentioned the sample-file drag; add a mention
+of dragging (or selecting) the user's own files too, same as the ingest quest already does.
+
+Checked `file-upload.tsx` before writing the copy: individual files can be dropped onto any of the
+three dashed boxes (Documents/Images/Any file), but the folder option
+(`or select a folder (text + images)`) is a plain button — click-only, not a drag target. Copy
+reflects that distinction rather than overclaiming folder drag support: "Same as before — drag one
+onto the ingestion box on Upload, or drop your own file into the matching section (or select a
+folder to upload)."

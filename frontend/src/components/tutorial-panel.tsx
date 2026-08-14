@@ -267,7 +267,8 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
           {showAddMorePrompt && (
             <div className="space-y-2 pt-2 border-t border-border/30">
               <p className="text-xs">
-                Want to add more files? Same as before — drag one onto the ingestion box on Upload.
+                Want to add more files? Same as before — drag one onto the ingestion box on Upload,
+                or drop your own file into the matching section (or select a folder to upload).
               </p>
               <SampleIcons onUpload={onUpload} ingestedTitles={documentTitles} />
               {!onUpload && (
