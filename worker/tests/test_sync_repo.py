@@ -62,7 +62,8 @@ async def test_repo_sync_hierarchy_and_change_detection(tmp_path, monkeypatch):
     ]
     monkeypatch.setattr(scan_source_mod, "Relay", FakeRelay)
     monkeypatch.setattr(sync_repo_mod, "make_summarize_fn", lambda relay, model: (lambda *a, **k: ""))
-    monkeypatch.setattr(sync_repo_mod, "summarize_repo", lambda root, fn, name: list(artifacts))
+    monkeypatch.setattr(sync_repo_mod, "summarize_repo_incremental",
+                        lambda root, fn, name, **kw: list(artifacts))
     monkeypatch.setattr(sync_repo_mod, "classify_document", _fake_classify)
 
     # 1. First scan -> 4 docs; roles + emits gate correct; only leaf edges.
@@ -119,13 +120,13 @@ async def test_scan_short_circuits_when_head_sha_unchanged(tmp_path, monkeypatch
     conn.commit(); conn.close()
 
     calls = {"n": 0}
-    def fake_summarize(root, fn, name):
+    def fake_summarize(root, fn, name, **kw):
         calls["n"] += 1
         return [{"repo": "r", "path": "a.py", "level": "file", "parent_path": ".", "intent": "file ALPHA BETA"}]
 
     monkeypatch.setattr(scan_source_mod, "Relay", FakeRelay)
     monkeypatch.setattr(sync_repo_mod, "make_summarize_fn", lambda relay, model: (lambda *a, **k: ""))
-    monkeypatch.setattr(sync_repo_mod, "summarize_repo", fake_summarize)
+    monkeypatch.setattr(sync_repo_mod, "summarize_repo_incremental", fake_summarize)
     monkeypatch.setattr(sync_repo_mod, "classify_document", _fake_classify)
 
     sha = {"v": "sha-1"}
@@ -159,16 +160,63 @@ async def test_non_git_source_never_short_circuits(tmp_path, monkeypatch):
     conn.commit(); conn.close()
 
     calls = {"n": 0}
-    def fake_summarize(root, fn, name):
+    def fake_summarize(root, fn, name, **kw):
         calls["n"] += 1
         return [{"repo": "r", "path": "a.py", "level": "file", "parent_path": ".", "intent": "file ALPHA BETA"}]
 
     monkeypatch.setattr(scan_source_mod, "Relay", FakeRelay)
     monkeypatch.setattr(sync_repo_mod, "make_summarize_fn", lambda relay, model: (lambda *a, **k: ""))
-    monkeypatch.setattr(sync_repo_mod, "summarize_repo", fake_summarize)
+    monkeypatch.setattr(sync_repo_mod, "summarize_repo_incremental", fake_summarize)
     monkeypatch.setattr(sync_repo_mod, "classify_document", _fake_classify)
     monkeypatch.setattr(sync_repo_mod, "_git_head_sha", lambda p: None)   # not a git repo
 
     await _scan(db)
     await _scan(db)
     assert calls["n"] == 2   # no sha -> always re-summarizes
+
+
+@pytest.mark.asyncio
+async def test_partial_reingest_skips_unchanged_files(tmp_path, monkeypatch):
+    """The payoff: a re-scan re-summarizes ONLY the file git says changed. The unchanged
+    file's summary is reused (no model call) and its doc is skipped; the changed file's
+    doc updates and its module/root refresh."""
+    repo = tmp_path / "repo"; (repo / "mod").mkdir(parents=True)
+    (repo / "mod" / "a.py").write_text("ALPHA BETA")
+    (repo / "mod" / "b.py").write_text("BETA GAMMA")
+
+    db = str(tmp_path / "t.db"); init_db(db); conn = get_connection(db)
+    conn.execute("INSERT INTO watched_sources (id, type, uri) VALUES ('src1', 'repo', ?)", (str(repo),))
+    conn.commit(); conn.close()
+
+    leaf_calls = []
+    def counting_fn(level, *, path=None, content=None, root=None, parent=None, files=None, submods=None):
+        if level == "leaf":
+            leaf_calls.append(path)
+            return f"leaf {path} :: {content}"        # content = file text -> drives entities
+        return f"{level} {path}"
+
+    sha = {"v": "sha-1"}
+    monkeypatch.setattr(scan_source_mod, "Relay", FakeRelay)
+    monkeypatch.setattr(sync_repo_mod, "make_summarize_fn", lambda relay, model: counting_fn)
+    monkeypatch.setattr(sync_repo_mod, "classify_document", _fake_classify)
+    monkeypatch.setattr(sync_repo_mod, "_git_head_sha", lambda p: sha["v"])
+    # First scan has no prior sha (full); after that, report a.py as the only change.
+    monkeypatch.setattr(sync_repo_mod, "_git_changed_files", lambda root, base: ({"mod/a.py"}, set()))
+
+    # 1. Full first pass — both leaves summarized.
+    await _scan(db)
+    assert set(leaf_calls) == {"mod/a.py", "mod/b.py"}
+
+    # 2. Edit a.py, advance HEAD, re-scan — ONLY a.py re-summarized.
+    (repo / "mod" / "a.py").write_text("GAMMA DELTA")
+    sha["v"] = "sha-2"
+    leaf_calls.clear()
+    await _scan(db)
+    assert leaf_calls == ["mod/a.py"]                  # b.py reused, not re-summarized
+
+    conn = get_connection(db)
+    a_doc = conn.execute("SELECT content, modified_at FROM documents WHERE source_path LIKE '%a.py'").fetchone()
+    b_doc = conn.execute("SELECT modified_at FROM documents WHERE source_path LIKE '%b.py'").fetchone()
+    assert "GAMMA DELTA" in a_doc["content"] and a_doc["modified_at"] is not None   # a.py updated
+    assert b_doc["modified_at"] is None                                              # b.py untouched (skipped)
+    conn.close()

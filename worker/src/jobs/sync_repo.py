@@ -18,7 +18,7 @@ import os
 import subprocess
 import uuid
 
-from orrery_codesum import summarize_repo, make_summarize_fn
+from orrery_codesum import summarize_repo_incremental, make_summarize_fn
 
 from ..classifier import classify_document
 from .upsert_document import upsert_document
@@ -26,6 +26,44 @@ from .scan_source import apply_deletions
 
 _UNCLASSIFIED = "unclassified/needs-review"
 _ROLE = {"file": "leaf", "module": "group", "repo": "root"}
+_REPO_PATH = "."   # codesum's relpath sentinel for the repo/root artifact
+
+
+def _git_changed_files(root_path: str, base_sha: str) -> tuple[set | None, set]:
+    """(changed, deleted) file relpaths between base_sha and HEAD via git. `changed` is
+    None when the diff can't be computed (→ caller does a full re-summarize)."""
+    try:
+        out = subprocess.run(["git", "-C", root_path, "diff", "--name-status", f"{base_sha}..HEAD"],
+                             capture_output=True, text=True, timeout=30)
+    except Exception:  # noqa: BLE001
+        return None, set()
+    if out.returncode != 0:
+        return None, set()
+    changed, deleted = set(), set()
+    for line in out.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        status = parts[0]
+        if status.startswith("R") and len(parts) >= 3:   # rename: old gone, new added
+            deleted.add(parts[1]); changed.add(parts[2])
+        elif status.startswith("D"):
+            deleted.add(parts[1])
+        else:                                             # A / M / C / T ...
+            changed.add(parts[1])
+    return changed, deleted
+
+
+def _build_cache(conn, source_id: str, root_path: str) -> dict:
+    """{relpath -> stored intent} for every doc this source currently owns — the prior
+    summaries the incremental traversal reuses for unchanged nodes."""
+    cache = {}
+    for r in conn.execute(
+            "SELECT source_path, content FROM documents WHERE source_id = ? AND invalid_at IS NULL",
+            (source_id,)).fetchall():
+        rel = os.path.relpath(r["source_path"], root_path)
+        cache[rel if rel != "." else _REPO_PATH] = r["content"]
+    return cache
 
 
 def _git_head_sha(root_path: str) -> str | None:
@@ -92,10 +130,27 @@ async def sync_repo(conn, relay, settings, ws, source_config, source_id) -> dict
         return {"actions": {"created": 0, "updated": 0, "skipped": 0, "conflict": 0},
                 "deleted": 0, "unchanged": True}
 
-    # codesum traversal is synchronous and issues one blocking model call per file/
-    # module/repo — run it off the event loop so the poll loop keeps ticking.
+    # Partial re-ingestion (spec §15): reuse cached summaries and re-featurize only the
+    # files git says changed since the last synced sha. changed=None (no prior sha, or a
+    # diff we can't compute) falls back to a full pass. Deleted files force their parent
+    # module/root to re-summarize (their summary still mentions the gone file).
+    cache = _build_cache(conn, source_id, root_path)
+    changed = None
+    force_modules: set[str] = set()
+    if stored_sha and head_sha:
+        changed, deleted = _git_changed_files(root_path, stored_sha)
+        for d in deleted:
+            parent = os.path.dirname(d)
+            force_modules.add(parent if parent else _REPO_PATH)
+    module_change_ratio = float(source_config.get("module_change_ratio", 0.0))
+
+    # codesum traversal is synchronous and issues one blocking model call per re-summarized
+    # node — run it off the event loop so the poll loop keeps ticking.
     summarize_fn = make_summarize_fn(relay, settings.extraction_model)
-    artifacts = await asyncio.to_thread(summarize_repo, root_path, summarize_fn, coll_path)
+    artifacts = await asyncio.to_thread(
+        summarize_repo_incremental, root_path, summarize_fn, coll_path,
+        cache=cache, changed=changed, force_modules=force_modules,
+        module_change_ratio=module_change_ratio)
 
     domain_path = await _repo_domain(conn, relay, settings, ws, source_config, source_id,
                                      coll_path, artifacts)
