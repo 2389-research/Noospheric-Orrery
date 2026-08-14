@@ -6,11 +6,34 @@
 // frontend/src/app/tutorial/page.tsx). See docs/superpowers/specs/2026-08-10-onboarding-tutorial-design.md,
 // "Revision 2 — persistent cross-page panel", "Revision 3 — Documents → Orrery handoff", and
 // "Revision 4 — add-more-files prompt after Orrery".
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useTutorialQuests } from "@/lib/hooks/use-tutorial-quests";
+import { useTutorialQuests, type Quest, type QuestId } from "@/lib/hooks/use-tutorial-quests";
 
 const SAMPLE_FILES = ["entertainment-002.txt", "politics-296.txt", "sport-056.txt"];
+
+// Reuses the same mascot art as the attract-mode screensaver (magos-overlay.tsx,
+// frontend/public/mascot/) — a different use of the same asset set, not a new character.
+const CHEER_POSE: Partial<Record<QuestId, string>> = {
+  ingest: "happy.png",
+  visit_documents: "reading.png",
+  open_document: "reading.png",
+  view_orrery: "galxy.png",
+  search: "pointing.png",
+  simmer: "thinking.png",
+  normalize: "happy.png",
+};
+const CHEER_LINE: Partial<Record<QuestId, string>> = {
+  ingest: "First light! Nicely done.",
+  visit_documents: "There it is, filed and findable.",
+  open_document: "Every name traced to its source — that's the good stuff.",
+  view_orrery: "Look at it go. Your galaxy, growing.",
+  search: "Found it. The graph knows what you're after.",
+  classify: "Constellations, forming as we speak.",
+  simmer: "Spec refined. Sharper extraction from here on.",
+  normalize: "Duplicates merged. Cleaner graph, same knowledge.",
+};
+const CHEER_MS = 4500;
 
 function enabledKey(id: string) {
   return `tutorial:${id}:enabled`;
@@ -59,6 +82,9 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
   const router = useRouter();
   const [enabled, setEnabled] = useState(false);
   const [expanded, setExpanded] = useState(true);
+  const [cheer, setCheer] = useState<Quest | null>(null);
+  const prevDoneRef = useRef<Set<QuestId> | null>(null);
+  const cheerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const {
     quests,
@@ -96,6 +122,30 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
     if (pathname.endsWith("/orrery") && documentCount > 0) markVisitedOrrery();
   }, [pathname, documentCount, markVisitedOrrery]);
 
+  // Cheer whenever a quest transitions from not-done to done — a diegetic "well done"
+  // moment reusing the same mascot art as the attract-mode screensaver (magos-overlay.tsx).
+  // prevDoneRef starts null so the very first render (which may already have some quests
+  // done, e.g. re-entering with an existing sandbox) doesn't fire a cheer for old news.
+  useEffect(() => {
+    if (!enabled) return;
+    const doneNow = new Set(quests.filter((q) => q.done).map((q) => q.id));
+    if (prevDoneRef.current) {
+      const justCompleted = quests.find((q) => q.done && !prevDoneRef.current!.has(q.id));
+      if (justCompleted) {
+        setCheer(justCompleted);
+        if (cheerTimerRef.current) clearTimeout(cheerTimerRef.current);
+        cheerTimerRef.current = setTimeout(() => setCheer(null), CHEER_MS);
+      }
+    }
+    prevDoneRef.current = doneNow;
+  }, [quests, enabled]);
+
+  useEffect(() => {
+    return () => {
+      if (cheerTimerRef.current) clearTimeout(cheerTimerRef.current);
+    };
+  }, []);
+
   if (!enabled) return null;
 
   const toggle = () => {
@@ -120,6 +170,26 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
 
   return (
     <div className="fixed bottom-4 left-4 z-50 w-72">
+      {cheer && (
+        <div
+          className="flex items-end gap-2 mb-2 animate-in fade-in slide-in-from-bottom-2"
+          role="status"
+          aria-live="polite"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={`/mascot/${CHEER_POSE[cheer.id] ?? "happy.png"}`}
+            alt=""
+            className="w-14 h-auto drop-shadow-lg"
+          />
+          <div className="rounded-lg border border-emerald-500/30 bg-card/95 backdrop-blur px-3 py-2 shadow-lg max-w-[200px]">
+            <p className="text-[10px] uppercase tracking-widest text-emerald-400/80 mb-0.5">
+              {cheer.title} ✓
+            </p>
+            <p className="text-xs">{CHEER_LINE[cheer.id] ?? "Nicely done."}</p>
+          </div>
+        </div>
+      )}
       {!expanded ? (
         <button
           onClick={toggle}

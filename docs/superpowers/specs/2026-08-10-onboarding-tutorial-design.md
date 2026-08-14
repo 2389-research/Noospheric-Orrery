@@ -434,3 +434,44 @@ three dashed boxes (Documents/Images/Any file), but the folder option
 reflects that distinction rather than overclaiming folder drag support: "Same as before — drag one
 onto the ingestion box on Upload, or drop your own file into the matching section (or select a
 folder to upload)."
+
+## Revision 10 — cheering mascot on quest completion (2026-08-14)
+
+Feedback: make the tutorial more fun — add a guide that cheers every time a task completes, reusing
+the existing mascot art from the attract-mode screensaver rather than commissioning anything new.
+
+### What was reused vs. added
+
+The mascot images at `frontend/public/mascot/` (`happy.png`, `pointing.png`, `reading.png`,
+`thinking.png`, `galxy.png`, `sad.png`, `toaster.png`) already exist and are currently only used by
+`magos-overlay.tsx` (the idle-screensaver commentary feature, gated on a backend `/api/commentary`
+endpoint that per Revision — see the earlier session note — doesn't exist yet, so that feature is
+currently silent in practice). This revision reuses the same **image assets**, not the
+`MagosOverlay` component or its backend dependency: the cheer is driven purely by client-side quest
+completion state, no API call involved, so it works regardless of whether commentary generation is
+ever built.
+
+### Completion detection (`tutorial-panel.tsx`)
+
+Added a `prevDoneRef` (a `Set<QuestId>` snapshot from the previous render) and a `useEffect`
+watching `quests` — on each change, it diffs the current done-set against the previous one, and if
+exactly one quest newly flipped from not-done to done, sets `cheer` to that quest for `CHEER_MS`
+(4.5s) before auto-clearing. `prevDoneRef.current` starts `null` specifically so the very first
+render after `enabled` becomes true does not cheer for quests that were already done before the
+panel mounted (e.g. re-entering a sandbox that already has documents) — only genuine transitions
+cheer, not "already done" state.
+
+### Per-quest pose and line
+
+`CHEER_POSE`/`CHEER_LINE` maps give each quest a matching pose (`ingest`→happy, `view_orrery`→galxy,
+`search`→pointing, `simmer`→thinking, etc.) and a short, quest-specific line ("First light! Nicely
+done.", "Look at it go. Your galaxy, growing.") rather than one generic message for everything —
+same "narrate an experience, don't just confirm an action" voice the deleted `tutorial_oboarding_fun.md`
+spec (see earlier research note) argued for, applied here without adopting that doc's larger
+mascot-narrated-onboarding architecture.
+
+### Rendered above the panel, visible even when minimized
+
+The cheer bubble renders as a sibling above the collapsible panel body (`mb-2` above the
+`{!expanded ? ... : ...}` block), so it's visible whether the panel is expanded or minimized — a
+completion that happens while the panel is collapsed still gets celebrated, not silently swallowed.
