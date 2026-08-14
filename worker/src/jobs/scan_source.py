@@ -49,6 +49,46 @@ def _soft_delete_document(conn, doc_id: str) -> None:
         recompute_cooccurrence(conn, affected)
 
 
+def apply_deletions(conn, source_id: str, seen_paths: set) -> int:
+    """Soft-delete every doc this source owns whose path is absent from the scan.
+    Shared by the vault (featurizer) and repo syncers. Returns the count deleted."""
+    owned = conn.execute(
+        "SELECT id, source_path FROM documents WHERE source_id = ? AND invalid_at IS NULL",
+        (source_id,)).fetchall()
+    deleted = 0
+    for row in owned:
+        if row["source_path"] not in seen_paths:
+            _soft_delete_document(conn, row["id"])
+            deleted += 1
+    return deleted
+
+
+async def _sync_via_featurizer(conn, relay, settings, ws, source_config, source_id) -> dict:
+    """Generic adapter loop: enumerate (source_path, title, content, emits) tuples, upsert
+    each, soft-delete the paths that vanished. Serves the vault featurizer and any
+    fixture-injected type."""
+    featurizer = _resolve_featurizer(ws["type"])
+    seen_paths: set[str] = set()
+    actions = {"created": 0, "updated": 0, "skipped": 0, "conflict": 0}
+    for source_path, title, content, emits in featurizer(ws["uri"], source_config):
+        seen_paths.add(source_path)
+        res = await upsert_document(
+            conn, relay, settings, source_path=source_path, title=title,
+            content=content, source_id=source_id, emits_cooccurrence=emits)
+        actions[res["action"]] = actions.get(res["action"], 0) + 1
+    deleted = apply_deletions(conn, source_id, seen_paths)
+    return {"actions": actions, "deleted": deleted}
+
+
+def _resolve_syncer(source_type: str):
+    """Repos have hierarchy + partial re-summarization, so they get a dedicated syncer;
+    everything else uses the generic featurizer loop."""
+    if source_type == "repo":
+        from .sync_repo import sync_repo
+        return sync_repo
+    return _sync_via_featurizer
+
+
 async def run_scan_source(job: dict, db_path: str) -> None:
     settings = get_settings()
     conn = get_connection(db_path)
@@ -66,34 +106,17 @@ async def run_scan_source(job: dict, db_path: str) -> None:
     conn.commit()
 
     try:
-        featurizer = _resolve_featurizer(ws["type"])
         source_config = json.loads(ws["config_json"]) if ws["config_json"] else {}
-
-        seen_paths: set[str] = set()
-        actions = {"created": 0, "updated": 0, "skipped": 0, "conflict": 0}
-        for source_path, title, content, emits in featurizer(ws["uri"], source_config):
-            seen_paths.add(source_path)
-            res = await upsert_document(
-                conn, relay, settings, source_path=source_path, title=title,
-                content=content, source_id=source_id, emits_cooccurrence=emits)
-            actions[res["action"]] = actions.get(res["action"], 0) + 1
-
-        # Deletion set: docs this source owns whose path is gone from the scan.
-        owned = conn.execute(
-            "SELECT id, source_path FROM documents WHERE source_id = ? AND invalid_at IS NULL",
-            (source_id,)).fetchall()
-        deleted = 0
-        for row in owned:
-            if row["source_path"] not in seen_paths:
-                _soft_delete_document(conn, row["id"])
-                deleted += 1
+        syncer = _resolve_syncer(ws["type"])
+        stats = await syncer(conn, relay, settings, ws, source_config, source_id)
 
         mark_graph_dirty(conn)
         conn.execute(
             "UPDATE watched_sources SET last_scanned_at = CURRENT_TIMESTAMP, "
             "last_status = 'ok', last_error = NULL WHERE id = ?", (source_id,))
         conn.commit()
-        print(f"[scan_source] {ws['type']} {ws['uri']}: {actions}, deleted {deleted}", flush=True)
+        print(f"[scan_source] {ws['type']} {ws['uri']}: "
+              f"{stats.get('actions')}, deleted {stats.get('deleted')}", flush=True)
     except Exception as e:  # noqa: BLE001 — record on the row, then re-raise for the job machinery
         conn.execute(
             "UPDATE watched_sources SET last_scanned_at = CURRENT_TIMESTAMP, "
