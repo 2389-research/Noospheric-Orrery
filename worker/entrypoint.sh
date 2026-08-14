@@ -10,7 +10,11 @@ find /data \! -user worker -exec chown worker:worker {} + 2>/dev/null || true
 # the same reason: a bind mount reports host uids that root cannot chown yet still lets the
 # container write, so an ownership check refuses a working configuration. Probe an actual
 # write as the worker user; a genuinely read-only mount still fails closed.
-if ! su worker -c 'touch /data/.worker_write_check 2>/dev/null && rm -f /data/.worker_write_check'; then
+#
+# mktemp with a random suffix, not a fixed marker: an exclusive unique file cannot
+# clobber a pre-existing path, and creating a NEW file is what actually tests write
+# access to the directory (touch on an existing file only tests that file's mode).
+if ! su worker -c 'p=$(mktemp /data/.worker_write_check.XXXXXX 2>/dev/null) && rm -f "$p"'; then
     echo "FATAL: the 'worker' user cannot write to /data; starting anyway would recreate" \
          "the readonly-database failure (#70). Fix the mount's permissions and restart." >&2
     exit 1
