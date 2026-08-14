@@ -157,8 +157,21 @@ async def _classify_and_assign(conn, relay, settings, doc_id, title, content) ->
 
 
 async def upsert_document(conn, relay, settings, *, source_path, title, content,
-                          source_id=None, emits_cooccurrence=True) -> dict:
+                          source_id=None, emits_cooccurrence=True,
+                          collection_id=None, role=None, parent_path=None,
+                          content_type="text", domain_path=None,
+                          classify=True, pre_chunked=False) -> dict:
     """Create / update-in-place / skip a document keyed on `source_path`.
+
+    Vault notes use the defaults (fixed-size chunks, per-doc LLM classification,
+    content_type='text', emits). Repo docs (Spec 2) pass the extras:
+      - `collection_id` + `role` ('leaf'|'group'|'root') + `parent_path` — write a
+        document_collections membership row; `emits_cooccurrence` lands on it, so the
+        projection gate excludes group/root summaries automatically.
+      - `content_type='code_intent'`, `pre_chunked=True` — a codesum summary is ONE
+        chunk, not fixed-size split.
+      - `domain_path=<repo domain>` + `classify=False` — repos classify once at the repo
+        level, not per summary doc.
 
     Returns {"action": "created"|"updated"|"skipped"|"conflict",
              "document_id": ..., "entities": <count extracted this run>}.
@@ -188,31 +201,51 @@ async def upsert_document(conn, relay, settings, *, source_path, title, content,
         conn.execute("DELETE FROM entity_sources WHERE document_id = ?", (doc_id,))
         conn.execute("DELETE FROM chunks WHERE document_id = ?", (doc_id,))
         conn.execute("DELETE FROM document_domains WHERE document_id = ?", (doc_id,))
+        conn.execute("DELETE FROM document_collections WHERE document_id = ?", (doc_id,))
         conn.execute(
-            "UPDATE documents SET title = ?, content = ?, content_hash = ?, "
+            "UPDATE documents SET title = ?, content = ?, content_hash = ?, content_type = ?, "
             "modified_at = CURRENT_TIMESTAMP, source_id = COALESCE(source_id, ?), "
             "status = 'pending' WHERE id = ?",
-            (title, content, chash, source_id, doc_id))
+            (title, content, chash, content_type, source_id, doc_id))
         action = "updated"
     else:
         doc_id = str(uuid.uuid4())
         old_entities = []
         conn.execute(
             "INSERT INTO documents (id, title, content, content_hash, source_path, source_id, "
-            "content_type, status) VALUES (?, ?, ?, ?, ?, ?, 'text', 'pending')",
-            (doc_id, title, content, chash, source_path, source_id))
+            "content_type, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
+            (doc_id, title, content, chash, source_path, source_id, content_type))
         action = "created"
 
-    # Chunk + persist.
+    # Collection membership (repo hierarchy). The emits_cooccurrence flag lands HERE, so
+    # the projection gate excludes group/root summaries at both endpoints.
+    if collection_id is not None:
+        conn.execute(
+            "INSERT OR REPLACE INTO document_collections "
+            "(document_id, collection_id, parent_path, role, emits_cooccurrence) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (doc_id, collection_id, parent_path, role, int(bool(emits_cooccurrence))))
+
+    # Chunk + persist. A pre-featurized summary (codesum) is one chunk; prose is split.
+    if pre_chunked:
+        chunk_meta = [{"chunk_index": 0, "offset": 0, "length": len(content), "text": content}]
+    else:
+        chunk_meta = chunk_text(content, settings.chunk_size)
     chunk_rows = []
-    for cm in chunk_text(content, settings.chunk_size):
+    for cm in chunk_meta:
         cid = str(uuid.uuid4())
         conn.execute(
             "INSERT INTO chunks (id, document_id, chunk_index, offset, length, text) VALUES (?, ?, ?, ?, ?, ?)",
             (cid, doc_id, cm["chunk_index"], cm["offset"], cm["length"], cm["text"]))
         chunk_rows.append((cid, cm["text"]))
 
-    await _classify_and_assign(conn, relay, settings, doc_id, title, content)
+    if domain_path:
+        _ensure_domain(conn, domain_path)
+        conn.execute(
+            "INSERT OR IGNORE INTO document_domains (document_id, domain_path, is_primary, confidence) "
+            "VALUES (?, ?, 1, 1.0)", (doc_id, domain_path))
+    elif classify:
+        await _classify_and_assign(conn, relay, settings, doc_id, title, content)
 
     spec, spec_version = _load_general_spec(conn)
     res = await extract_document_entities(
