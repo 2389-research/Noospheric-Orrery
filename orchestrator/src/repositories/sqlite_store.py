@@ -155,14 +155,6 @@ class SQLiteDocumentRepository(DocumentRepository):
 
         conn.execute("DELETE FROM entity_sources WHERE document_id = ?", (doc_id,))
 
-        # Co-occurrence edges computed from this document's chunks are stale
-        # regardless of whether the entities they connect survive.
-        conn.execute(
-            "DELETE FROM relationships WHERE source_chunk IN "
-            "(SELECT id FROM chunks WHERE document_id = ?)",
-            (doc_id,),
-        )
-
         entities_removed = []
         for entity_id in affected_entity_ids:
             remaining = conn.execute(
@@ -177,6 +169,16 @@ class SQLiteDocumentRepository(DocumentRepository):
                     (entity_id, entity_id),
                 )
                 entities_removed.append(entity_id)
+
+        # Co-occurrence is a projection of entity_sources: the doc's rows are gone, so
+        # rebuild the edges for the entities that SURVIVED (removed ones already had all
+        # their edges dropped above). The old source_chunk-keyed DELETE is now a no-op —
+        # projected rows carry source_chunk=NULL — so this recompute is what retracts the
+        # deleted doc's contribution and de-inflates shared-pair weights.
+        from ..db import recompute_cooccurrence
+        survivors = [e for e in affected_entity_ids if e not in entities_removed]
+        if survivors:
+            recompute_cooccurrence(conn, survivors)
 
         affected_domains = [
             r["domain_path"] for r in conn.execute(
