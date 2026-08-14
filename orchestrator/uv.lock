@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform != 'darwin'",
@@ -899,7 +899,7 @@ requires-dist = [
     { name = "faiss-cpu", specifier = ">=1.7.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
-    { name = "mcp", specifier = ">=1.0.0,<2" },
+    { name = "mcp", specifier = ">=1.0.0" },
     { name = "numpy", specifier = ">=1.26.0,<2.1" },
     { name = "orrery-relay", directory = "../packages/orrery-relay" },
     { name = "pillow", specifier = ">=10.0.0" },
