@@ -201,12 +201,24 @@ derived rows retracted:
 
 ## 9. Co-occurrence recompute — decision (b), one invariant across all paths
 
-**Invariant:** every `relationships` row of `type='co_occurs'` is a **pure projection of
-`entity_sources`** — *no ingestion path writes co-occurrence rows directly; the recompute is
-their sole writer.* This is what makes update/delete clean, and it is why the orchestrator upload
-path's direct co-occurrence write (`upsert_cooccurrence` in `sqlite_store.py`) is **replaced** by
-a recompute call (§3). Two writers with different representations double-count once a global
-recompute runs — the blocking flaw this design must not ship with.
+**Invariant:** every valid `relationships` row of `type='co_occurs'` is a **pure projection of
+`entity_sources`** — *no ingestion or document-mutation path writes co-occurrence rows directly;
+the recompute helper is their sole writer.* Three existing writers must be converted to call it
+(this is the complete list — a missed one leaves stale, weight-inflated edges):
+- the orchestrator **upload** path's `upsert_cooccurrence` (`sqlite_store.py`) → recompute over
+  the uploaded doc's entities;
+- `extract_batch`'s aggregated `weight += n` write → via `upsert_document` (§7);
+- the interactive **document-delete** retraction in `SQLiteDocumentRepository.delete()`
+  (`sqlite_store.py:160-164`), which today deletes edges by `source_chunk IN (chunks of doc)`.
+  Once projected rows carry `source_chunk = NULL` that predicate becomes a **no-op**, leaving
+  inflated edges for every surviving entity the doc touched — so `delete()` must instead drop the
+  doc's `entity_sources`, collect `affected_entities`, and call the recompute (the §8 shape).
+
+The **corrections** path (`apply_merge` / `rollback_merge`, `graph_repair.py`) also writes
+`co_occurs` rows; those are *sanctioned* corrections-path writers producing pair/weight-equivalent
+rows and stay — but they should emit `source_chunk = NULL` too, so every row is uniformly
+projected. The double-count arises whenever two writers use different representations under a
+global recompute — the blocking flaw this design must not ship with.
 
 Two entities co-occur when they share a `chunk_id` (`entity_sources` carries
 `entity_id, document_id, chunk_id`). Recompute for a set `A` of affected entities:
@@ -220,19 +232,25 @@ Two entities co-occur when they share a `chunk_id` (`entity_sources` carries
    `invalid_at IS NULL` preserves human-invalidated edges (a corrections decision is never
    revived). No `source_chunk` scoping is needed: under the invariant there is **no** second
    representation to protect — all valid `co_occurs` rows are projected and safe to rebuild.
-2. **Re-derive** from `entity_sources` over active (non-invalid) entities and insert one row per
-   pair:
+2. **Re-derive** from `entity_sources`, restricted to **active (non-invalid) entities**, and
+   insert one row per pair:
    ```sql
    SELECT s1.entity_id AS a, s2.entity_id AS b, COUNT(DISTINCT s1.chunk_id) AS w
    FROM entity_sources s1
    JOIN entity_sources s2
      ON s1.chunk_id = s2.chunk_id AND s1.entity_id < s2.entity_id
+   JOIN entities e1 ON e1.id = s1.entity_id AND e1.invalid_at IS NULL
+   JOIN entities e2 ON e2.id = s2.entity_id AND e2.invalid_at IS NULL
    WHERE (s1.entity_id IN (A) OR s2.entity_id IN (A))
    GROUP BY a, b;
    ```
-   Skip any pair that already has a surviving *invalidated* `co_occurs` row (don't insert a valid
-   duplicate beside a human-invalidated edge). Documents with `emits_cooccurrence = False`
-   contribute no `entity_sources` in the sync path, so they never enter the projection.
+   The `entities … invalid_at IS NULL` joins are required (a soft-deleted entity keeps its
+   `entity_sources` rows, so without them it would still project edges); this matches the
+   established recompute in `apply_merge` (`graph_repair.py:292-295`). Skip any pair that already
+   has a surviving *invalidated* `co_occurs` row — the skip lookup must **normalize endpoint
+   order** (check both `(a,b)` and `(b,a)`), since an invalidated row from `apply_merge` may be
+   stored unordered. Documents with `emits_cooccurrence = False` contribute no `entity_sources` in
+   the sync path, so they never enter the projection.
 
 **Where the helper lives.** The recompute is pure SQL against a connection, called by both the
 worker (`upsert_document`) and the orchestrator (upload route). Like `db.py`, it is mirrored in
@@ -295,7 +313,10 @@ content-hash-dedup script.
   `idx_documents_source_path`; the upload route's co-occurrence now equals the projection (assert
   an interactive upload's edges match a from-scratch projection of `entity_sources`); the recompute
   helper's mirror test (byte-identical in both services); the `invalid_at` read-site sweep
-  (§5) — a soft-deleted doc must not appear in the documents list, reader, graph build, or search.
+  (§5) — a soft-deleted doc must not appear in the documents list, reader, graph build, or search;
+  **interactive `DELETE /documents/{id}` leaves the graph equal to a from-scratch projection**
+  (guards the `source_chunk` no-op regression — critical because the worker suite, which the rest
+  of this flow relies on, is not in CI, so this orchestrator test is the automated backstop).
 - **Worker (docker `uv run`, per CLAUDE.md):** `upsert_document` create/update/delete paths;
   **projection invariant** — after any create/update/delete, every valid `co_occurs` row is
   reproducible by a full from-scratch projection of `entity_sources`, and no valid row coexists
