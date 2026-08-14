@@ -15,16 +15,24 @@
 # touched, and an already-correct tree costs a stat walk.
 find /data \! -user worker -exec chown worker:worker {} + 2>/dev/null || true
 
-# FAIL CLOSED. The repair above is best-effort (its errors are suppressed so transient
-# find noise doesn't abort startup), so verify the invariant it exists to guarantee: if
-# anything under /data is STILL not owned by worker, do not start the service as worker
-# on top of files it cannot write — that is exactly the readonly-database failure (#70)
-# this entrypoint prevents, and silently starting into it is worse than not starting.
-leftover=$(find /data \! -user worker -print -quit 2>/dev/null)
-if [ -n "$leftover" ]; then
-    echo "FATAL: /data still holds files not owned by 'worker' (e.g. ${leftover}); the" \
-         "ownership repair did not complete, and starting as 'worker' would recreate the" \
-         "readonly-database failure (#70). Fix the mount's ownership and restart." >&2
+# FAIL CLOSED on the REAL invariant — can the `worker` user actually WRITE to /data? —
+# not on ownership. Ownership is the wrong test: a bind mount (Colima/virtiofs, and Linux
+# hosts where ./data belongs to another uid) reports host uids that root cannot even
+# chown, yet still grants the container write access. An ownership check therefore refuses
+# a configuration that works — it broke `docker compose up` on the default ./data mount.
+# A write probe is precisely what #70 is about ("can the service write its databases"),
+# and it is correct on every filesystem: chown-repaired volumes pass, remapped bind mounts
+# pass, and a genuinely read-only mount still fails closed.
+#
+# mktemp with a random suffix, not a fixed marker: an exclusive unique file cannot clobber
+# a pre-existing path, and creating a NEW file is what actually tests write access to the
+# directory (touch on an existing file only tests that file's mode).
+# Sweep first: a SIGKILL in the tiny window between mktemp and rm would leave a probe file
+# behind, so clear any from a previous crash (the pattern is ours alone).
+rm -f /data/.worker_write_check.* 2>/dev/null || true
+if ! su worker -c 'p=$(mktemp /data/.worker_write_check.XXXXXX 2>/dev/null) && rm -f "$p"'; then
+    echo "FATAL: the 'worker' user cannot write to /data; starting anyway would recreate" \
+         "the readonly-database failure (#70). Fix the mount's permissions and restart." >&2
     exit 1
 fi
 exec su worker -c "cd /app/orchestrator && uv run uvicorn src.main:app --host 0.0.0.0 --port 8000"
