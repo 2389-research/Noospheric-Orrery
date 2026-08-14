@@ -318,11 +318,13 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
                   minimize
                 </button>
               </div>
-              <p className={`text-xs font-medium ${cheering ? "text-emerald-400" : "text-foreground"}`}>
-                {cheering
-                  ? `${quests.find((q) => q.id === cheerQuestId)?.title} ✓`
-                  : activeQuest?.title ?? "All caught up"}
-              </p>
+              {(cheering || introAcknowledged || activeQuest?.id !== "ingest") && (
+                <p className={`text-xs font-medium ${cheering ? "text-emerald-400" : "text-foreground"}`}>
+                  {cheering
+                    ? `${quests.find((q) => q.id === cheerQuestId)?.title} ✓`
+                    : activeQuest?.title ?? "All caught up"}
+                </p>
+              )}
               {displayLines.map((line, i) => (
                 <p key={i} className={`text-xs ${i > 0 ? "text-muted-foreground" : ""}`}>
                   {line}

@@ -602,3 +602,18 @@ the previously-existing drag/upload instructions and sample icons.
 `acknowledgeIntro()` when the button is clicked. This means the intro only ever shows once per
 sandbox — re-entering the same workspace after clicking "yes" (e.g. after a page refresh) goes
 straight to the instructions, not back through the greeting.
+
+## Revision 15 — quest title leaking into the intro (2026-08-14)
+
+Bug: the bubble's quest-title line (added in Revision 12, sits above the dialogue paragraphs)
+rendered unconditionally from `activeQuest?.title` — during Revision 14's not-yet-acknowledged
+intro state, `activeQuest` is still `ingest`, so "Ingest a document" appeared above Lex's greeting
+even though the greeting is deliberately not about that quest yet.
+
+**Fix**: wrapped the title line in a condition — `cheering || introAcknowledged || activeQuest?.id
+!== "ingest"` — so it's suppressed specifically during the pre-acknowledgment intro state and shows
+normally in every other case (cheering, the ingest quest's real instructions once acknowledged, and
+every other quest, which never had this problem since only `ingest` branches on
+`introAcknowledged`). Left the minimized capsule's `Lex · {title}` text unchanged — that's a
+persistent status summary, not the intro screen itself, and showing the eventual quest name there
+while collapsed isn't the same leak.
