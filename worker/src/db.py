@@ -193,6 +193,20 @@ CREATE TABLE IF NOT EXISTS specs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     media_type TEXT DEFAULT 'text'
 );
+-- Pre-generated Magos Lex screensaver commentary, one row per node: three in-voice
+-- lines (description / omnissiah / humor), each carrying a mascot pose. Written offline
+-- by the generate_commentary worker job and read by GET /commentary + the attract-mode
+-- overlay. Additive and fail-silent: a node with no row simply shows no commentary.
+CREATE TABLE IF NOT EXISTS node_commentary (
+    node_type TEXT,
+    node_id TEXT,
+    comments_json TEXT,
+    model TEXT,
+    source_hash TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (node_type, node_id)
+);
+
 -- ── Graph read-model foundations ────────────────────────────────────────────
 -- Nothing reads these yet; they land ahead of the read layer so the schema and
 -- the code that uses it move in separate, revertible steps.
