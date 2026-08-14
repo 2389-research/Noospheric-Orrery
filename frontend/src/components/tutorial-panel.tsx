@@ -47,6 +47,9 @@ function enabledKey(id: string) {
 function expandedKey(id: string) {
   return `tutorial:${id}:panelExpanded`;
 }
+function introKey(id: string) {
+  return `tutorial:${id}:introAcknowledged`;
+}
 
 // A document detail route looks like /n/{id}/documents/{docId} — one segment past the
 // plain Documents list route, which is what "opened a document" means here.
@@ -95,6 +98,7 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
   const router = useRouter();
   const [enabled, setEnabled] = useState(false);
   const [expanded, setExpanded] = useState(true);
+  const [introAcknowledged, setIntroAcknowledged] = useState(false);
   const [cheerQuestId, setCheerQuestId] = useState<QuestId | null>(null);
   const prevDoneRef = useRef<Set<QuestId> | null>(null);
   const cheerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -112,7 +116,13 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
     setEnabled(localStorage.getItem(enabledKey(noosphereId)) === "1");
     const saved = localStorage.getItem(expandedKey(noosphereId));
     if (saved !== null) setExpanded(saved === "1");
+    setIntroAcknowledged(localStorage.getItem(introKey(noosphereId)) === "1");
   }, [noosphereId]);
+
+  const acknowledgeIntro = () => {
+    localStorage.setItem(introKey(noosphereId), "1");
+    setIntroAcknowledged(true);
+  };
 
   // Mark "visited Documents" the instant the user lands on the list with ≥1 document —
   // does NOT navigate anywhere or hide the list, just records the visit.
@@ -187,10 +197,19 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
   const guidance: Guidance = (() => {
     switch (activeQuest?.id) {
       case "ingest":
+        if (!introAcknowledged) {
+          return {
+            pose: IDLE_POSE,
+            lines: [
+              "I'm Lex — a humble space priest, endlessly thirsty for human knowledge.",
+              "Ready to help me build some?",
+            ],
+            button: { label: "Yes, let's build knowledge!", onClick: acknowledgeIntro },
+          };
+        }
         return {
           pose: QUEST_POSE.ingest!,
           lines: [
-            "Oh — a visitor! I'm Lex. A small space priest, humble in most things, except my thirst for human knowledge — of that I have never had enough.",
             onUpload
               ? "Drag one of these onto the ingestion box below to get started."
               : "Head to Upload, then drag one of these onto the ingestion box.",

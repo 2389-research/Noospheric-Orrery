@@ -579,3 +579,26 @@ knowledge, excited specifically when new knowledge is generated (not just excite
 completion in general). Left `search`, `open_document`, `normalize` largely as-is — those are about
 finding/tracing/cleaning existing knowledge rather than *new* knowledge appearing, so the original
 phrasing already fit the distinction.
+
+## Revision 14 — shorter intro, gated behind an explicit "yes" (2026-08-14)
+
+Feedback: Revision 13's introduction was too long and just stated facts about Lex with no
+interaction — it should instead ask the user if they're ready to build knowledge, and the user
+should have to say yes.
+
+### Shortened, and now a real prompt-and-response
+
+Cut the introduction from three sentences of backstory to two short lines: "I'm Lex — a humble
+space priest, endlessly thirsty for human knowledge." / "Ready to help me build some?" The ingest
+quest's `switch` case now branches on a new `introAcknowledged` flag: while unacknowledged, the
+bubble shows only those two lines plus a single button, **"Yes, let's build knowledge!"** — no
+instructions, no sample icons yet. Only after that button is clicked does the case fall through to
+the previously-existing drag/upload instructions and sample icons.
+
+### Persisted like every other tutorial flag
+
+`introAcknowledged` follows the same pattern as `enabled`/`panelExpanded`: a per-workspace
+`localStorage` key (`tutorial:{id}:introAcknowledged`), read once on mount, set by
+`acknowledgeIntro()` when the button is clicked. This means the intro only ever shows once per
+sandbox — re-entering the same workspace after clicking "yes" (e.g. after a page refresh) goes
+straight to the instructions, not back through the greeting.
