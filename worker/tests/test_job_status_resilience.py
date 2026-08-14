@@ -90,6 +90,32 @@ def test_record_terminal_state_writes_completion_normally(tmp_path):
     assert status == "completed"
 
 
+def test_record_terminal_state_does_not_raise_a_non_lock_error_into_the_loop(tmp_path, monkeypatch):
+    """A non-lock write failure (disk full, malformed image) must be named and swallowed
+    HERE, not re-raised into the generic poll handler where a finished job's lost outcome
+    reads as an unrelated hiccup — the exact behaviour this function exists to prevent."""
+    import sqlite3
+
+    import src.main as m
+    db_path = str(tmp_path / "t.db")
+    init_db(db_path)
+    conn = get_connection(db_path)
+    jid = _job(conn, "running")
+    conn.close()
+
+    def _boom(*a, **k):
+        raise sqlite3.OperationalError("database or disk is full")
+    monkeypatch.setattr(m, "mark_job_completed", _boom)
+
+    result = m._record_terminal_state(db_path, jid, completed=True, attempts=5)
+    assert result is False, "a non-lock error should return False, not raise"
+
+    conn = get_connection(db_path)
+    status = conn.execute("SELECT status FROM jobs WHERE id = ?", (jid,)).fetchone()[0]
+    conn.close()
+    assert status == "running", "left the row for the reconciler, as intended"
+
+
 def test_record_terminal_state_gives_up_cleanly_when_the_db_stays_locked(tmp_path, monkeypatch):
     """It must NOT raise into the poll loop, and must leave the row 'running' for the
     reconciler — not half-written, not silently dropped."""

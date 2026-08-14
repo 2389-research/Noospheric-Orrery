@@ -30,6 +30,7 @@ def _record_terminal_state(db_path: str, job_id: str, *, completed: bool,
     unusable). If it still cannot be written, it is announced as CRITICAL and named —
     not swallowed — and the startup reconciler will settle the row on the next restart.
     """
+    what = "completion" if completed else "failure"
     for attempt in range(attempts):
         conn = None
         try:
@@ -40,13 +41,22 @@ def _record_terminal_state(db_path: str, job_id: str, *, completed: bool,
                 mark_job_failed(conn, job_id, error)
             return True
         except sqlite3.OperationalError as e:
-            if "locked" not in str(e).lower() and "busy" not in str(e).lower():
-                raise
-            time.sleep(0.2 * (attempt + 1))
+            msg = str(e).lower()
+            if "locked" in msg or "busy" in msg:
+                time.sleep(0.2 * (attempt + 1))
+                continue
+            # A non-lock write error (disk full, malformed image) will not be helped by
+            # retrying, and must NOT fall through to the generic poll handler — where a
+            # finished job's lost outcome reads as an unrelated hiccup, the exact thing
+            # this function exists to prevent. Name it and stop; the reconciler settles
+            # the row on the next restart.
+            print(f"CRITICAL: recording {what} of job {job_id} hit a non-retryable "
+                  f"database error: {e}; the row is left 'running' for the startup "
+                  f"reconciler", flush=True)
+            return False
         finally:
             if conn is not None:
                 conn.close()
-    what = "completion" if completed else "failure"
     print(f"CRITICAL: could not record {what} of job {job_id} after {attempts} "
           f"attempts (database stayed locked); the row is left 'running' and will be "
           f"reconciled on the next worker restart", flush=True)
@@ -131,22 +141,43 @@ async def poll_loop():
 
     # Recover jobs orphaned by a previous worker before entering the loop. A 'running'
     # job at startup cannot be resumed (its process is gone), so it would otherwise sit
-    # 'running' forever — including the one this fix's own failure mode already
-    # stranded. Runs on every workspace; a locked DB here is skipped, not fatal.
+    # 'running' forever — including the one this fix's own failure mode already stranded.
+    #
+    # This runs ONLY here, at startup — deliberately NOT inside the loop, where
+    # reset_orphaned_jobs would fail a job the worker is actively running. That makes the
+    # pass a single chance per workspace, so a transient lock must not cause a permanent
+    # skip: retry on a locked/busy database rather than strand the orphan until the next
+    # restart. (Rare now that the migration no longer holds a startup-length lock, #67.)
     for db_path in _find_workspace_dbs(settings.db_path):
-        conn = None
-        try:
-            init_db(db_path)
-            conn = get_connection(db_path)
-            n = reset_orphaned_jobs(conn)
-            if n:
-                print(f"reconciled {n} orphaned running job(s) in "
-                      f"{Path(db_path).parent.name}", flush=True)
-        except Exception as e:
-            print(f"orphan reconcile skipped for {db_path}: {e}", flush=True)
-        finally:
-            if conn is not None:
-                conn.close()
+        for attempt in range(6):
+            conn = None
+            try:
+                init_db(db_path)
+                conn = get_connection(db_path)
+                n = reset_orphaned_jobs(conn)
+                if n:
+                    print(f"reconciled {n} orphaned running job(s) in "
+                          f"{Path(db_path).parent.name}", flush=True)
+                break
+            except sqlite3.OperationalError as e:
+                if "locked" not in str(e).lower() and "busy" not in str(e).lower():
+                    print(f"orphan reconcile skipped for {db_path}: {e}", flush=True)
+                    break
+                time.sleep(0.3 * (attempt + 1))
+            except Exception as e:
+                print(f"orphan reconcile skipped for {db_path}: {e}", flush=True)
+                break
+            finally:
+                if conn is not None:
+                    conn.close()
+        else:
+            # Retries exhausted with the database still locked. Say so loudly: an
+            # orphaned 'running' job here stays stranded until the next restart, since
+            # the reconcile cannot safely re-run once the loop may be running jobs.
+            print(f"WARNING: could not reconcile orphaned jobs in "
+                  f"{Path(db_path).parent.name} — database stayed locked through "
+                  f"retries; a stranded 'running' job there needs another restart to "
+                  f"settle", flush=True)
 
     while True:
         # Scan all workspace DBs for queued jobs
@@ -154,38 +185,47 @@ async def poll_loop():
         did_work = False   # did a REAL job run this pass? (this gates the idle judge)
 
         for db_path in db_paths:
+            # Claim phase: pick a job and mark it running, in a connection that is ALWAYS
+            # released — including when mark_job_running itself loses a lock race, which
+            # would otherwise skip the close and leak the connection. `did_work` is set
+            # only after a job is actually claimed, so a failed claim doesn't suppress the
+            # idle judge for nothing.
+            job = None
             try:
                 init_db(db_path)
                 conn = get_connection(db_path)
-                job = pick_next_job(conn)
-
-                if job:
-                    did_work = True
-                    ws_name = Path(db_path).parent.name
-                    print(f"Picked up job {job['id']} ({job['type']}) in workspace {ws_name}", flush=True)
-                    mark_job_running(conn, job["id"])
-                    conn.close()
-
-                    # Run the job, THEN record its outcome as a separate, retried step.
-                    # Keeping the two apart is the whole point: a lock while recording
-                    # the result must not be mistaken for the job failing, and must not
-                    # be able to leave the row 'running' silently.
-                    error = None
-                    try:
-                        await handle_job(job, db_path)
-                    except Exception as e:
-                        error = traceback.format_exc()
-                        print(f"Job {job['id']} failed: {e}", flush=True)
-
-                    if error is None:
-                        if _record_terminal_state(db_path, job["id"], completed=True):
-                            print(f"Job {job['id']} completed", flush=True)
-                    else:
-                        _record_terminal_state(db_path, job["id"], completed=False, error=error)
-                else:
+                try:
+                    job = pick_next_job(conn)
+                    if job:
+                        ws_name = Path(db_path).parent.name
+                        print(f"Picked up job {job['id']} ({job['type']}) in workspace {ws_name}", flush=True)
+                        mark_job_running(conn, job["id"])
+                finally:
                     conn.close()
             except Exception as e:
+                # Could not claim here (e.g. the running-write lost a lock race). The job,
+                # if one was found, stays 'queued' and is retried next pass — self-healing.
                 print(f"Error polling {db_path}: {e}", flush=True)
+                continue
+
+            if job:
+                did_work = True
+                # Run the job, THEN record its outcome as a separate, retried step.
+                # Keeping the two apart is the whole point: a lock while recording the
+                # result must not be mistaken for the job failing, and must not be able
+                # to leave the row 'running' silently.
+                error = None
+                try:
+                    await handle_job(job, db_path)
+                except Exception as e:
+                    error = traceback.format_exc()
+                    print(f"Job {job['id']} failed: {e}", flush=True)
+
+                if error is None:
+                    if _record_terminal_state(db_path, job["id"], completed=True):
+                        print(f"Job {job['id']} completed", flush=True)
+                else:
+                    _record_terminal_state(db_path, job["id"], completed=False, error=error)
 
         now = time.monotonic()
         if now - last_sweep >= settings.judge_sweep_interval_seconds:
