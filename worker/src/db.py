@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import time
+import uuid
 from pathlib import Path
 
 SCHEMA = """
@@ -733,3 +734,61 @@ def mark_graph_dirty(conn) -> None:
     yet. Cheap enough to call unconditionally.
     """
     conn.execute("UPDATE graph_snapshot SET dirty = 1 WHERE id = 'current'")
+
+
+def recompute_cooccurrence(conn, affected_entity_ids):
+    """Rebuild the co_occurs edges touching any of `affected_entity_ids` as a PURE
+    PROJECTION of entity_sources (spec 2026-08-14 incremental-source-sync 9). This is
+    the SOLE writer of co_occurs rows. Two entities co-occur when they share a chunk;
+    weight = number of shared chunks. A document whose document_collections membership
+    sets emits_cooccurrence = 0 (a repo/tracker rollup or module summary that mentions
+    everything beneath it) contributes NO edges — a doc outside any collection has no
+    row and emits by default, matching the write gate in extract_batch. Human-invalidated
+    edges (invalid_at NOT NULL) are preserved and never revived. Caller commits.
+    """
+    if not affected_entity_ids:
+        return
+    ids = list(dict.fromkeys(affected_entity_ids))
+    ph = ",".join("?" * len(ids))
+    # 1. Drop the VALID projected rows we're about to rebuild (keep invalidated ones).
+    conn.execute(
+        f"DELETE FROM relationships WHERE type='co_occurs' AND invalid_at IS NULL "
+        f"AND (from_entity IN ({ph}) OR to_entity IN ({ph}))",
+        ids + ids,
+    )
+    # 2. Re-derive from entity_sources over ACTIVE entities and EMITTING documents only.
+    #    The emits_cooccurrence gate is honoured on BOTH endpoints: a summary document
+    #    mentions everything under it, so ignoring the flag reinstates exactly the
+    #    hub-node noise the column was added to remove (see get_collection_routes).
+    rows = conn.execute(
+        f"""
+        SELECT s1.entity_id AS a, s2.entity_id AS b, COUNT(DISTINCT s1.chunk_id) AS w
+        FROM entity_sources s1
+        JOIN entity_sources s2
+          ON s1.chunk_id = s2.chunk_id AND s1.entity_id < s2.entity_id
+        JOIN entities e1 ON e1.id = s1.entity_id AND e1.invalid_at IS NULL
+        JOIN entities e2 ON e2.id = s2.entity_id AND e2.invalid_at IS NULL
+        WHERE s1.chunk_id IS NOT NULL
+          AND COALESCE((SELECT MAX(emits_cooccurrence) FROM document_collections
+                        WHERE document_id = s1.document_id), 1) = 1
+          AND COALESCE((SELECT MAX(emits_cooccurrence) FROM document_collections
+                        WHERE document_id = s2.document_id), 1) = 1
+          AND (s1.entity_id IN ({ph}) OR s2.entity_id IN ({ph}))
+        GROUP BY a, b
+        """,
+        ids + ids,
+    ).fetchall()
+    for r in rows:
+        a, b, w = r["a"], r["b"], r["w"]
+        # Skip if a human-invalidated edge exists for this pair (either endpoint order).
+        if conn.execute(
+            "SELECT 1 FROM relationships WHERE type='co_occurs' AND invalid_at IS NOT NULL "
+            "AND ((from_entity=? AND to_entity=?) OR (from_entity=? AND to_entity=?)) LIMIT 1",
+            (a, b, b, a),
+        ).fetchone():
+            continue
+        conn.execute(
+            "INSERT INTO relationships (id, from_entity, to_entity, type, weight, source_chunk) "
+            "VALUES (?, ?, ?, 'co_occurs', ?, NULL)",
+            (str(uuid.uuid4()), a, b, w),
+        )

@@ -158,3 +158,22 @@ def test_the_mirror_check_can_actually_fail():
     assert _index_ddl(_ORCH.read_text(), "idx_no_such_index") is None
     assert _table_ddl(_ORCH.read_text(), "collections") is not None
     assert _index_ddl(_ORCH.read_text(), "idx_document_collections_collection") is not None
+
+
+def _fn_source(path, name):
+    """Extract a top-level function's source text (def line through the last indented
+    line before the next top-level statement or EOF)."""
+    text = path.read_text()
+    m = re.search(rf"\ndef {name}\(.*?(?=\n\S|\Z)", text, re.S)
+    return m.group(0) if m else None
+
+
+def test_recompute_cooccurrence_is_mirrored():
+    """recompute_cooccurrence is the one shared helper Spec 1 adds: the worker writes
+    co_occurs via it and the orchestrator reads them, so a one-sided edit is the same
+    hazard the schema mirror guards against. Compare the function source byte-for-byte."""
+    orch = _fn_source(_ORCH, "recompute_cooccurrence")
+    worker = _fn_source(_WORKER, "recompute_cooccurrence")
+    assert orch is not None, "recompute_cooccurrence missing from orchestrator/src/db.py"
+    assert worker is not None, "recompute_cooccurrence missing from worker/src/db.py"
+    assert orch == worker
