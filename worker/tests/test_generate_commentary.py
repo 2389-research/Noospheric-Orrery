@@ -74,3 +74,16 @@ def test_select_nodes_and_only_missing(test_db):
     assert _select_nodes(conn, "entity", 10, only_missing=True) == []
     assert [n[1] for n in _select_nodes(conn, "entity", 10, only_missing=False)] == ["e1"]
     conn.close()
+
+
+def test_select_nodes_skips_empty_domains(test_db):
+    """An empty domain (document_count=0) has no context and would spend an LLM call from
+    the bounded budget — the collection path already filters these, so domains must too."""
+    conn = get_connection(test_db)
+    conn.execute("INSERT INTO domains (id, path, parent_path, document_count) VALUES ('d0','empty/leaf','empty',0)")
+    conn.execute("INSERT INTO domains (id, path, parent_path, document_count) VALUES ('d2','has/docs','has',4)")
+    conn.commit()
+    paths = [n[1] for n in _select_nodes(conn, "domain", 10, only_missing=False)]
+    assert "empty/leaf" not in paths, "a document_count=0 domain was selected"
+    assert "has/docs" in paths
+    conn.close()

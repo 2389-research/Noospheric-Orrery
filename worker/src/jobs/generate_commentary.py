@@ -136,7 +136,10 @@ def _select_nodes(conn, node_type, limit, only_missing):
         return [("collection", r["id"], r["name"], (r["id"], r["name"]))
                 for r in conn.execute(sql, params())]
     if node_type == "domain":
-        sql = ("SELECT path, document_count FROM domains WHERE 1=1"
+        # document_count > 0, mirroring the collection path: an empty domain has no
+        # context ("classified here: 0 / entities: none") and would spend an LLM call
+        # from the bounded per-type budget on a node the viz is unlikely to feature.
+        sql = ("SELECT path, document_count FROM domains WHERE document_count > 0"
                + _missing_clause(only_missing, "domains.path")
                + " ORDER BY document_count DESC LIMIT ?")
         return [("domain", r["path"], r["path"], (r["path"], r["document_count"]))
@@ -230,12 +233,23 @@ async def run_generate_commentary(job: dict, db_path: str) -> None:
                     logger.warning("generate_commentary: %s %s produced no usable comments", nt, node_id)
                     continue
                 src_hash = hashlib.sha256((model + "\n" + ctx).encode("utf-8")).hexdigest()
-                conn.execute(
-                    "INSERT OR REPLACE INTO node_commentary "
-                    "(node_type, node_id, comments_json, model, source_hash, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
-                    (nt, node_id, json.dumps(comments, ensure_ascii=False), model, src_hash))
-                conn.commit()
+                try:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO node_commentary "
+                        "(node_type, node_id, comments_json, model, source_hash, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                        (nt, node_id, json.dumps(comments, ensure_ascii=False), model, src_hash))
+                    conn.commit()
+                except Exception as e:
+                    # Persisting is fail-silent-per-node too. A transient write lock here
+                    # would otherwise propagate and abandon every node still in the loop —
+                    # unlike a context/LLM error above, which only skips its own node. Roll
+                    # back so the shared connection stays usable, count it, and move on;
+                    # only_missing=True picks it up on a re-run.
+                    conn.rollback()
+                    failed += 1
+                    logger.warning("generate_commentary: %s %s persist failed: %s", nt, node_id, e)
+                    continue
                 made += 1
 
         logger.info("generate_commentary done: made=%d skipped=%d failed=%d (model=%s)",

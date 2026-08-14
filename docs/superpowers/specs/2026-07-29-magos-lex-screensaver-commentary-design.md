@@ -1,8 +1,14 @@
 # Magos Lex screensaver commentary — Design
 
-**Status:** Proposed (prompt + render validated by spike 2026-07-29; spec-reviewed against the codebase 2026-07-29)
+**Status:** Implemented (backend ported to main by PR #77; the frontend overlay shipped earlier)
 **Date:** 2026-07-29
 **Related:** [ADR-0002](../../adr/0002-graph-as-index-over-code.md) (the graph is a navigational index); `frontend/public/viz/index.html` (attract mode); `frontend/public/mascot/*.png` (Magos artwork)
+
+> **Terminology note (post-rename):** this design was written before the `repos` →
+> `collections` rename. Where it says **`repo`** / **`repos.id`** / `node_types: [… "repo"]`,
+> the shipped code uses **`collection`** / `collections.id` / `["domain", "collection"]`.
+> A repo is one *kind* of collection. Copy request bodies from the code, not from the
+> historical examples below.
 
 ---
 
@@ -81,7 +87,7 @@ New job type `generate_commentary` in `worker/src/main.py:handle_job`, handler
 `worker/src/jobs/generate_commentary.py`. Job `config` (JSON):
 
 ```json
-{ "node_types": ["domain","repo"], "limit": 50, "only_missing": true, "model": null }
+{ "node_types": ["domain","collection"], "limit": 50, "only_missing": true, "model": null }
 ```
 (Entities, when scoped in, are always selected top-N by mention — no separate flag.)
 
@@ -207,7 +213,7 @@ Assets are the app's own `frontend/public/mascot/*.png` — no new assets.
 
 1. Deploy the schema + job + endpoints + `<MagosOverlay>` to Spark (standard deploy).
 2. `POST /commentary/backfill` against Spark's orchestrator with a scoped `config`
-   (start small: `{node_types:["domain","repo"], limit:20}`), then widen to entities with
+   (start small: `{node_types:["domain","collection"], limit:20}`), then widen to entities with
    a `top_by_mention` cap.
 3. Spark's worker drains the job against Spark's DB using its configured backend
    (Haiku if bedrock; gemma if ollama present).
