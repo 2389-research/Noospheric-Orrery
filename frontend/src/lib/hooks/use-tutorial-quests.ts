@@ -146,7 +146,11 @@ export function useTutorialQuests(noosphereId: string) {
       id: "add_more_files",
       title: "Add more files",
       lore: "More sources, more constellations.",
-      done: documentCount > 1,
+      // Deliberately never "done" — this is a standing invitation, not a one-time checkbox.
+      // Whenever the user comes back, more files are still worth adding. See design spec
+      // "Revision 8": the previous documentCount > 1 threshold made this disappear after the
+      // second file, which is the opposite of what an always-available option should do.
+      done: false,
       optional: true,
     },
     {

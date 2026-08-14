@@ -379,3 +379,46 @@ Sample set is now `entertainment-002.txt`, `politics-296.txt`, `sport-056.txt` �
 sample remains, so the taxonomy-mismatch point from the original "Sample Data" section (one anchored
 domain vs. invented ones) is worth re-checking next time domains are examined; entertainment/politics/
 sport may now all land as invented topics with nothing anchoring to an existing top-level domain.
+
+## Revision 8 — no search example, mention custom uploads, add_more_files never "completes" (2026-08-14)
+
+Three pieces of feedback in one pass:
+
+1. **Search quest: no example keyword.** Removed the `birmingham` suggestion entirely (was hardcoded
+   in `tutorial-panel.tsx`'s `search` card copy) — now "Try the search bar for a keyword from one of
+   the documents you ingested," with no specific word named. The standalone `/tutorial` page's search
+   quest never had a hardcoded example, so no change needed there.
+2. **Ingest quest: mention uploading your own file.** Both the panel's `ingest` card and the
+   standalone `/tutorial` page's ingest card now explicitly say the sample files are optional — the
+   panel adds "Or skip the samples and upload a document of your own," and the `/tutorial` page adds
+   a line linking to the real Upload page for the same purpose (that page ingests samples through its
+   own API calls rather than the real dropzone, so "upload your own" there means going to the real
+   page, not a new drop target inline).
+3. **`add_more_files` should never mark itself done.** Previously `done: documentCount > 1` — so the
+   panel's "want to add more files?" nudge disappeared for good after the second file was ingested.
+   That's backwards: this is meant to be a standing, always-available option ("whenever you are back
+   you can always add more files"), not a one-time checkbox. Changed to `done: false` unconditionally
+   in `use-tutorial-quests.ts`, and simplified the panel's `showAddMorePrompt` condition to just
+   `viewOrrery.done` (it no longer needs to check `!addMoreFiles.done`, since that's now always true).
+   The quest still renders with an empty `○` in the Optional section forever — that's intentional, not
+   a bug; there is no "done" state for this one to reach.
+
+4. **Simmer quest: 20-file tip, pointed at the real button.** The panel's `simmer` state fell through
+   to the generic "Next: Run a simmer" line — no dedicated card, and no explanation of when
+   simmering is actually worth doing. Added a proper `simmer` card in `tutorial-panel.tsx` that names
+   the real button ("Click **simmer general spec** below") and links to the real Pipeline page
+   (`pipeline/page.tsx`'s own `triggerGeneralSimmer` button — the panel does not add a new trigger,
+   just points at the existing one), plus a tip: "simmering works best with more to learn from —
+   around 20 documents is a good point to start it. You can also just try it now on what you have."
+   Same tip text added to the standalone `/tutorial` page's own simmer card (which does have its own
+   "Run simmer" button, calling the same `triggerGeneralSimmer` API).
+
+   **Where the 20 comes from**: `orchestrator/src/config.py`'s `domain_spec_threshold = 20` — the
+   real, already-in-use threshold that auto-queues *domain*-specific simmering once a domain hits 20
+   documents (`ingest.py`). There is no enforced minimum for the *general* spec's simmer button
+   itself — `general_spec_threshold = 10` exists in the same config file but, as of this revision, is
+   not referenced anywhere in `orchestrator/src/routes/` or `worker/src/jobs/` (confirmed by grep) —
+   it's unused/dead config, not an enforced gate. The tip borrows the domain threshold's number as a
+   reasonable real-world "worth doing" heuristic rather than inventing a number, and is phrased as
+   a suggestion ("a good point to start it... you can also just try it now"), not a hard requirement,
+   since nothing in the code actually blocks running it sooner.

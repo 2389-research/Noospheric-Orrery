@@ -302,6 +302,13 @@ export default function TutorialPage() {
             >
               {loadingSamples ? "Loading..." : "Or load all at once"}
             </button>
+            <p className="text-xs text-muted-foreground">
+              Prefer your own content? Head to{" "}
+              <Link href={`/n/${noosphereId}/upload`} className="underline">
+                Upload
+              </Link>{" "}
+              and drop in a document of your own instead.
+            </p>
 
             {lastIngested && (
               <div className="text-xs text-muted-foreground pt-2 border-t border-border/30 space-y-1">
@@ -362,6 +369,10 @@ export default function TutorialPage() {
         {activeQuest?.id === "simmer" && (
           <QuestCard title="Part 1 — Run a simmer">
             <p className="text-sm">Refine the extraction spec against your sandbox&apos;s documents.</p>
+            <p className="text-xs text-muted-foreground">
+              Tip: simmering works best with more to learn from — around 20 documents is a good
+              point to start it. Click the button below to try it now on what you have.
+            </p>
             <div className="flex gap-2">
               <button
                 className="text-xs px-3 py-1.5 rounded border border-border/50 hover:bg-accent/40 disabled:opacity-40"

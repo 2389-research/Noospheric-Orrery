@@ -113,8 +113,10 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
   const onDocumentsList = pathname.endsWith("/documents");
 
   // Once the user has seen the Orrery, offer "add more files?" as a standing, non-blocking
-  // nudge — separate from the required-quest flow below, until they've added a second file.
-  const showAddMorePrompt = viewOrrery?.done && addMoreFiles && !addMoreFiles.done;
+  // nudge — separate from the required-quest flow below. addMoreFiles.done is always false
+  // (see use-tutorial-quests.ts), so this stays available indefinitely, not just until a
+  // second file shows up — the point is you can always come back and add more.
+  const showAddMorePrompt = viewOrrery?.done && !!addMoreFiles;
 
   return (
     <div className="fixed bottom-4 left-4 z-50 w-72">
@@ -144,6 +146,9 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
                   : "Head to Upload, then drag one of these onto the ingestion box."}
               </p>
               <SampleIcons onUpload={onUpload} ingestedTitles={documentTitles} />
+              <p className="text-xs text-muted-foreground">
+                Or skip the samples and upload a document of your own.
+              </p>
               {!onUpload && (
                 <button
                   className="text-xs px-2 py-1 rounded border border-border/40 hover:bg-accent/40"
@@ -207,8 +212,8 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
             <div className="space-y-2">
               <p className="text-xs">
                 {pathname.endsWith("/orrery")
-                  ? <>Try the search bar for a keyword — e.g. <code>birmingham</code>.</>
-                  : <>Back in Orrery, try the search bar for a keyword — e.g. <code>birmingham</code>.</>}
+                  ? "Try the search bar for a keyword from one of the documents you ingested."
+                  : "Back in Orrery, try the search bar for a keyword from one of the documents you ingested."}
               </p>
               {!pathname.endsWith("/orrery") && (
                 <button
@@ -221,8 +226,32 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
             </div>
           )}
 
+          {activeQuest?.id === "simmer" && (
+            <div className="space-y-2">
+              <p className="text-xs">
+                {pathname.endsWith("/pipeline")
+                  ? <>Click <strong>simmer general spec</strong> below to refine extraction.</>
+                  : <>Head to Pipeline and click <strong>simmer general spec</strong> to refine extraction.</>}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Tip: simmering works best with more to learn from — around 20 documents is a good
+                point to start it. You can also just try it now on what you have.
+              </p>
+              {!pathname.endsWith("/pipeline") && (
+                <button
+                  className="text-xs px-2 py-1 rounded border border-border/40 hover:bg-accent/40"
+                  onClick={() => router.push(`/n/${noosphereId}/pipeline`)}
+                >
+                  Go to Pipeline
+                </button>
+              )}
+            </div>
+          )}
+
           {activeQuest &&
-            !["ingest", "visit_documents", "open_document", "view_orrery", "search"].includes(activeQuest.id) && (
+            !["ingest", "visit_documents", "open_document", "view_orrery", "search", "simmer"].includes(
+              activeQuest.id,
+            ) && (
               <p className="text-xs text-muted-foreground">
                 Next: <span className="text-foreground">{activeQuest.title}</span>
               </p>
