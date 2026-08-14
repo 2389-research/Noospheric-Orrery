@@ -83,6 +83,39 @@ merging the two *extraction* stacks remains future work (§12).
 Nothing moves to read-time or to the frontend. The frontloaded-and-cached architecture is
 preserved; only the layer-2 *update mechanism* changes.
 
+### Invariant core vs. pluggable featurizer
+
+Orthogonal to the three layers is the pipeline's one seam:
+
+```
+SOURCE ─[ featurize ]→ DOCUMENTS ──→ [ INVARIANT CORE ] ──→ graph
+                       (title, content,    persist · chunk · classify ·
+                        source_path,        extract entities · normalize ·
+                        role, emits_coocc)  co-occur (projection) · snapshot
+```
+
+Everything right of **DOCUMENTS** is invariant — `upsert_document` + the §9 projection + change
+detection + snapshot, identical for every source. The only per-source-type code is the
+**featurizer**: `source → iterator[document]`. Orrery already runs two shapes of it — repos
+explode into a *hierarchy* of summary docs (codesum: leaf/group/root, only leaves emit
+co-occurrence); notes/uploads map to a single doc. A featurizer that yields 200 docs just calls
+`upsert_document` 200 times; the core is document-granular and cardinality-agnostic.
+
+Deliberately **not** built: any plugin framework. A featurizer is a plain function with three call
+sites (upload, vault, repo); no registry/abstraction until there is a fourth (YAGNI).
+
+### Two levels of change detection
+
+Separating these is what avoids wasted model cost:
+1. **Source-level (inside the featurizer):** which raw inputs changed → what to re-featurize.
+   Repo: `git diff` re-summarizes only changed leaves (short-circuit *before* the LLM call).
+   Vault: note mtime/hash. This is the Spec 2 partial-reingest logic.
+2. **Document-level (in the core):** given a produced doc, did its content change → create /
+   update / skip (§6). The cheap safety net that catches "re-featurized but output identical."
+
+For a vault the two nearly coincide; for a repo they diverge — exactly why Spec 2 layers its own
+source-level diffing on top of the shared core.
+
 ## 5. Schema changes
 
 All new tables/columns read by one service and written by the other **must be mirrored
@@ -300,6 +333,18 @@ Enumerate the vault: `rglob('*')` filtered by `config_json.ext` (default `.md`),
 files. For each: `source_path` = path as the worker sees it (staged under the data mount),
 `title` = file stem, `content` = file text. `emits_cooccurrence = True` (flat leaves, no
 hierarchy). Everything else is the shared spine.
+
+**Document model — unchanged from today (decided).** A note maps to **one document**, split into
+the current **fixed-size** chunks. Chunks stay purely the **extraction + search** unit (small
+models extract entities per chunk; chunks carry embeddings), and **domains are classified at the
+document level** (`document_domains`) — a note is treated as one concept in one place. Two things
+are explicitly **deferred**, both clean later changes behind the same seam with no schema or
+identity impact:
+- *Sections-as-documents* (per-section domains + identity) — costs N× classification per note for
+  a granularity prose rarely needs; codesum already proves the pattern for code when it's wanted.
+- *Smarter / user-configurable chunking* (heading-aware, per-source overrides) — the fixed-size
+  chunker is retained for Spec 1; a `segment strategy` swap can come later, optionally
+  user-specified.
 
 This supersedes the fork's standalone `scripts/vault-run/ingest_vault.py`: the resumable
 per-note commit behavior is preserved (it falls out of `upsert_document` committing per doc), but
