@@ -34,6 +34,19 @@ def _to_dict(row) -> dict:
     return d
 
 
+def _enqueue_scan(store, source_id: str) -> dict:
+    """Enqueue a scan_source job for a source (idempotent: skip if one is already
+    queued/running). This is the ONE invocation primitive — the ingestion flow
+    (vault / repo / any future type) is resolved by the source's `type` in the worker,
+    so the trigger stays type-agnostic and new flows plug in behind it unchanged."""
+    existing = store.jobs.get_existing("scan_source", source_id, ["queued", "running"])
+    if existing:
+        return {"source_id": source_id, "job_id": existing.id, "status": "already_pending"}
+    job_id = str(uuid.uuid4())
+    store.jobs.create(job_id, "scan_source", source_id, {"source_id": source_id})
+    return {"source_id": source_id, "job_id": job_id, "status": "queued"}
+
+
 @router.post("/watched-sources")
 def create_watched_source(body: WatchedSourceCreate, auth: AuthStore = Depends(get_auth_store)):
     store = auth.store
@@ -57,6 +70,39 @@ def list_watched_sources(auth: AuthStore = Depends(get_auth_store)):
         "SELECT * FROM watched_sources ORDER BY created_at DESC").fetchall()
     store.close()
     return [_to_dict(r) for r in rows]
+
+
+@router.post("/watched-sources/scan-due")
+def scan_due_sources(force: bool = False, auth: AuthStore = Depends(get_auth_store)):
+    """Enqueue a scan for every enabled source whose cadence is due (force=true → all
+    enabled, ignoring cadence). This is the same selection the worker's timer sweep uses,
+    exposed so a cron job (or a single endpoint call) can drive ingestion on ANY external
+    schedule — the invocation surface is independent of how often the worker's own timer
+    ticks. Idempotent per source."""
+    store = auth.store
+    if force:
+        rows = store.conn.execute("SELECT id FROM watched_sources WHERE enabled = 1").fetchall()
+    else:
+        rows = store.conn.execute(
+            "SELECT id FROM watched_sources WHERE enabled = 1 AND "
+            "(last_scanned_at IS NULL OR "
+            " (julianday('now') - julianday(last_scanned_at)) * 24 >= cadence_hours)").fetchall()
+    triggered = [_enqueue_scan(store, r["id"]) for r in rows]
+    store.close()
+    return {"triggered": triggered}
+
+
+@router.post("/watched-sources/{source_id}/scan")
+def scan_watched_source(source_id: str, auth: AuthStore = Depends(get_auth_store)):
+    """Enqueue a scan for one source now, regardless of cadence. Type-agnostic: the
+    worker resolves the ingestion flow from the source's `type`."""
+    store = auth.store
+    if not store.conn.execute("SELECT 1 FROM watched_sources WHERE id = ?", (source_id,)).fetchone():
+        store.close()
+        raise HTTPException(status_code=404, detail="watched source not found")
+    result = _enqueue_scan(store, source_id)
+    store.close()
+    return result
 
 
 @router.patch("/watched-sources/{source_id}")
