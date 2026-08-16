@@ -15,7 +15,10 @@ CREATE TABLE IF NOT EXISTS documents (
     content_type TEXT DEFAULT 'text',
     thumbnail_path TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    status TEXT DEFAULT 'pending'
+    status TEXT DEFAULT 'pending',
+    modified_at TIMESTAMP,
+    invalid_at TIMESTAMP,
+    source_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash);
 
