@@ -30,3 +30,16 @@ def test_soft_deleted_document_hidden_from_routes(test_client, test_store):
 
     assert test_client.get("/documents/gone").status_code == 404
     assert test_client.get("/documents/keep").status_code == 200
+
+
+def test_get_by_hash_and_title_exclude_soft_deleted(test_store):
+    """The dedup gates (get_by_hash / title_exists) must not match soft-deleted docs,
+    or a re-upload of soft-deleted content returns an invalid id that reads then hide."""
+    store = test_store
+    store.documents.create("d1", "MyTitle", "body", "hash-x", "/a.md")
+    assert store.documents.get_by_hash("hash-x") is not None
+    assert store.documents.title_exists("MyTitle") is True
+    store.conn.execute("UPDATE documents SET invalid_at = CURRENT_TIMESTAMP WHERE id = 'd1'")
+    store.conn.commit()
+    assert store.documents.get_by_hash("hash-x") is None
+    assert store.documents.title_exists("MyTitle") is False

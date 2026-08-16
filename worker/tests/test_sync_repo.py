@@ -220,3 +220,36 @@ async def test_partial_reingest_skips_unchanged_files(tmp_path, monkeypatch):
     assert "GAMMA DELTA" in a_doc["content"] and a_doc["modified_at"] is not None   # a.py updated
     assert b_doc["modified_at"] is None                                              # b.py untouched (skipped)
     conn.close()
+
+
+@pytest.mark.asyncio
+async def test_two_repos_with_same_basename_get_distinct_collections(tmp_path, monkeypatch):
+    """Two watched repos that share a basename (e.g. two `utils` dirs) must not collide
+    into one collection — collections are keyed on the watched source."""
+    a = tmp_path / "a" / "utils"; a.mkdir(parents=True)
+    b = tmp_path / "b" / "utils"; b.mkdir(parents=True)
+    db = str(tmp_path / "t.db"); init_db(db); conn = get_connection(db)
+    conn.execute("INSERT INTO watched_sources (id, type, uri) VALUES ('s1', 'repo', ?)", (str(a),))
+    conn.execute("INSERT INTO watched_sources (id, type, uri) VALUES ('s2', 'repo', ?)", (str(b),))
+    conn.commit(); conn.close()
+
+    monkeypatch.setattr(scan_source_mod, "Relay", FakeRelay)
+    monkeypatch.setattr(sync_repo_mod, "make_summarize_fn", lambda relay, model: (lambda *a, **k: ""))
+    monkeypatch.setattr(sync_repo_mod, "summarize_repo_incremental",
+                        lambda root, fn, name, **kw: [{"repo": "utils", "path": "m.py",
+                                                       "level": "file", "parent_path": ".",
+                                                       "intent": "file ALPHA BETA"}])
+    monkeypatch.setattr(sync_repo_mod, "classify_document", _fake_classify)
+    monkeypatch.setattr(sync_repo_mod, "_git_head_sha", lambda p: None)
+
+    for sid in ("s1", "s2"):
+        job = {"id": str(uuid.uuid4()), "type": "scan_source", "target": sid,
+               "config": json.dumps({"source_id": sid})}
+        await scan_source_mod.run_scan_source(job, db)
+
+    conn = get_connection(db)
+    colls = conn.execute("SELECT id, path FROM collections").fetchall()
+    assert len(colls) == 2, [dict(r) for r in colls]
+    paths = {c["path"] for c in colls}
+    assert "utils" in paths and any(p.startswith("utils-") for p in paths)
+    conn.close()

@@ -840,10 +840,12 @@ def recompute_cooccurrence(conn, affected_entity_ids):
           ON s1.chunk_id = s2.chunk_id AND s1.entity_id < s2.entity_id
         JOIN entities e1 ON e1.id = s1.entity_id AND e1.invalid_at IS NULL
         JOIN entities e2 ON e2.id = s2.entity_id AND e2.invalid_at IS NULL
+        JOIN documents d1 ON d1.id = s1.document_id AND d1.invalid_at IS NULL
+        JOIN documents d2 ON d2.id = s2.document_id AND d2.invalid_at IS NULL
         WHERE s1.chunk_id IS NOT NULL
-          AND COALESCE((SELECT MAX(emits_cooccurrence) FROM document_collections
+          AND COALESCE((SELECT MIN(emits_cooccurrence) FROM document_collections
                         WHERE document_id = s1.document_id), 1) = 1
-          AND COALESCE((SELECT MAX(emits_cooccurrence) FROM document_collections
+          AND COALESCE((SELECT MIN(emits_cooccurrence) FROM document_collections
                         WHERE document_id = s2.document_id), 1) = 1
           AND (s1.entity_id IN ({ph}) OR s2.entity_id IN ({ph}))
         GROUP BY a, b

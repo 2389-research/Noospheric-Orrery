@@ -93,11 +93,18 @@ class SQLiteDocumentRepository(DocumentRepository):
         return result
 
     def get_by_hash(self, content_hash):
-        row = self._conn.execute("SELECT id FROM documents WHERE content_hash = ?", (content_hash,)).fetchone()
+        # Exclude soft-deleted docs: this is the interactive upload's dedup gate, and a
+        # doc a source sync soft-deleted must not suppress a fresh re-upload of the same
+        # content (it would otherwise return an invalid id that reads then hide).
+        row = self._conn.execute(
+            "SELECT id FROM documents WHERE content_hash = ? AND invalid_at IS NULL",
+            (content_hash,)).fetchone()
         return Document(id=row["id"], title="") if row else None
 
     def title_exists(self, title):
-        row = self._conn.execute("SELECT 1 FROM documents WHERE title = ? LIMIT 1", (title,)).fetchone()
+        row = self._conn.execute(
+            "SELECT 1 FROM documents WHERE title = ? AND invalid_at IS NULL LIMIT 1",
+            (title,)).fetchone()
         return row is not None
 
     def update_status(self, doc_id, status):
@@ -506,6 +513,8 @@ class SQLiteRelationshipRepository(RelationshipRepository):
             FROM entity_sources es1
             JOIN entity_sources es2 ON es1.entity_id = es2.entity_id AND es1.document_id != es2.document_id
             JOIN entities e ON e.id = es1.entity_id AND e.invalid_at IS NULL
+            JOIN documents d1 ON d1.id = es1.document_id AND d1.invalid_at IS NULL
+            JOIN documents d2 ON d2.id = es2.document_id AND d2.invalid_at IS NULL
             JOIN document_domains dd1 ON es1.document_id = dd1.document_id
             JOIN document_domains dd2 ON es2.document_id = dd2.document_id
             WHERE dd1.domain_path < dd2.domain_path

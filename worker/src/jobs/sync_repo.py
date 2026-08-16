@@ -33,8 +33,11 @@ def _git_changed_files(root_path: str, base_sha: str) -> tuple[set | None, set]:
     """(changed, deleted) file relpaths between base_sha and HEAD via git. `changed` is
     None when the diff can't be computed (→ caller does a full re-summarize)."""
     try:
-        out = subprocess.run(["git", "-C", root_path, "diff", "--name-status", f"{base_sha}..HEAD"],
-                             capture_output=True, text=True, timeout=30)
+        # --relative makes git emit paths relative to root_path, matching codesum's
+        # relpaths, even when root_path is a subdirectory of the git repo.
+        out = subprocess.run(
+            ["git", "-C", root_path, "diff", "--name-status", "--relative", f"{base_sha}..HEAD"],
+            capture_output=True, text=True, timeout=30)
     except Exception:  # noqa: BLE001
         return None, set()
     if out.returncode != 0:
@@ -77,17 +80,29 @@ def _git_head_sha(root_path: str) -> str | None:
     return out.stdout.strip() or None if out.returncode == 0 else None
 
 
-def _resolve_collection(conn, root_path: str, source_config: dict) -> tuple[str, str]:
-    """Return (collection_id, collection_path). Reuse the stored collection for this
-    source if present, else find-or-create one keyed on a stable path."""
-    coll_path = source_config.get("collection") or os.path.basename(os.path.normpath(root_path))
-    row = conn.execute("SELECT id FROM collections WHERE path = ?", (coll_path,)).fetchone()
-    if row:
-        return row["id"], coll_path
+def _resolve_collection(conn, source_id: str, root_path: str, source_config: dict) -> tuple[str, str]:
+    """Return (collection_id, collection_path). Keyed on the WATCHED SOURCE, not the
+    basename — two repos can share a basename (e.g. two `utils` dirs) and must not
+    collide into one collection. The collection id is recorded in the source's
+    config_json so later scans reuse it."""
+    stored_id = source_config.get("_collection_id")
+    if stored_id:
+        row = conn.execute("SELECT id, path FROM collections WHERE id = ?", (stored_id,)).fetchone()
+        if row:
+            return row["id"], row["path"]
+
+    base = source_config.get("collection") or os.path.basename(os.path.normpath(root_path))
+    # `collections.path` is UNIQUE; suffix with the source id if the basename is taken.
+    coll_path = base
+    if conn.execute("SELECT 1 FROM collections WHERE path = ?", (coll_path,)).fetchone():
+        coll_path = f"{base}-{source_id[:8]}"
     collection_id = str(uuid.uuid4())
     conn.execute(
         "INSERT INTO collections (id, name, path, root_path, kind) VALUES (?, ?, ?, ?, 'git_repo')",
-        (collection_id, coll_path, coll_path, root_path))
+        (collection_id, base, coll_path, root_path))
+    source_config["_collection_id"] = collection_id
+    conn.execute("UPDATE watched_sources SET config_json = ? WHERE id = ?",
+                 (json.dumps(source_config), source_id))
     conn.commit()
     return collection_id, coll_path
 
@@ -118,7 +133,7 @@ async def _repo_domain(conn, relay, settings, ws, source_config, source_id,
 
 async def sync_repo(conn, relay, settings, ws, source_config, source_id) -> dict:
     root_path = ws["uri"]
-    collection_id, coll_path = _resolve_collection(conn, root_path, source_config)
+    collection_id, coll_path = _resolve_collection(conn, source_id, root_path, source_config)
 
     # Source-level short-circuit (spec §4/§15): if HEAD hasn't moved since the last
     # successful sync, nothing changed — skip codesum entirely (zero model calls). The

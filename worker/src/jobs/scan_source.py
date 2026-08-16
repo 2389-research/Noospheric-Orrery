@@ -123,6 +123,10 @@ async def run_scan_source(job: dict, db_path: str) -> None:
         print(f"[scan_source] {ws['type']} {ws['uri']}: "
               f"{stats.get('actions')}, deleted {stats.get('deleted')}", flush=True)
     except Exception as e:  # noqa: BLE001 — record on the row, then re-raise for the job machinery
+        # Discard any partial work from the failed syncer BEFORE recording the error —
+        # upsert_document commits per doc, so a mid-doc failure leaves uncommitted writes
+        # on this connection that the status commit below would otherwise persist.
+        conn.rollback()
         conn.execute(
             "UPDATE watched_sources SET last_scanned_at = CURRENT_TIMESTAMP, "
             "last_status = 'error', last_error = ? WHERE id = ?", (str(e), source_id))

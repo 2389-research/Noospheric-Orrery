@@ -100,3 +100,30 @@ def test_non_emitting_document_contributes_no_edges_even_when_entities_overlap(t
         "SELECT from_entity, to_entity, weight FROM relationships WHERE type='co_occurs'")}
     # Only the leaf's a-b edge, weight 1 (the summary's kS chunk contributes nothing).
     assert rows == {("a", "b"): 1}
+
+
+def test_soft_deleted_document_contributes_no_edges(tmp_path):
+    """A soft-invalidated document must not project co_occurs even if its entity_sources
+    are somehow retained (defense-in-depth beyond the sync path clearing them)."""
+    db = str(tmp_path / "t.db"); init_db(db); conn = get_connection(db)
+    _mk(conn, "a", "d1", "k1"); _mk(conn, "b", "d1", "k1")
+    conn.execute("UPDATE documents SET invalid_at = CURRENT_TIMESTAMP WHERE id = 'd1'")
+    conn.commit()
+    recompute_cooccurrence(conn, ["a", "b"]); conn.commit()
+    assert conn.execute("SELECT COUNT(*) c FROM relationships WHERE type='co_occurs'").fetchone()["c"] == 0
+
+
+def test_mixed_membership_uses_min_emits_gate(tmp_path):
+    """A doc that is a leaf in one collection (emits=1) but a summary in another (emits=0)
+    must be SUPPRESSED — MIN over memberships, not MAX."""
+    db = str(tmp_path / "t.db"); init_db(db); conn = get_connection(db)
+    _mk(conn, "a", "d1", "k1"); _mk(conn, "b", "d1", "k1")
+    conn.execute("INSERT INTO collections (id,name,path,root_path) VALUES ('c1','c1','c1','/x')")
+    conn.execute("INSERT INTO collections (id,name,path,root_path) VALUES ('c2','c2','c2','/y')")
+    conn.execute("INSERT INTO document_collections (document_id,collection_id,role,emits_cooccurrence) "
+                 "VALUES ('d1','c1','leaf',1)")
+    conn.execute("INSERT INTO document_collections (document_id,collection_id,role,emits_cooccurrence) "
+                 "VALUES ('d1','c2','group',0)")
+    conn.commit()
+    recompute_cooccurrence(conn, ["a", "b"]); conn.commit()
+    assert conn.execute("SELECT COUNT(*) c FROM relationships WHERE type='co_occurs'").fetchone()["c"] == 0

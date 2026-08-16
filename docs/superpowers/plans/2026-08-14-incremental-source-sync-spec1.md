@@ -77,7 +77,7 @@
 
 Goal of the phase: every `co_occurs` row becomes a pure projection of `entity_sources`, written only by `recompute_cooccurrence`. This removes the two-representation double-count and makes retraction trivial. **No new features ship in this phase — the graph after a fresh ingest must be identical to a from-scratch projection.**
 
-> **Correctness note (why no global migration is required):** `recompute_cooccurrence` deletes *all* valid `co_occurs` rows touching the affected entities (not scoped by `source_chunk`) before rebuilding. So the first time any entity is touched, its legacy rows (aggregated or per-pair) are cleaned and rebuilt correctly — reconciliation is lazy and per-neighborhood. The Task 5 script is an *optional* immediate global pass, not a correctness gate.
+> **Migration note (a full reconcile is REQUIRED when upgrading an existing graph):** `recompute_cooccurrence` deletes *all* valid `co_occurs` rows touching the affected entities (not scoped by `source_chunk`) before rebuilding, so any neighborhood a later ingest/update/delete *touches* is reconciled correctly. But it only reconciles *touched* neighborhoods — untouched ones keep their legacy rows. The old aggregated (repo-ingest) rows already match the projection weight, but the old **upload-path per-chunk rows can double-count** against a projected row until that neighborhood is recomputed. So on a fresh workspace nothing is needed, but **upgrading an existing graph requires running the Task 5 reconcile once per workspace** (`--all-workspaces`) before the graph is trusted — it is not merely an optimization.
 
 ### Task 1: The `recompute_cooccurrence` helper (mirrored)
 
@@ -359,11 +359,11 @@ if survivors:
 
 ---
 
-### Task 5 (optional): One-time global reconciliation script
+### Task 5 (REQUIRED on upgrade): global reconciliation script
 
 **Files:** Create `scripts/reconcile_cooccurrence.py`.
 
-- [ ] **Step 1** Write a small driver: for a given `--db`, `recompute_cooccurrence(conn, [all active entity ids])`, commit, print counts. Idempotent. Document in the file header that it's optional (lazy per-neighborhood recompute already keeps correctness) and used only for an immediate global collapse of legacy rows after deploy.
+- [ ] **Step 1** Write a driver: `recompute_cooccurrence(conn, [all active entity ids])` per DB, commit, print counts. Support `--db` (one DB) and `--all-workspaces --data-dir <dir>` (every workspace, the deploy step). Idempotent. Document that it is **required once per workspace when upgrading an existing graph** (untouched legacy upload-path rows can double-count until reconciled) and unnecessary on a fresh workspace.
 - [ ] **Step 2** Manual smoke on a scratch copy of a real workspace DB; assert co_occurs count is stable on a second run.
 - [ ] **Step 3: Commit.**
 
