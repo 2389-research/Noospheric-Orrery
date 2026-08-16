@@ -139,7 +139,7 @@ async def _classify_and_assign(conn, relay, settings, doc_id, title, content) ->
             existing_taxonomy=taxonomy, model=settings.classification_model)
     except Exception as e:  # noqa: BLE001 — best-effort, logged
         print(f"[upsert_document] classify skipped ({type(e).__name__}: {e})", flush=True)
-        return
+        return []
     primary = classification.get("primary_domain")
     rows = []
     if primary:
@@ -149,11 +149,25 @@ async def _classify_and_assign(conn, relay, settings, doc_id, title, content) ->
         if sec and sec not in seen:
             seen.add(sec)
             rows.append((sec, 0, 0.0))
+    assigned = []
     for path, is_primary, conf in rows:
         _ensure_domain(conn, path)
         conn.execute(
             "INSERT OR IGNORE INTO document_domains (document_id, domain_path, is_primary, confidence) "
             "VALUES (?, ?, ?, ?)", (doc_id, path, is_primary, conf))
+        assigned.append(path)
+    return assigned
+
+
+def _recount_domains(conn, paths) -> None:
+    """Refresh the denormalized documents-per-domain count. The viz layout
+    (domain_layout.ensure_layout -> _get_domain_paths) only positions domains with
+    document_count > 0, so a stale zero leaves a domain's entities unplaceable."""
+    for p in {x for x in paths if x}:
+        conn.execute(
+            "UPDATE domains SET document_count = "
+            "(SELECT COUNT(*) FROM document_domains WHERE domain_path = ?) WHERE path = ?",
+            (p, p))
 
 
 async def upsert_document(conn, relay, settings, *, source_path, title, content,
@@ -198,6 +212,8 @@ async def upsert_document(conn, relay, settings, *, source_path, title, content,
         doc_id = ex_id
         old_entities = [r[0] for r in conn.execute(
             "SELECT DISTINCT entity_id FROM entity_sources WHERE document_id = ?", (doc_id,)).fetchall()]
+        old_domain_paths = [r[0] for r in conn.execute(
+            "SELECT domain_path FROM document_domains WHERE document_id = ?", (doc_id,)).fetchall()]
         conn.execute("DELETE FROM entity_sources WHERE document_id = ?", (doc_id,))
         conn.execute("DELETE FROM chunks WHERE document_id = ?", (doc_id,))
         conn.execute("DELETE FROM document_domains WHERE document_id = ?", (doc_id,))
@@ -211,6 +227,7 @@ async def upsert_document(conn, relay, settings, *, source_path, title, content,
     else:
         doc_id = str(uuid.uuid4())
         old_entities = []
+        old_domain_paths = []
         conn.execute(
             "INSERT INTO documents (id, title, content, content_hash, source_path, source_id, "
             "content_type, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
@@ -239,13 +256,18 @@ async def upsert_document(conn, relay, settings, *, source_path, title, content,
             (cid, doc_id, cm["chunk_index"], cm["offset"], cm["length"], cm["text"]))
         chunk_rows.append((cid, cm["text"]))
 
+    assigned_domains = []
     if domain_path:
         _ensure_domain(conn, domain_path)
         conn.execute(
             "INSERT OR IGNORE INTO document_domains (document_id, domain_path, is_primary, confidence) "
             "VALUES (?, ?, 1, 1.0)", (doc_id, domain_path))
+        assigned_domains = [domain_path]
     elif classify:
-        await _classify_and_assign(conn, relay, settings, doc_id, title, content)
+        assigned_domains = await _classify_and_assign(conn, relay, settings, doc_id, title, content)
+    # Keep the denormalized documents-per-domain count fresh — the viz layout only
+    # positions domains with document_count > 0.
+    _recount_domains(conn, set(old_domain_paths) | set(assigned_domains))
 
     spec, spec_version = _load_general_spec(conn)
     res = await extract_document_entities(

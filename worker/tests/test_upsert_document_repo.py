@@ -92,6 +92,24 @@ async def test_group_summary_emits_no_hub_edges_even_when_entities_overlap(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_domain_document_count_is_maintained(tmp_path):
+    """The viz layout only positions domains with document_count > 0, so upsert must keep
+    that denormalized count fresh across create/update."""
+    db = str(tmp_path / "t.db"); init_db(db); conn = get_connection(db)
+    conn.execute("INSERT INTO collections (id, name, path, root_path) VALUES ('c','repo','repo','/r')")
+    conn.commit()
+
+    def _count(path):
+        r = conn.execute("SELECT document_count FROM domains WHERE path=?", (path,)).fetchone()
+        return r["document_count"] if r else None
+
+    await _leaf(conn, "/r/a.py", "module ALPHA BETA")     # domain_path='code/repo'
+    assert _count("code/repo") == 1
+    await _leaf(conn, "/r/b.py", "module GAMMA")          # second doc, same domain
+    assert _count("code/repo") == 2
+
+
+@pytest.mark.asyncio
 async def test_repo_leaf_update_refreshes_membership_and_stamps_modified(tmp_path):
     db = str(tmp_path / "t.db"); init_db(db); conn = get_connection(db)
     conn.execute("INSERT INTO collections (id, name, path, root_path) VALUES ('c','repo','repo','/r')")

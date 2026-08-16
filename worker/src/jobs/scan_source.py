@@ -35,8 +35,11 @@ def _soft_delete_document(conn, doc_id: str) -> None:
     co-occurrence is recomputed for the affected neighbourhood."""
     affected = [r[0] for r in conn.execute(
         "SELECT DISTINCT entity_id FROM entity_sources WHERE document_id = ?", (doc_id,)).fetchall()]
+    domain_paths = [r[0] for r in conn.execute(
+        "SELECT domain_path FROM document_domains WHERE document_id = ?", (doc_id,)).fetchall()]
     conn.execute("DELETE FROM entity_sources WHERE document_id = ?", (doc_id,))
     conn.execute("DELETE FROM chunks WHERE document_id = ?", (doc_id,))
+    conn.execute("DELETE FROM document_domains WHERE document_id = ?", (doc_id,))
     conn.execute("UPDATE documents SET invalid_at = CURRENT_TIMESTAMP WHERE id = ?", (doc_id,))
     for eid in affected:
         remaining = conn.execute(
@@ -45,6 +48,8 @@ def _soft_delete_document(conn, doc_id: str) -> None:
             conn.execute(
                 "UPDATE entities SET invalid_at = CURRENT_TIMESTAMP WHERE id = ? AND invalid_at IS NULL",
                 (eid,))
+    from .upsert_document import _recount_domains
+    _recount_domains(conn, domain_paths)   # the deleted doc no longer counts toward its domains
     if affected:
         recompute_cooccurrence(conn, affected)
 
