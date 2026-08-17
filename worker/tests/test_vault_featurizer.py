@@ -1,4 +1,6 @@
-# ABOUTME: enumerate_vault yields one (path, title, content, emits) per non-empty note.
+# ABOUTME: enumerate_vault yields one SourceDoc per non-empty note (walk/parse/clean/hint).
+
+from pathlib import Path
 
 from src.featurizers.vault import enumerate_vault
 
@@ -10,25 +12,39 @@ def test_yields_only_nonempty_markdown(tmp_path):
     (tmp_path / "note.txt").write_text("txt content")
 
     out = list(enumerate_vault(str(tmp_path), {}))
-    assert {t for (_, t, _, _) in out} == {"a", "b"}
-    assert all(emits is True for (_, _, _, emits) in out)
-    assert str(tmp_path / "note.txt") not in {p for (p, _, _, _) in out}
-    assert str(tmp_path / "empty.md") not in {p for (p, _, _, _) in out}
+    assert {d.title for d in out} == {"a", "b"}
+    assert all(d.emits_cooccurrence is True for d in out)
+    assert str(tmp_path / "note.txt") not in {d.source_path for d in out}
+    assert str(tmp_path / "empty.md") not in {d.source_path for d in out}
 
 
 def test_ext_override(tmp_path):
     (tmp_path / "a.md").write_text("md")
     (tmp_path / "n.txt").write_text("txt")
     out = list(enumerate_vault(str(tmp_path), {"ext": ["txt"]}))
-    assert {t for (_, t, _, _) in out} == {"n"}
+    assert {d.title for d in out} == {"n"}
 
 
 def test_recurses_into_subdirs(tmp_path):
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "deep.md").write_text("deep content")
     out = list(enumerate_vault(str(tmp_path), {}))
-    assert {t for (_, t, _, _) in out} == {"deep"}
+    assert {d.title for d in out} == {"deep"}
 
 
 def test_missing_directory_yields_nothing(tmp_path):
     assert list(enumerate_vault(str(tmp_path / "does-not-exist"), {})) == []
+
+
+def test_folder_becomes_domain_hint_when_enabled(tmp_path):
+    (tmp_path / "Projects" / "Orrery").mkdir(parents=True)
+    (tmp_path / "Projects" / "Orrery" / "note.md").write_text("body text", encoding="utf-8")
+    docs = list(enumerate_vault(str(tmp_path), {"folder_domains": True}))
+    assert docs[0].domain_hint == "projects/orrery"
+
+
+def test_no_domain_hint_by_default(tmp_path):
+    (tmp_path / "Projects").mkdir()
+    (tmp_path / "Projects" / "note.md").write_text("body", encoding="utf-8")
+    docs = list(enumerate_vault(str(tmp_path), {}))
+    assert docs[0].domain_hint is None

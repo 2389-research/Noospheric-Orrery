@@ -17,6 +17,12 @@ def _iter_note_paths(root: Path, exts: set, extra_dirs):
                 yield Path(dirpath) / fn
 
 
+def _folder_domain(path: Path, root: Path) -> str | None:
+    rel = path.parent.relative_to(root)
+    parts = [p for p in rel.parts if p]     # note at vault root -> no folder domain
+    return "/".join(p.lower() for p in parts) if parts else None
+
+
 def enumerate_vault(uri: str, config: dict):
     config = config or {}
     exts = {("." + str(e).lstrip(".")).lower() for e in (config.get("ext") or [".md"])}
@@ -31,5 +37,9 @@ def enumerate_vault(uri: str, config: dict):
         if not body.strip():
             continue
         title = (meta.get("title") if isinstance(meta.get("title"), str) else None) or f.stem
+        domain_hint = None
+        if config.get("folder_domains"):
+            domain_hint = _folder_domain(f, root)
         yield SourceDoc(source_path=str(f), title=title, content=body,
-                        emits_cooccurrence=True, metadata=(meta or None))
+                        emits_cooccurrence=True, metadata=(meta or None),
+                        domain_hint=domain_hint)
