@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .base import SourceDoc
 from .ignore import should_skip_dir, should_skip_file
+from .markdown import parse_frontmatter
 
 
 def _iter_note_paths(root: Path, exts: set, extra_dirs):
@@ -25,7 +26,9 @@ def enumerate_vault(uri: str, config: dict):
         return
     for f in _iter_note_paths(root, exts, extra_dirs):
         text = f.read_text(encoding="utf-8", errors="replace")
-        if not text.strip():
+        meta, body = parse_frontmatter(text)
+        if not body.strip():
             continue
-        yield SourceDoc(source_path=str(f), title=f.stem, content=text,
-                        emits_cooccurrence=True)
+        title = (meta.get("title") if isinstance(meta.get("title"), str) else None) or f.stem
+        yield SourceDoc(source_path=str(f), title=title, content=body,
+                        emits_cooccurrence=True, metadata=(meta or None))
