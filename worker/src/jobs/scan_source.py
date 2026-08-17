@@ -11,6 +11,7 @@ import json
 from orrery_relay import Relay
 from ..db import get_connection, mark_graph_dirty, recompute_cooccurrence
 from ..config import get_settings
+from ..featurizers.base import SourceDoc
 from .upsert_document import upsert_document
 
 # Test/extension hook: a mapping of source-type -> featurizer callable. A featurizer is
@@ -75,11 +76,14 @@ async def _sync_via_featurizer(conn, relay, settings, ws, source_config, source_
     featurizer = _resolve_featurizer(ws["type"])
     seen_paths: set[str] = set()
     actions = {"created": 0, "updated": 0, "skipped": 0, "conflict": 0}
-    for source_path, title, content, emits in featurizer(ws["uri"], source_config):
-        seen_paths.add(source_path)
+    for item in featurizer(ws["uri"], source_config):
+        doc = SourceDoc.coerce(item)
+        seen_paths.add(doc.source_path)
         res = await upsert_document(
-            conn, relay, settings, source_path=source_path, title=title,
-            content=content, source_id=source_id, emits_cooccurrence=emits)
+            conn, relay, settings, source_path=doc.source_path, title=doc.title,
+            content=doc.content, source_id=source_id,
+            emits_cooccurrence=doc.emits_cooccurrence,
+            domain_path=doc.domain_hint)
         actions[res["action"]] = actions.get(res["action"], 0) + 1
     deleted = apply_deletions(conn, source_id, seen_paths)
     return {"actions": actions, "deleted": deleted}
