@@ -1,4 +1,4 @@
-from src.featurizers.markdown import parse_frontmatter
+from src.featurizers.markdown import parse_frontmatter, clean_markdown
 
 
 def test_parse_frontmatter_splits_block_and_body():
@@ -21,3 +21,17 @@ def test_parse_frontmatter_malformed_yaml_is_safe():
     meta, body = parse_frontmatter(text)
     assert meta == {}          # never raise on bad YAML
     assert body.strip() == "body"
+
+
+def test_clean_wikilinks():
+    assert clean_markdown("see [[Q3 Planning]] and [[Note|the note]]") == \
+        "see Q3 Planning and the note"
+
+
+def test_clean_wikilink_with_heading_anchor():
+    assert clean_markdown("[[Note#Section]] ref") == "Note ref"
+
+
+def test_drop_embeds_and_comments():
+    assert "image.png" not in clean_markdown("![[image.png]]")
+    assert clean_markdown("visible %%hidden note%% text") == "visible  text"

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .base import SourceDoc
 from .ignore import should_skip_dir, should_skip_file
-from .markdown import parse_frontmatter
+from .markdown import parse_frontmatter, clean_markdown
 
 
 def _iter_note_paths(root: Path, exts: set, extra_dirs):
@@ -27,6 +27,7 @@ def enumerate_vault(uri: str, config: dict):
     for f in _iter_note_paths(root, exts, extra_dirs):
         text = f.read_text(encoding="utf-8", errors="replace")
         meta, body = parse_frontmatter(text)
+        body = clean_markdown(body)
         if not body.strip():
             continue
         title = (meta.get("title") if isinstance(meta.get("title"), str) else None) or f.stem
