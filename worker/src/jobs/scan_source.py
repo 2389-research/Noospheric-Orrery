@@ -83,7 +83,7 @@ async def _sync_via_featurizer(conn, relay, settings, ws, source_config, source_
             conn, relay, settings, source_path=doc.source_path, title=doc.title,
             content=doc.content, source_id=source_id,
             emits_cooccurrence=doc.emits_cooccurrence,
-            domain_path=doc.domain_hint)
+            metadata=doc.metadata, domain_path=doc.domain_hint)
         actions[res["action"]] = actions.get(res["action"], 0) + 1
     deleted = apply_deletions(conn, source_id, seen_paths)
     return {"actions": actions, "deleted": deleted}
