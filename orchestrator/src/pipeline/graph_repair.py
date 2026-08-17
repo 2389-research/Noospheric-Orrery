@@ -284,10 +284,11 @@ def apply_merge(conn, loser_id, survivor_id, *, actor="human", reason=None,
 
     # 3. recompute survivor's co-occurrence edges over its (now combined) chunk set, active neighbors only,
     #    weight = distinct shared chunks (so a shared chunk counts once). The WEIGHT semantics match
-    #    cooccurrence.py; source_chunk here is MIN(chunk_id) rather than cooccurrence.py's
-    #    first-encountered chunk — cosmetic only, source_chunk is just a sample pointer.
+    #    the projection helper. source_chunk = NULL: under the single-representation invariant
+    #    (spec 2026-08-14 incremental-source-sync 9) every co_occurs row is uniformly a projection,
+    #    so the corrections path no longer stores a sampled chunk pointer either.
     rows = conn.execute(
-        """SELECT es.entity_id AS neighbor, COUNT(DISTINCT es.chunk_id) AS w, MIN(es.chunk_id) AS first_chunk
+        """SELECT es.entity_id AS neighbor, COUNT(DISTINCT es.chunk_id) AS w
              FROM entity_sources es
              JOIN entities e ON e.id = es.entity_id
             WHERE es.chunk_id IN (SELECT chunk_id FROM entity_sources WHERE entity_id = ?)
@@ -295,9 +296,9 @@ def apply_merge(conn, loser_id, survivor_id, *, actor="human", reason=None,
               AND e.invalid_at IS NULL
             GROUP BY es.entity_id""",
         (survivor_id, survivor_id)).fetchall()
-    for neighbor, w, first_chunk in rows:
+    for neighbor, w in rows:
         conn.execute("INSERT INTO relationships (id, from_entity, to_entity, type, weight, source_chunk) "
-                     "VALUES (?,?,?,?,?,?)", (str(uuid.uuid4()), survivor_id, neighbor, "co_occurs", w, first_chunk))
+                     "VALUES (?,?,?,?,?,NULL)", (str(uuid.uuid4()), survivor_id, neighbor, "co_occurs", w))
 
     # 4. alias for future ingest dedup
     conn.execute("INSERT OR REPLACE INTO merge_map (from_name, to_entity_id) VALUES (?, ?)", (ls[1], survivor_id))

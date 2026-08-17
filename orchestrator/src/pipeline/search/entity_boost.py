@@ -79,7 +79,7 @@ def boost_chunks_via_entities(
         else:
             # Add new chunk surfaced by entity overlap
             chunk = conn.execute(
-                "SELECT c.id, c.text, c.document_id, d.title FROM chunks c JOIN documents d ON c.document_id = d.id WHERE c.id = ?",
+                "SELECT c.id, c.text, c.document_id, d.title FROM chunks c JOIN documents d ON c.document_id = d.id WHERE c.id = ? AND d.invalid_at IS NULL",
                 (chunk_id,)
             ).fetchone()
             if chunk:

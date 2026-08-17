@@ -123,7 +123,7 @@ def _enrich_results(conn: sqlite3.Connection, results: SubQueryResults):
 
     for c in results.semantic_chunks:
         row = conn.execute(
-            "SELECT c.text, c.document_id, d.title FROM chunks c JOIN documents d ON c.document_id = d.id WHERE c.id = ?",
+            "SELECT c.text, c.document_id, d.title FROM chunks c JOIN documents d ON c.document_id = d.id WHERE c.id = ? AND d.invalid_at IS NULL",
             (c.chunk_id,)
         ).fetchone()
         if row:

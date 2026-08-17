@@ -276,3 +276,119 @@ def summarize_repo(root: str, summarize_fn, repo_name: str) -> list[dict]:
     }
 
     return [repo_artifact] + module_artifacts + file_artifacts
+
+
+def summarize_repo_incremental(
+    root: str, summarize_fn, repo_name: str, *,
+    cache: dict[str, str], changed: set[str] | None = None,
+    force_modules: set[str] | None = None, module_change_ratio: float = 0.0,
+) -> list[dict]:
+    """Change-aware `summarize_repo`: reuse cached summaries, call the model ONLY for
+    nodes that actually changed (spec §15 partial re-ingestion).
+
+    - `cache`: {relpath -> prior intent} for leaves, modules, and the root (REPO_PATH).
+      Typically the stored docs of a prior scan.
+    - `changed`: leaf relpaths known to have changed (from a git diff). None => treat
+      every leaf as changed (a full pass; used on the first scan / no prior sha).
+    - `force_modules`: module/root relpaths to re-summarize regardless (e.g. the parent
+      dirs of deleted files, whose summaries still mention the gone file).
+    - `module_change_ratio`: re-summarize a module only when the fraction of its DIRECT
+      files that changed >= this. 0.0 (default) => any changed direct file re-summarizes
+      it (always fresh); >0 trades freshness for fewer summary calls.
+
+    Dirtiness propagates by the SAME data flow summarize_repo uses: a module's evidence is
+    its direct files only, and the root's evidence is the top-level modules/files — so a
+    node is re-summarized exactly when one of its own evidence items changed. Unchanged
+    nodes carry their cached intent (byte-identical), so the caller's content_hash check
+    skips re-persisting them. Returns the full artifact list, same contract as summarize_repo.
+    """
+    force_modules = force_modules or set()
+    _prov = {"v": None}
+
+    def root_prov():
+        if _prov["v"] is None:
+            _prov["v"] = summarize_fn("root_provisional", path=REPO_PATH, content=_build_root_content(root))
+        return _prov["v"]
+
+    # --- leaves: summarize only changed / new / uncached files ---
+    leaf_intents: dict[str, str] = {}
+    leaf_dirty: dict[str, bool] = {}
+    for file_path in _all_files(root):
+        rel = _rel(file_path, root)
+        fresh = (changed is None) or (rel not in cache) or (rel in changed)
+        if fresh:
+            leaf_intents[rel] = summarize_fn("leaf", path=rel, content=_read_text_safe(file_path), root=root_prov())
+            leaf_dirty[rel] = True
+        else:
+            leaf_intents[rel] = cache[rel]
+            leaf_dirty[rel] = False
+
+    module_artifacts: list[dict] = []
+    resummarized_modules: set[str] = set()
+
+    def _do_module(directory: str, parent_summary: str | None, parent_path: str) -> None:
+        entries = _list_entries(directory)
+        files = [e for e in entries if os.path.isfile(os.path.join(directory, e))]
+        subdirs = [e for e in entries if os.path.isdir(os.path.join(directory, e))]
+        if not files:
+            for sub in subdirs:
+                _do_module(os.path.join(directory, sub), parent_summary, parent_path)
+            return
+
+        rel = _rel(directory, root)
+        file_rels = [_rel(os.path.join(directory, f), root) for f in files]
+        changed_here = [fr for fr in file_rels if leaf_dirty.get(fr)]
+        frac = len(changed_here) / max(1, len(file_rels))
+
+        must = (rel not in cache) or (rel in force_modules)
+        if must or (changed_here and frac >= module_change_ratio):
+            summary = summarize_fn("module", path=rel, root=root_prov(),
+                                   parent=parent_summary, files="\n\n".join(
+                                       f"[{f}]\n{leaf_intents[_rel(os.path.join(directory, f), root)]}" for f in files),
+                                   submods=", ".join(subdirs))
+            resummarized_modules.add(rel)
+        else:
+            summary = cache[rel]   # reuse (nothing beneath changed, or below threshold)
+
+        module_artifacts.append(
+            {"repo": repo_name, "path": rel, "level": "module",
+             "parent_path": parent_path, "intent": summary})
+        for sub in subdirs:
+            _do_module(os.path.join(directory, sub), summary, rel)
+
+    for entry in _list_entries(root):
+        full = os.path.join(root, entry)
+        if os.path.isdir(full):
+            _do_module(full, None, REPO_PATH)
+
+    file_artifacts: list[dict] = []
+    for rel, intent in leaf_intents.items():
+        directory = os.path.dirname(rel)
+        parent_path = REPO_PATH if directory == "" else directory
+        file_artifacts.append(
+            {"repo": repo_name, "path": rel, "level": "file",
+             "parent_path": parent_path, "intent": intent})
+
+    # --- root: re-derive only if a top-level child changed (or forced / uncached) ---
+    top_children = []
+    top_dirty = (REPO_PATH not in cache) or (REPO_PATH in force_modules)
+    for m in module_artifacts:
+        if m["parent_path"] == REPO_PATH:
+            top_children.append(f"[module {m['path']}/]\n{m['intent']}")
+            if m["path"] in resummarized_modules:
+                top_dirty = True
+    for f in file_artifacts:
+        if f["parent_path"] == REPO_PATH:
+            top_children.append(f"[file {f['path']}]\n{f['intent']}")
+            if leaf_dirty.get(f["path"]):
+                top_dirty = True
+
+    if top_dirty:
+        root_final = summarize_fn("root_final", path=REPO_PATH, parent=root_prov(),
+                                  files="\n\n".join(top_children))
+    else:
+        root_final = cache[REPO_PATH]
+
+    repo_artifact = {"repo": repo_name, "path": REPO_PATH, "level": "repo",
+                     "parent_path": None, "intent": root_final}
+    return [repo_artifact] + module_artifacts + file_artifacts

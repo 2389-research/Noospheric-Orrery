@@ -154,6 +154,7 @@ from .routes.image_files import router as image_files_router
 from .routes.graph_ops import router as graph_ops_router
 from .routes.corrections import router as corrections_router
 from .routes.commentary import router as commentary_router
+from .routes.watched_sources import router as watched_sources_router
 
 app.include_router(ingest_router)
 app.include_router(documents_router)
@@ -174,6 +175,7 @@ app.include_router(workspace_router)
 app.include_router(graph_ops_router)
 app.include_router(corrections_router)
 app.include_router(commentary_router)
+app.include_router(watched_sources_router)
 
 from fastapi import WebSocket as WS
 from .broadcast import ws_endpoint

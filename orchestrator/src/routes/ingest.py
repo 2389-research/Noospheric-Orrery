@@ -20,7 +20,7 @@ from ..pipeline.classifier import classify_document
 from ..pipeline.domain_normalizer import assign_document_domains
 from ..pipeline.extractor import extract_document
 from ..pipeline.normalizer import normalize_entity
-from ..pipeline.cooccurrence import compute_cooccurrence_edges
+from ..db import recompute_cooccurrence
 from ..pipeline.image_prep import is_image_file
 from ..pipeline.file_extractor import extract_text, NOTEBOOK_EXTENSIONS, PDF_EXTENSIONS, DOCX_EXTENSIONS, ALL_SUPPORTED_EXTENSIONS
 
@@ -131,12 +131,6 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
         if chunk_id:
             chunk_entities.setdefault(chunk_id, []).append(entity_id)
 
-    edges = compute_cooccurrence_edges(chunk_entities)
-    for edge in edges:
-        store.relationships.upsert_cooccurrence(
-            edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
-        )
-
     entity_count = len(entities)
     store.documents.update_status(doc_id, "extracted")
 
@@ -171,17 +165,16 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
                         chunk_entities.setdefault(chunk_id, []).append(entity_id)
                 domain_entity_count += len(d_entities)
 
-        # Recompute co-occurrence with domain entities included
-        if domain_entity_count > 0:
-            edges = compute_cooccurrence_edges(chunk_entities)
-            for edge in edges:
-                store.relationships.upsert_cooccurrence(
-                    edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
-                )
-
     if domain_entity_count > 0:
         entity_count += domain_entity_count
         store.documents.update_status(doc_id, "enriched")
+
+    # Co-occurrence is a pure projection of entity_sources (db.recompute_cooccurrence),
+    # written once over every entity this document touched — general + domain passes.
+    affected = {eid for eids in chunk_entities.values() for eid in eids}
+    if affected:
+        recompute_cooccurrence(store.conn, list(affected))
+        store.conn.commit()
 
     # 5. Queue domain simmers (general spec always available via built-in, no auto-simmer needed)
     jobs_queued = []
@@ -294,13 +287,12 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
         )
         chunk_entities.setdefault(chunk_id, []).append(entity_id)
 
-    edges = compute_cooccurrence_edges(chunk_entities)
-    for edge in edges:
-        store.relationships.upsert_cooccurrence(
-            edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
-        )
-
     entity_count = len(entities)
+    # Co-occurrence via the shared projection helper (same invariant as the text path).
+    affected = {eid for eids in chunk_entities.values() for eid in eids}
+    if affected:
+        recompute_cooccurrence(store.conn, list(affected))
+        store.conn.commit()
     store.documents.update_status(doc_id, "extracted")
 
     # Rebuild search index — text (sentence-transformers) for compatibility

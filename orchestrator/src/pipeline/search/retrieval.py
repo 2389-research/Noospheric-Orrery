@@ -89,7 +89,7 @@ def build_indexes(conn: sqlite3.Connection) -> dict:
     _entity_view = (entity_index, entity_ids)
 
     # Chunk index
-    chunks = conn.execute("SELECT id, text, embedding FROM chunks ORDER BY id").fetchall()
+    chunks = conn.execute("SELECT c.id, c.text, c.embedding FROM chunks c JOIN documents d ON c.document_id = d.id WHERE d.invalid_at IS NULL ORDER BY c.id").fetchall()
     if chunks:
         chunk_ids = [c[0] for c in chunks]
         embeddings = []

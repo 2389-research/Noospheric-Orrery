@@ -1,11 +1,47 @@
 import os
 import asyncio
+import json
 import sqlite3
 import time
 import traceback
+import uuid
 from pathlib import Path
 from .config import get_settings
 from .db import init_db, get_connection
+
+
+def enqueue_due_source_scans(db_paths) -> int:
+    """Enqueue a scan_source job for every enabled watched_source whose cadence is due.
+
+    Jobs land in the SAME workspace DB as their source (jobs + watched_sources are both
+    per-workspace, so identity is unambiguous and no cross-DB routing is needed). Skips a
+    source that already has a queued/running scan so the sweep is idempotent. Factored out
+    of the poll loop so it is unit-testable. Returns the number enqueued.
+    """
+    enqueued = 0
+    for db_path in db_paths:
+        conn = get_connection(db_path)
+        try:
+            due = conn.execute(
+                "SELECT id FROM watched_sources WHERE enabled = 1 AND "
+                "(last_scanned_at IS NULL OR "
+                " (julianday('now') - julianday(last_scanned_at)) * 24 >= cadence_hours)"
+            ).fetchall()
+            for r in due:
+                pending = conn.execute(
+                    "SELECT 1 FROM jobs WHERE type = 'scan_source' AND target = ? "
+                    "AND status IN ('queued', 'running') LIMIT 1", (r["id"],)).fetchone()
+                if pending:
+                    continue
+                conn.execute(
+                    "INSERT INTO jobs (id, type, target, status, config) "
+                    "VALUES (?, 'scan_source', ?, 'queued', ?)",
+                    (str(uuid.uuid4()), r["id"], json.dumps({"source_id": r["id"]})))
+                enqueued += 1
+            conn.commit()
+        finally:
+            conn.close()
+    return enqueued
 from .jobs.runner import (
     pick_next_job, mark_job_running, mark_job_completed, mark_job_failed,
     reset_orphaned_jobs,
@@ -103,6 +139,9 @@ async def handle_job(job: dict, db_path: str) -> None:
     elif job["type"] == "generate_commentary":
         from .jobs.generate_commentary import run_generate_commentary
         await run_generate_commentary(job, db_path)
+    elif job["type"] == "scan_source":
+        from .jobs.scan_source import run_scan_source
+        await run_scan_source(job, db_path)
     else:
         raise ValueError(f"Unknown job type: {job['type']}")
 
@@ -141,6 +180,7 @@ async def poll_loop():
     from .jobs.normalization_judge import resolve_judge_relay, run_normalization_judge_sweep
     relay = Relay.from_settings(settings)
     last_sweep = 0.0  # 0 → sweep on the first iteration
+    last_source_sweep = 0.0  # watched-source scan cadence, same first-iteration behaviour
 
     # Recover jobs orphaned by a previous worker before entering the loop. A 'running'
     # job at startup cannot be resumed (its process is gone), so it would otherwise sit
@@ -239,6 +279,18 @@ async def poll_loop():
                     print(f"judge sweep: judged {result['judged']}, {result['failed']} failed/left un-judged", flush=True)
             except Exception as e:
                 print(f"judge sweep error: {e}", flush=True)
+
+        # Watched-source scan sweep: enqueue scan_source jobs for due sources. Enqueue
+        # only — the scans run as ordinary jobs (retryable, visible in /jobs), so the
+        # loop never blocks on a scan and the job machinery serializes the work.
+        if now - last_source_sweep >= settings.source_scan_interval_seconds:
+            last_source_sweep = now
+            try:
+                n = enqueue_due_source_scans(db_paths)
+                if n:
+                    print(f"source sweep: enqueued {n} scan_source job(s)", flush=True)
+            except Exception as e:
+                print(f"source sweep error: {e}", flush=True)
 
         # Low-priority background work: drain the normalization review backlog, but ONLY
         # when no real job ran this pass. The point of the gate is resource contention —

@@ -35,7 +35,7 @@ class SQLiteDocumentRepository(DocumentRepository):
         self._conn = conn
 
     def count(self):
-        return self._conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        return self._conn.execute("SELECT COUNT(*) FROM documents WHERE invalid_at IS NULL").fetchone()[0]
 
     def create(self, id, title, content, content_hash, source_path=None, content_type="text"):
         self._conn.execute(
@@ -46,7 +46,7 @@ class SQLiteDocumentRepository(DocumentRepository):
         return id
 
     def get(self, doc_id):
-        row = self._conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        row = self._conn.execute("SELECT * FROM documents WHERE id = ? AND invalid_at IS NULL", (doc_id,)).fetchone()
         if not row:
             return None
         return Document(
@@ -69,7 +69,7 @@ class SQLiteDocumentRepository(DocumentRepository):
             batch = ids[i:i + 900]
             placeholders = ",".join("?" * len(batch))
             rows = self._conn.execute(
-                f"SELECT id, title, content_type FROM documents WHERE id IN ({placeholders})",
+                f"SELECT id, title, content_type FROM documents WHERE id IN ({placeholders}) AND invalid_at IS NULL",
                 batch,
             ).fetchall()
             for r in rows:
@@ -80,6 +80,7 @@ class SQLiteDocumentRepository(DocumentRepository):
         rows = self._conn.execute(
             "SELECT d.*, GROUP_CONCAT(dd.domain_path) as domains FROM documents d "
             "LEFT JOIN document_domains dd ON d.id = dd.document_id "
+            "WHERE d.invalid_at IS NULL "
             "GROUP BY d.id ORDER BY d.created_at DESC LIMIT ? OFFSET ?",
             (limit, offset),
         ).fetchall()
@@ -92,11 +93,18 @@ class SQLiteDocumentRepository(DocumentRepository):
         return result
 
     def get_by_hash(self, content_hash):
-        row = self._conn.execute("SELECT id FROM documents WHERE content_hash = ?", (content_hash,)).fetchone()
+        # Exclude soft-deleted docs: this is the interactive upload's dedup gate, and a
+        # doc a source sync soft-deleted must not suppress a fresh re-upload of the same
+        # content (it would otherwise return an invalid id that reads then hide).
+        row = self._conn.execute(
+            "SELECT id FROM documents WHERE content_hash = ? AND invalid_at IS NULL",
+            (content_hash,)).fetchone()
         return Document(id=row["id"], title="") if row else None
 
     def title_exists(self, title):
-        row = self._conn.execute("SELECT 1 FROM documents WHERE title = ? LIMIT 1", (title,)).fetchone()
+        row = self._conn.execute(
+            "SELECT 1 FROM documents WHERE title = ? AND invalid_at IS NULL LIMIT 1",
+            (title,)).fetchone()
         return row is not None
 
     def update_status(self, doc_id, status):
@@ -106,7 +114,7 @@ class SQLiteDocumentRepository(DocumentRepository):
     def get_for_domain(self, domain_path, status_filter=None):
         query = """SELECT d.* FROM documents d
             JOIN document_domains dd ON d.id = dd.document_id
-            WHERE dd.domain_path = ?"""
+            WHERE dd.domain_path = ? AND d.invalid_at IS NULL"""
         params = [domain_path]
         if status_filter:
             placeholders = ",".join("?" * len(status_filter))
@@ -120,6 +128,7 @@ class SQLiteDocumentRepository(DocumentRepository):
         rows = self._conn.execute(
             "SELECT d.id, d.title, d.content_type, GROUP_CONCAT(dd.domain_path) as domains "
             "FROM documents d LEFT JOIN document_domains dd ON d.id = dd.document_id "
+            "WHERE d.invalid_at IS NULL "
             "GROUP BY d.id ORDER BY d.created_at DESC LIMIT ?", (limit,)
         ).fetchall()
         result = []
@@ -155,14 +164,6 @@ class SQLiteDocumentRepository(DocumentRepository):
 
         conn.execute("DELETE FROM entity_sources WHERE document_id = ?", (doc_id,))
 
-        # Co-occurrence edges computed from this document's chunks are stale
-        # regardless of whether the entities they connect survive.
-        conn.execute(
-            "DELETE FROM relationships WHERE source_chunk IN "
-            "(SELECT id FROM chunks WHERE document_id = ?)",
-            (doc_id,),
-        )
-
         entities_removed = []
         for entity_id in affected_entity_ids:
             remaining = conn.execute(
@@ -177,6 +178,16 @@ class SQLiteDocumentRepository(DocumentRepository):
                     (entity_id, entity_id),
                 )
                 entities_removed.append(entity_id)
+
+        # Co-occurrence is a projection of entity_sources: the doc's rows are gone, so
+        # rebuild the edges for the entities that SURVIVED (removed ones already had all
+        # their edges dropped above). The old source_chunk-keyed DELETE is now a no-op —
+        # projected rows carry source_chunk=NULL — so this recompute is what retracts the
+        # deleted doc's contribution and de-inflates shared-pair weights.
+        from ..db import recompute_cooccurrence
+        survivors = [e for e in affected_entity_ids if e not in entities_removed]
+        if survivors:
+            recompute_cooccurrence(conn, survivors)
 
         affected_domains = [
             r["domain_path"] for r in conn.execute(
@@ -462,7 +473,7 @@ class SQLiteEntitySourceRepository(EntitySourceRepository):
             SELECT DISTINCT d.id, d.title
             FROM entity_sources es
             JOIN documents d ON es.document_id = d.id
-            WHERE es.entity_id = ?
+            WHERE es.entity_id = ? AND d.invalid_at IS NULL
             ORDER BY d.title
         """, (entity_id,)).fetchall()
         return [{"id": r["id"], "title": r["title"]} for r in rows]
@@ -502,6 +513,8 @@ class SQLiteRelationshipRepository(RelationshipRepository):
             FROM entity_sources es1
             JOIN entity_sources es2 ON es1.entity_id = es2.entity_id AND es1.document_id != es2.document_id
             JOIN entities e ON e.id = es1.entity_id AND e.invalid_at IS NULL
+            JOIN documents d1 ON d1.id = es1.document_id AND d1.invalid_at IS NULL
+            JOIN documents d2 ON d2.id = es2.document_id AND d2.invalid_at IS NULL
             JOIN document_domains dd1 ON es1.document_id = dd1.document_id
             JOIN document_domains dd2 ON es2.document_id = dd2.document_id
             WHERE dd1.domain_path < dd2.domain_path
@@ -521,7 +534,7 @@ class SQLiteRelationshipRepository(RelationshipRepository):
         # Documents
         doc_rows = self._conn.execute("""
             SELECT DISTINCT d.id, d.title, d.content_type FROM entity_sources es
-            JOIN documents d ON es.document_id = d.id WHERE es.entity_id = ?
+            JOIN documents d ON es.document_id = d.id WHERE es.entity_id = ? AND d.invalid_at IS NULL
             ORDER BY d.title
         """, (entity_id,)).fetchall()
         doc_ids = [r["id"] for r in doc_rows]

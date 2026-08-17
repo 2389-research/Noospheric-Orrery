@@ -112,6 +112,7 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
         FROM entity_sources es
         JOIN document_domains dd ON es.document_id = dd.document_id
         JOIN entities e ON e.id = es.entity_id AND e.invalid_at IS NULL
+        JOIN documents d ON d.id = es.document_id AND d.invalid_at IS NULL
         GROUP BY es.entity_id, dd.domain_path
     """).fetchall()
     raw: dict[str, dict[str, int]] = defaultdict(dict)
@@ -184,7 +185,7 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
                 for n in collection_nodes]
     collection_positions = _collection_positions(store, collection_boxes, domain_positions)
 
-    total_documents = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+    total_documents = conn.execute("SELECT COUNT(*) FROM documents WHERE invalid_at IS NULL").fetchone()[0]
     document_nodes = [
         {"id": d.id, "type": "document", "subtype": getattr(d, "content_type", "text"),
          "label": d.title,
