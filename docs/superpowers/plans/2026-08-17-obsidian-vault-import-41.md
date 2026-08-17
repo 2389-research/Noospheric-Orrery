@@ -141,10 +141,10 @@ Replace the loop body at `:78` (currently `for source_path, title, content, emit
             conn, relay, settings, source_path=doc.source_path, title=doc.title,
             content=doc.content, source_id=source_id,
             emits_cooccurrence=doc.emits_cooccurrence,
-            metadata=doc.metadata, domain_path=doc.domain_hint)
+            domain_path=doc.domain_hint)
         actions[res["action"]] = actions.get(res["action"], 0) + 1
 ```
-(`metadata=` lands in Task 5; `domain_path=doc.domain_hint` is already a valid param — `None` preserves today's classify behavior.)
+**Do NOT pass `metadata=` here yet** — that param does not exist on `upsert_document` until Task 5, and passing it now raises `TypeError` and breaks this task's `test_scan_source.py` verification. Task 5 adds both the param and the `metadata=doc.metadata` argument at this call site. `domain_path=doc.domain_hint` IS already a valid param (`upsert_document.py:176`) and is `None` here (SourceDoc default), so it's a no-op that preserves today's classify behavior.
 
 - [ ] **Step 5: Run tests to verify pass (and nothing regressed)**
 
@@ -374,6 +374,8 @@ _FM_RE = re.compile(r"^---\n(.*?)\n---\n?", re.DOTALL)
 
 def parse_frontmatter(text: str):
     """Return (metadata_dict, body). No frontmatter -> ({}, text). Bad YAML -> ({}, body)."""
+    text = text.replace("\r\n", "\n")   # a Windows-edited vault uses CRLF; the LF-only
+                                        # regex would otherwise miss the block and leak it
     m = _FM_RE.match(text)
     if not m:
         return {}, text
@@ -515,24 +517,28 @@ Write the parsed frontmatter into the existing `documents.metadata` column so pr
 
 **Files:**
 - Modify: `worker/src/jobs/upsert_document.py` (INSERT :231, UPDATE :221, signature :173)
+- Modify: `worker/src/jobs/scan_source.py` (add the `metadata=doc.metadata` argument deferred from Task 1)
 - Test: `worker/tests/test_upsert_metadata.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `worker/tests/test_upsert_metadata.py`. Follow the fixture style of the existing `worker/tests/test_upsert_document.py` (a `tmp_path` file DB + a fake relay). Minimal shape:
+**First check how `worker/tests/test_upsert_document.py` builds a relay + settings.** It does NOT expose pytest fixtures named `fake_relay`/`settings` — it defines a `FakeRelay` class and calls `get_settings()` directly (via its `_upsert` helper). Reuse that existing pattern; do **not** invent new fixtures. If you want the helper shared across both test modules, promote `FakeRelay`/`_upsert` into `worker/tests/conftest.py` as a **separate first commit** before writing this test (keep that refactor out of this task's feature commit).
+
+Create `worker/tests/test_upsert_metadata.py`, mirroring `test_upsert_document.py`'s construction (illustrative — match the real `FakeRelay` constructor/`_upsert` signature in that file):
 
 ```python
 import json
 import pytest
 from src.db import init_db, get_connection
+from src.config import get_settings
 from src.jobs.upsert_document import upsert_document
-# reuse whatever fake-relay + settings helpers test_upsert_document.py already defines
+from .test_upsert_document import FakeRelay   # or from tests.conftest if promoted
 
 
 @pytest.mark.asyncio
-async def test_metadata_persisted_on_create(tmp_path, fake_relay, settings):
+async def test_metadata_persisted_on_create(tmp_path):
     db = str(tmp_path / "t.db"); init_db(db); conn = get_connection(db)
-    await upsert_document(conn, fake_relay, settings, source_path="/v/a.md",
+    await upsert_document(conn, FakeRelay([]), get_settings(), source_path="/v/a.md",
                           title="a", content="body", classify=False,
                           metadata={"tags": ["x"], "title": "a"})
     row = conn.execute("SELECT metadata FROM documents WHERE source_path='/v/a.md'").fetchone()
@@ -540,17 +546,17 @@ async def test_metadata_persisted_on_create(tmp_path, fake_relay, settings):
 
 
 @pytest.mark.asyncio
-async def test_metadata_updated_in_place(tmp_path, fake_relay, settings):
+async def test_metadata_updated_in_place(tmp_path):
     db = str(tmp_path / "t.db"); init_db(db); conn = get_connection(db)
-    await upsert_document(conn, fake_relay, settings, source_path="/v/a.md",
+    await upsert_document(conn, FakeRelay([]), get_settings(), source_path="/v/a.md",
                           title="a", content="v1", classify=False, metadata={"v": 1})
-    await upsert_document(conn, fake_relay, settings, source_path="/v/a.md",
+    await upsert_document(conn, FakeRelay([]), get_settings(), source_path="/v/a.md",
                           title="a", content="v2", classify=False, metadata={"v": 2})
     row = conn.execute("SELECT metadata FROM documents WHERE source_path='/v/a.md'").fetchone()
     assert json.loads(row["metadata"])["v"] == 2
 ```
 
-If `test_upsert_document.py` does not expose reusable `fake_relay`/`settings` fixtures, promote them to `worker/tests/conftest.py` first (own commit) so both test modules share them — DRY.
+Before Task 5's implementation, this fails with `TypeError: upsert_document() got an unexpected keyword argument 'metadata'` — the intended red state.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -592,6 +598,15 @@ INSERT branch (`:231`) — add the `metadata` column + value:
             (doc_id, title, content, chash, source_path, source_id, content_type, meta_json))
 ```
 
+Finally, thread the value from the scan loop — in `worker/src/jobs/scan_source.py`, add `metadata=doc.metadata` back to the `upsert_document(...)` call that Task 1 deliberately left off:
+```python
+        res = await upsert_document(
+            conn, relay, settings, source_path=doc.source_path, title=doc.title,
+            content=doc.content, source_id=source_id,
+            emits_cooccurrence=doc.emits_cooccurrence,
+            metadata=doc.metadata, domain_path=doc.domain_hint)
+```
+
 - [ ] **Step 4: Run to verify pass (+ no regression)**
 
 ```bash
@@ -604,9 +619,10 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add worker/src/jobs/upsert_document.py worker/tests/test_upsert_metadata.py worker/tests/conftest.py
+git add worker/src/jobs/upsert_document.py worker/src/jobs/scan_source.py worker/tests/test_upsert_metadata.py
 git commit -m "feat(sync): persist document metadata (frontmatter) in upsert_document"
 ```
+(If you promoted `FakeRelay`/`_upsert` to `worker/tests/conftest.py` in Step 1, that was already its own separate commit — do not fold it in here.)
 
 ---
 
