@@ -85,7 +85,7 @@ def test_coerce_legacy_3_tuple_defaults_emit_true():
 Run (in the worker container — see CLAUDE.md Testing):
 ```bash
 docker exec -w /app/worker -e AWS_ACCESS_KEY=ci -e AWS_SECRET_KEY=ci -e AWS_REGION=us-east-1 \
-  noospheric-github-worker-1 uv run --with pytest --with pytest-asyncio \
+  noospheric-orrery-worker-1 uv run --with pytest --with pytest-asyncio \
   python -m pytest tests/test_source_doc.py -q
 ```
 Expected: FAIL — `No module named src.featurizers.base`.
@@ -150,7 +150,7 @@ Replace the loop body at `:78` (currently `for source_path, title, content, emit
 
 ```bash
 docker exec -w /app/worker -e AWS_ACCESS_KEY=ci -e AWS_SECRET_KEY=ci -e AWS_REGION=us-east-1 \
-  noospheric-github-worker-1 uv run --with pytest --with pytest-asyncio \
+  noospheric-orrery-worker-1 uv run --with pytest --with pytest-asyncio \
   python -m pytest tests/test_source_doc.py tests/test_scan_source.py -q
 ```
 Expected: PASS. (If `test_scan_source.py` injects tuple-yielding fixtures via `_FEATURIZERS`, `coerce` keeps them working — that is the point.)
@@ -206,7 +206,7 @@ def test_config_extra_dirs_skipped():
 
 ```bash
 docker exec -w /app/worker -e AWS_ACCESS_KEY=ci -e AWS_SECRET_KEY=ci -e AWS_REGION=us-east-1 \
-  noospheric-github-worker-1 uv run --with pytest python -m pytest tests/test_featurizer_ignore.py -q
+  noospheric-orrery-worker-1 uv run --with pytest python -m pytest tests/test_featurizer_ignore.py -q
 ```
 Expected: FAIL — module missing.
 
@@ -247,7 +247,7 @@ def should_skip_file(name: str, extra_suffixes=()) -> bool:
 
 ```bash
 docker exec -w /app/worker -e AWS_ACCESS_KEY=ci -e AWS_SECRET_KEY=ci -e AWS_REGION=us-east-1 \
-  noospheric-github-worker-1 uv run --with pytest python -m pytest tests/test_featurizer_ignore.py -q
+  noospheric-orrery-worker-1 uv run --with pytest python -m pytest tests/test_featurizer_ignore.py -q
 ```
 Expected: PASS.
 
@@ -354,7 +354,7 @@ def test_parse_frontmatter_malformed_yaml_is_safe():
 
 ```bash
 docker exec -w /app/worker -e AWS_ACCESS_KEY=ci -e AWS_SECRET_KEY=ci -e AWS_REGION=us-east-1 \
-  noospheric-github-worker-1 uv run --with pytest python -m pytest tests/test_featurizer_markdown.py -q
+  noospheric-orrery-worker-1 uv run --with pytest python -m pytest tests/test_featurizer_markdown.py -q
 ```
 Expected: FAIL — module missing.
 
@@ -409,7 +409,7 @@ In the loop, replace the `SourceDoc(...)` yield:
 
 ```bash
 docker exec -w /app/worker -e AWS_ACCESS_KEY=ci -e AWS_SECRET_KEY=ci -e AWS_REGION=us-east-1 \
-  noospheric-github-worker-1 uv run --with pytest python -m pytest tests/test_featurizer_markdown.py -q
+  noospheric-orrery-worker-1 uv run --with pytest python -m pytest tests/test_featurizer_markdown.py -q
 ```
 Expected: PASS.
 
@@ -455,7 +455,7 @@ def test_drop_embeds_and_comments():
 
 ```bash
 docker exec -w /app/worker -e AWS_ACCESS_KEY=ci -e AWS_SECRET_KEY=ci -e AWS_REGION=us-east-1 \
-  noospheric-github-worker-1 uv run --with pytest python -m pytest tests/test_featurizer_markdown.py -q
+  noospheric-orrery-worker-1 uv run --with pytest python -m pytest tests/test_featurizer_markdown.py -q
 ```
 Expected: FAIL — `clean_markdown` undefined.
 
@@ -498,7 +498,7 @@ from .markdown import parse_frontmatter, clean_markdown
 
 ```bash
 docker exec -w /app/worker -e AWS_ACCESS_KEY=ci -e AWS_SECRET_KEY=ci -e AWS_REGION=us-east-1 \
-  noospheric-github-worker-1 uv run --with pytest python -m pytest tests/test_featurizer_markdown.py -q
+  noospheric-orrery-worker-1 uv run --with pytest python -m pytest tests/test_featurizer_markdown.py -q
 ```
 Expected: PASS.
 
@@ -562,7 +562,7 @@ Before Task 5's implementation, this fails with `TypeError: upsert_document() go
 
 ```bash
 docker exec -w /app/worker -e AWS_ACCESS_KEY=ci -e AWS_SECRET_KEY=ci -e AWS_REGION=us-east-1 \
-  noospheric-github-worker-1 uv run --with pytest --with pytest-asyncio python -m pytest tests/test_upsert_metadata.py -q
+  noospheric-orrery-worker-1 uv run --with pytest --with pytest-asyncio python -m pytest tests/test_upsert_metadata.py -q
 ```
 Expected: FAIL — `upsert_document() got an unexpected keyword argument 'metadata'`.
 
@@ -611,7 +611,7 @@ Finally, thread the value from the scan loop — in `worker/src/jobs/scan_source
 
 ```bash
 docker exec -w /app/worker -e AWS_ACCESS_KEY=ci -e AWS_SECRET_KEY=ci -e AWS_REGION=us-east-1 \
-  noospheric-github-worker-1 uv run --with pytest --with pytest-asyncio \
+  noospheric-orrery-worker-1 uv run --with pytest --with pytest-asyncio \
   python -m pytest tests/test_upsert_metadata.py tests/test_upsert_document.py -q
 ```
 Expected: PASS.
@@ -726,17 +726,17 @@ def test_vault_import_acceptance(tmp_path):
 
 ```bash
 docker exec -w /app/worker -e AWS_ACCESS_KEY=ci -e AWS_SECRET_KEY=ci -e AWS_REGION=us-east-1 \
-  noospheric-github-worker-1 uv run --with pytest python -m pytest tests/test_vault_featurizer.py -q
+  noospheric-orrery-worker-1 uv run --with pytest python -m pytest tests/test_vault_featurizer.py -q
 ```
 Expected: PASS. This is the executable statement of #41's acceptance.
 
 - [ ] **Step 3: Run the full worker suite (guard against regressions)**
 
 ```bash
-docker exec noospheric-github-worker-1 rm -rf /app/worker/tests
-docker cp worker/tests noospheric-github-worker-1:/app/worker/tests
+docker exec noospheric-orrery-worker-1 rm -rf /app/worker/tests
+docker cp worker/tests noospheric-orrery-worker-1:/app/worker/tests
 docker exec -w /app/worker -e AWS_ACCESS_KEY=ci -e AWS_SECRET_KEY=ci -e AWS_REGION=us-east-1 \
-  noospheric-github-worker-1 uv run --with pytest --with pytest-asyncio \
+  noospheric-orrery-worker-1 uv run --with pytest --with pytest-asyncio \
   python -m pytest tests/ -q --ignore=tests/test_judge_matrix.py
 ```
 Expected: all green (the pre-existing `test_judge_matrix.py` needs a script the image lacks — ignore it, per CLAUDE.md).
@@ -750,7 +750,101 @@ git commit -m "test(vault): end-to-end #41 acceptance fixture"
 
 ---
 
-### Task 8: Docs + known-limitations note
+### Task 8: Scan-lifecycle integration test (deterministic, FakeRelay)
+
+Proves the create / update-in-place / skip / soft-delete semantics of the **whole spine path** (`run_scan_source → enumerate_vault → upsert_document → SQLite`) over a **real temp vault directory**, with a stubbed relay. This is the only automated proof of "edit → exactly one re-ingest, no duplicate" and "delete → soft-delete", and it regression-guards the soft-delete-restore behavior. Levels 1–2 test the featurizer's *output*; this tests the *behavior in the database*.
+
+**Files:**
+- Test: `worker/tests/test_vault_scan_lifecycle.py`
+
+Reuse the existing harness in `worker/tests/test_scan_source.py`: the `FakeRelay` class (patched via `monkeypatch.setattr(scan_source_mod, "Relay", FakeRelay)`) and the `_run_scan` helper — import them, or promote them to `worker/tests/conftest.py` as a separate commit first. **Unlike `test_scan_source.py`, this test uses the REAL `'vault'` featurizer against files on disk** (watched_source `type='vault'`, `uri=<tmp vault dir>`) — no `_FEATURIZERS` injection — so the full walk/parse/clean/metadata path is exercised end to end.
+
+- [ ] **Step 1: Write the test**
+
+```python
+import json
+import pytest
+from src.db import init_db, get_connection
+import src.jobs.scan_source as scan_source_mod
+from .test_scan_source import FakeRelay, _run_scan   # reuse the existing harness
+
+
+def _write(p, text):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_vault_scan_lifecycle(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    _write(vault / "a.md", "---\ntags: [x]\n---\nnote about ALPHA\n")
+    _write(vault / "b.md", "note about ALPHA too\n")
+    _write(vault / ".obsidian" / "app.json", "{}")          # junk: must never ingest
+    _write(vault / ".trash" / "old.md", "deleted note\n")   # junk: must never ingest
+
+    db = str(tmp_path / "t.db"); init_db(db); conn = get_connection(db)
+    conn.execute("INSERT INTO watched_sources (id, type, uri) VALUES ('v1','vault',?)",
+                 (str(vault),)); conn.commit(); conn.close()
+    monkeypatch.setattr(scan_source_mod, "Relay", FakeRelay)
+
+    # scan #1 — both real notes created; junk excluded; frontmatter in metadata, not body
+    await _run_scan(db, source_id="v1")
+    conn = get_connection(db)
+    names = sorted(r["source_path"].rsplit("/", 1)[1] for r in conn.execute(
+        "SELECT source_path FROM documents WHERE invalid_at IS NULL"))
+    assert names == ["a.md", "b.md"]                                   # no .obsidian/.trash docs
+    a = conn.execute("SELECT id, content, metadata FROM documents WHERE source_path LIKE '%a.md'").fetchone()
+    assert "tags:" not in a["content"] and json.loads(a["metadata"])["tags"] == ["x"]
+    a_id = a["id"]; conn.close()
+
+    # scan #2 — no disk change -> skip; same id; still two active docs
+    await _run_scan(db, source_id="v1")
+    conn = get_connection(db)
+    assert conn.execute("SELECT id FROM documents WHERE source_path LIKE '%a.md' AND invalid_at IS NULL").fetchone()["id"] == a_id
+    assert conn.execute("SELECT COUNT(*) c FROM documents WHERE invalid_at IS NULL").fetchone()["c"] == 2
+    conn.close()
+
+    # scan #3 — edit a.md -> update in place: SAME id, new content, exactly one a.md row (no dup)
+    _write(vault / "a.md", "---\ntags: [x]\n---\nnote about GAMMA now\n")
+    await _run_scan(db, source_id="v1")
+    conn = get_connection(db)
+    a2 = conn.execute("SELECT id, content FROM documents WHERE source_path LIKE '%a.md' AND invalid_at IS NULL").fetchone()
+    assert a2["id"] == a_id and "GAMMA" in a2["content"]
+    assert conn.execute("SELECT COUNT(*) c FROM documents WHERE source_path LIKE '%a.md'").fetchone()["c"] == 1
+    conn.close()
+
+    # scan #4 — delete b.md on disk -> soft-deleted; row survives; entity_sources cleared
+    (vault / "b.md").unlink()
+    await _run_scan(db, source_id="v1")
+    conn = get_connection(db)
+    assert conn.execute("SELECT COUNT(*) c FROM documents WHERE source_path LIKE '%b.md' AND invalid_at IS NULL").fetchone()["c"] == 0
+    assert conn.execute("SELECT invalid_at FROM documents WHERE source_path LIKE '%b.md'").fetchone()["invalid_at"] is not None
+    conn.close()
+```
+
+> **Known-limitation pin (do NOT assert as passing yet):** a scan #5 that re-creates `b.md` currently produces a **new** document id rather than restoring the soft-deleted one (the CodeRabbit #78 `upsert_document.py:198` finding — the existing-doc lookup filters `invalid_at IS NULL`). Leave a commented scan #5 in the test noting this, so whoever fixes the restore bug turns it into a real assertion (`re-added b.md reactivates the ORIGINAL id`). Encoding the buggy behavior as a passing assertion would lock the bug in — don't.
+
+- [ ] **Step 2: Run to verify pass**
+
+```bash
+docker exec noospheric-orrery-worker-1 rm -rf /app/worker/tests
+docker cp worker/tests noospheric-orrery-worker-1:/app/worker/tests
+docker exec -w /app/worker -e AWS_ACCESS_KEY=ci -e AWS_SECRET_KEY=ci -e AWS_REGION=us-east-1 \
+  noospheric-orrery-worker-1 uv run --with pytest --with pytest-asyncio \
+  python -m pytest tests/test_vault_scan_lifecycle.py -q
+```
+Expected: PASS.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add worker/tests/test_vault_scan_lifecycle.py
+git commit -m "test(vault): scan-lifecycle integration — create/update/skip/soft-delete + metadata"
+```
+
+---
+
+### Task 9: Docs + known-limitations note
 
 **Files:**
 - Modify: `packages/orrery-*` README or `docs/` ingestion notes as appropriate; at minimum add a short "Vault import" note near the ingestion docs.
@@ -776,8 +870,28 @@ git push -u origin plan/obsidian-vault-import-41   # NOTE: do not open/merge a P
 
 ---
 
+## Level 4 — Live acceptance runbook (manual, against the running stack)
+
+The automated tests (Levels 1–3) never touch the real model or the UI. Final sign-off is this runbook against the running instance (`noospheric-orrery-*` containers). The **hygiene** checks are deterministic; only "are the entities sensible" needs a human eye (it's LLM output).
+
+1. **Register the vault.** `POST /watched-sources` with `{type:"vault", uri:"/data/e2e_vault", config:{ext:[".md"], ignore:[], folder_domains:false}}` (path must be inside the container's `/data` bind-mount). Note the returned `source_id`.
+2. **Trigger one scan.** `POST /watched-sources/{source_id}/scan`. Watch `GET /jobs` until the `scan_source` job completes; check `GET /watched-sources` shows `last_status: ok`.
+3. **Verify hygiene (deterministic):**
+   - `GET /documents` — only the real notes present; **no** `.obsidian`, `.trash`, or non-`.md` documents.
+   - `GET /entities` — spot-check: no entity is a frontmatter key/value (`moc`, `active`, a date) or a `[[`/`%%` artifact.
+   - Confirm a doc's `metadata` carries its frontmatter (via `GET /documents/{id}` or the DB).
+4. **Verify the graph renders:** `GET /graph`, then load the galaxy viz. Per CLAUDE.md this is Canvas2D — **screenshot-and-judge with the `webapp-testing` skill + the `__viz` debug hooks**, do not infer from the DOM.
+5. **Change detection (the #42-adjacent proof):**
+   - Edit one note in `data/e2e_vault/` on the host (it's bind-mounted), re-run the scan → confirm **one** updated document, not a duplicate; its entities refreshed.
+   - Delete one note, re-scan → confirm it drops out of `GET /documents`/`GET /graph` (soft-deleted).
+6. **Clean up the trial** (optional): the workspace/data used here is disposable; remove it if you don't want it lingering (same as the `ed1cbdd8` cleanup discussion).
+
+---
+
 ## Definition of done
-- `test_vault_featurizer.py::test_vault_import_acceptance` passes (the #41 acceptance).
+- `test_vault_featurizer.py::test_vault_import_acceptance` passes (the #41 featurizer acceptance).
+- `test_vault_scan_lifecycle.py::test_vault_scan_lifecycle` passes (the spine behavior: create/update/skip/soft-delete + metadata in DB).
 - Full worker suite green (minus the pre-existing `test_judge_matrix.py` ignore).
 - No schema migration was needed or made; `test_schema_mirror` untouched and passing.
+- Level-4 runbook walked once against the running instance; hygiene checks clean.
 - #41 closeable; the two follow-up issues filed; the rename/`source_path` limitations recorded.
