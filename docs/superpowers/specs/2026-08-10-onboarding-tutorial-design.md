@@ -667,3 +667,14 @@ highlight in the artwork (isolated from the border flood-fill, correctly left op
 background patch. Backed up the original file to the scratchpad before overwriting
 `frontend/public/mascot/relaxed.png`, then confirmed via `file` that the repo copy is now `RGBA`,
 and via `curl` that the frontend serves the updated `RGBA` file (not a stale cached copy).
+
+## Revision 18 — moved the minimize control to the task list (2026-08-17)
+
+Feedback: the "minimize" button should live with the task list (the quest checklist box at the
+bottom of the expanded panel), not in Lex's speech-bubble header.
+
+Moved `<button onClick={toggle}>minimize</button>` out of the bubble's header row (which previously
+paired it with the "✦ Lex" label) and into a new header row inside the quest-list box, alongside a
+"Tasks" label — matching the same small-caps/muted styling as the bubble's own header. The bubble
+header now shows only "✦ Lex", with no controls. Purely a layout move — `toggle()` itself,
+`expanded`/`panelExpanded` localStorage persistence, and the minimized capsule are unchanged.

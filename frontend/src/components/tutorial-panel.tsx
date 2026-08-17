@@ -318,14 +318,9 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
                 cheering ? "border-emerald-500/30 bg-card/95" : "border-border/50 bg-card/90"
               }`}
             >
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                  ✦ Lex
-                </span>
-                <button onClick={toggle} className="text-[10px] text-muted-foreground hover:text-foreground">
-                  minimize
-                </button>
-              </div>
+              <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
+                ✦ Lex
+              </span>
               {(cheering || introAcknowledged || activeQuest?.id !== "ingest") && (
                 <p className={`text-xs font-medium ${cheering ? "text-emerald-400" : "text-foreground"}`}>
                   {cheering
@@ -366,6 +361,12 @@ export function TutorialPanel({ noosphereId }: { noosphereId: string }) {
           )}
 
           <div className="rounded border border-border/50 bg-card/90 backdrop-blur shadow-lg p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] uppercase tracking-widest text-muted-foreground/70">Tasks</span>
+              <button onClick={toggle} className="text-[10px] text-muted-foreground hover:text-foreground">
+                minimize
+              </button>
+            </div>
             {optionalQuests.length > 0 && (
               <div className="space-y-1">
                 <p className="text-[10px] uppercase tracking-widest text-muted-foreground/70">Optional</p>
