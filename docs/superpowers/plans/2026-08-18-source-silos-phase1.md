@@ -19,12 +19,14 @@
 - **`entities` carries no silo.** An entity's silo(s) = the silo(s) of its source docs via `entity_sources → documents.silo_id`. A multi-silo entity (post an approved cross-silo merge) is expected and participates in every silo it has a source in; cross-silo *auto*-merge stays barred regardless.
 - **Two `run_batch_normalization` impls, different algorithms** (`worker/src/normalizer.py` faiss vs `orchestrator/src/pipeline/embedding_normalizer.py` O(n²)) — NOT mirrored by `test_schema_mirror`. Each scoped + tested separately.
 - **Schema mirror:** `documents` DDL + the `recompute_cooccurrence` helper live in both `orchestrator/src/db.py` and `worker/src/db.py` and are checked by `test_schema_mirror` — edit both identically.
+- **⚠️ CRITICAL — the two orchestrator paths run through the REPOSITORY layer, not raw SQL.** `normalize_entity(store, …)` (`normalizer.py:12-26`, the `_ingest_document` production path) and `run_batch_normalization(store)` (`embedding_normalizer.py::_run_batch_store`, the `/normalize` route path) fuse entities via repository methods — `store.normalization.get_merge_map_entry()`, `store.entities.get_by_name()`, `store.entities.get_all_for_normalization()` (`repositories/sqlite_store.py:347,395,788`; `interfaces.py:252,385`) — **which take no silo argument.** Each of those functions ALSO has a legacy raw-`sqlite3.Connection` branch; production does NOT use it. So **Tasks 4 & 7 must add silo-aware repository methods and test against the STORE path**, or you get green tests (raw branch) with broken production (store branch). The worker paths (Task 3 `extract_document_entities`, Task 6 `worker/src/normalizer.py`) DO use raw `conn` directly — raw SQL is correct there.
 
 ## File-structure map
 
 **Modify (schema/ingest):** `orchestrator/src/db.py`, `worker/src/db.py` (silo_id column + migration + backfill + index, both mirrored) · `worker/src/jobs/upsert_document.py` (populate silo_id on create/update) · `orchestrator/src/routes/ingest.py` (populate on the upload/text paths).
 **Create:** `orchestrator/src/pipeline/silo.py` + `worker/src/silo.py` — a tiny shared helper: `resolve_silo_id(source_id, collection_id)` and the SQL fragment "entity has a source in silo S". (Two copies, mirror-tested like `classifier.py`.)
-**Modify (the 5 scoping paths):** `worker/src/jobs/upsert_document.py::extract_document_entities` · `orchestrator/src/pipeline/normalizer.py::normalize_entity` · `worker/src/jobs/extract_batch_image.py` · `worker/src/normalizer.py::run_batch_normalization` · `orchestrator/src/pipeline/embedding_normalizer.py::run_batch_normalization`.
+**Modify (the 5 scoping paths):** `worker/src/jobs/upsert_document.py::extract_document_entities` (raw conn) · `orchestrator/src/pipeline/normalizer.py::normalize_entity` (**store branch**) · `worker/src/jobs/extract_batch_image.py` (raw conn) · `worker/src/normalizer.py::run_batch_normalization` (raw conn, faiss) · `orchestrator/src/pipeline/embedding_normalizer.py::run_batch_normalization` (**store branch, `_run_batch_store`**).
+**Modify (repository layer — Finding 2):** `orchestrator/src/repositories/sqlite_store.py` + `orchestrator/src/repositories/interfaces.py` — add silo-aware `get_by_name`, `get_merge_map_entry`, `get_all_for_normalization` (the methods the orchestrator store branch fuses through).
 **Modify (cross-silo proposal):** reuse `orchestrator/src/pipeline/graph_repair.py::propose_correction` (+ a worker-side equivalent insert into `graph_issues`).
 **Modify (reads/viz):** `orchestrator/src/pipeline/graph_v5.py` + graph snapshot (silo on nodes), entity/MCP reads, `frontend/public/viz/*` (a silo filter control).
 **Tests:** one per scoping path + the two leaks + cross-silo proposal/reversal + backfill + reads.
@@ -69,7 +71,7 @@ def test_backfill_sets_silo_from_source_then_collection(tmp_path):
 - [ ] **Step 2: Run → fail** (native/CI or orchestrator container):
 `… pytest tests/test_silo_schema.py -q` → FAIL (no `silo_id`, no `backfill_silo_ids`).
 
-- [ ] **Step 3: Implement in BOTH db.py.** Add to the `documents` CREATE (both files, identically — keep DDL byte-identical for `test_schema_mirror`): `silo_id TEXT` (after `source_id`). Add index `CREATE INDEX IF NOT EXISTS idx_documents_silo ON documents(silo_id);`. In each `init_db` migration block add the idempotent ALTER (mirror the #51 pattern):
+- [ ] **Step 3: Implement in BOTH db.py.** Add to the `documents` CREATE (both files, identically — keep DDL byte-identical for `test_schema_mirror`): `silo_id TEXT` (after `source_id`). Add index `CREATE INDEX IF NOT EXISTS idx_documents_silo ON documents(silo_id);` in both. **Also add `"idx_documents_silo"` to `_MIRRORED_INDEXES`** in `test_schema_mirror.py` (Finding 5 — otherwise the index is unguarded against one-sided drift; the `documents` *table* is already in `_MIRRORED_TABLES`, so the column itself needs no table-list change). In each `init_db` migration block add the idempotent ALTER (mirror the #51 pattern):
 ```python
 if "silo_id" not in cols:
     try:
@@ -113,9 +115,12 @@ def resolve_silo_id(source_id, collection_id):
     """Precedence: source_id > collection_id > None (spec §5)."""
     return source_id or collection_id or None
 
-# SQL fragment: entities having at least one source in silo :silo (NULL-safe).
-SILO_MATCH = ("EXISTS (SELECT 1 FROM entity_sources es JOIN documents d ON d.id = es.document_id "
-              "WHERE es.entity_id = e.id AND d.silo_id IS :silo)")   # see Task 4 for exact binding
+# SQL fragment: <entity_col> has at least one source in the silo bound to a POSITIONAL ? (NULL-safe).
+# Use positional `?` everywhere (Finding 6 — sqlite raises if a single statement mixes named + numbered
+# params, and the callers in Tasks 3-5 build positional queries). The entity column is templated by caller.
+def silo_match(entity_col: str) -> str:
+    return (f"EXISTS (SELECT 1 FROM entity_sources es JOIN documents d ON d.id = es.document_id "
+            f"WHERE es.entity_id = {entity_col} AND d.silo_id IS ?)")
 ```
 In `upsert_document` INSERT and UPDATE, set `silo_id = resolve_silo_id(source_id, collection_id)` (the function already receives `source_id`; `collection_id` is the param it already accepts). In `_ingest_document`, pass `silo_id=None` (loose uploads) — or the caller's if a future ingest path supplies one.
 
@@ -158,11 +163,14 @@ When neither matches, a **new** entity is created (existing behaviour) — now c
 
 ---
 
-### Task 4: Silo-scope `normalize_entity` (loose-upload inline path)
+### Task 4: Silo-scope `normalize_entity` — via the REPOSITORY layer (the production path, Finding 2)
 
-**Files:** Modify `orchestrator/src/pipeline/normalizer.py::normalize_entity`. Test: `orchestrator/tests/test_silo_scope_normalize_entity.py`.
+**Files:** Modify `orchestrator/src/repositories/interfaces.py` + `orchestrator/src/repositories/sqlite_store.py` (`get_by_name`, `get_merge_map_entry`), `orchestrator/src/pipeline/normalizer.py::normalize_entity` (thread silo), `orchestrator/src/routes/ingest.py::_ingest_document` (pass silo). Test: `orchestrator/tests/test_silo_scope_normalize_entity.py` — **written against the store path** (`test_store` fixture), since production uses the store branch, not raw conn.
 
-- [ ] Steps mirror Task 3, but this path serves the `silo_id IS NULL` pool (loose uploads). `normalize_entity(store_or_conn, name, entity_type)` gains the caller's silo (thread a `silo=None` param from `_ingest_document`, default `None` for back-compat). Apply the same merge_map + canonical silo predicates. **Test:** two null-silo docs with the same name still merge (regression — today's behaviour); a null-silo name does **not** merge onto a *siloed* entity of the same name. Commit.
+- [ ] **Step 1: Failing test (store path).** With a `test_store`: create a siloed entity "mercury" (a doc with `silo_id='v1'` + its `entity_sources`); then `normalize_entity(store, "mercury", "Concept", silo=None)` (a loose upload) must create a **NEW** entity, not fuse onto the 'v1' one. Separately, two null-silo mentions of "mercury" still fuse (regression — today's behaviour).
+- [ ] **Step 2: Run → fail** — today `store.entities.get_by_name("mercury","Concept")` returns the 'v1' entity regardless of silo.
+- [ ] **Step 3: Implement.** Add an optional `silo` param to `EntityRepository.get_by_name` and `NormalizationRepository.get_merge_map_entry` (interfaces + sqlite_store). When `silo` is passed, AND the existing query with `EXISTS (SELECT 1 FROM entity_sources es JOIN documents d ON d.id = es.document_id WHERE es.entity_id = <entity> AND d.silo_id IS ?)` (positional `?`, NULL-safe per Finding 1); back-compat (no silo) when omitted. Thread `silo` through `normalize_entity(store_or_conn, name, entity_type, silo=None)` ← `_ingest_document` (loose upload → `None`). Scope BOTH the merge_map short-circuit and `get_by_name`.
+- [ ] **Step 4: Run → pass. Step 5: Commit** — `feat(silo): scope normalize_entity via silo-aware repository methods (#50)`.
 
 ---
 
@@ -182,17 +190,20 @@ When neither matches, a **new** entity is created (existing behaviour) — now c
 
 - [ ] **Step 2: Run → fail** (today: global merge).
 
-- [ ] **Step 3: Implement.** (a) **Plural collapse** — restrict the global `all_names`/`get_by_name` fuse to same-silo names. (b) **faiss candidate search** — widen the grouping key from `type` to `(type, silo)`: build the per-`(type, silo)` `IndexFlatIP` from entities filtered to that silo (join `entity_sources → documents.silo_id`; a multi-silo entity appears in each of its silos' groups). (c) **Cross-silo detection** — when a high-similarity pair spans silos (compute each entity's silo-set; disjoint or null-vs-nonnull), do NOT merge; insert a pending `graph_issues` row (mirror `graph_repair.propose_correction`'s insert, `action="merge"`, `target_entity_id`/`target_b_entity_id` = the two **ids**, rationale=similarity). Any cross-silo pair — auto-band or review-band — goes to `graph_issues`, never `normalization_review_queue`.
-
-- [ ] **Step 4: Run → pass. Step 5: Commit** — `feat(silo): partition worker faiss normalization by (type, silo); propose cross-silo (#50)`.
+- [ ] **Step 3: Implement.** **Keep the existing per-`type` `IndexFlatIP` — do NOT partition the index by silo (Finding 3):** a strict `(type, silo)` index means two entities in different silos never share a group, so their similarity is never computed and the cross-silo proposal in (c) becomes unreachable. Instead, for each high-similarity candidate pair the per-type search surfaces, compute each entity's **silo-set** (`entity_sources → documents.silo_id`, may be multi-valued) and branch:
+   - **overlapping/shared silo (incl. both null)** → auto-merge, as today;
+   - **disjoint (or null-vs-non-null)** → do NOT merge; insert a pending `graph_issues` row. The worker **cannot import `graph_repair`** (separate package), so it does its own insert matching the `graph_issues` DDL: `action='merge'`, `target_entity_id`+`target_entity_name`, `target_b_entity_id`+`target_b_name` (all `NOT NULL` — the worker has ids+names in hand), rationale=similarity, keyed on **ids**. Any cross-silo pair — auto-band OR review-band — goes to `graph_issues`, never `normalization_review_queue`.
+   - **Plural collapse** (the pre-faiss stage) — restrict its global `all_names`/`get_by_name` fuse to same-silo names too.
+- [ ] **Step 3b: Add `"graph_issues"` to `_MIRRORED_TABLES`** (`orchestrator/tests/test_schema_mirror.py`) — Task 6 makes the **worker** a writer of `graph_issues`, exactly the cross-service surface that test guards (Finding 4). Confirm both `db.py` `graph_issues` DDLs are already identical (they are).
+- [ ] **Step 4: Run → pass. Step 5: Commit** — `feat(silo): silo-aware worker faiss normalization; propose cross-silo to graph_issues (#50)`.
 
 ---
 
-### Task 7: Silo-scope the orchestrator O(n²) batch normalizer + propose cross-silo
+### Task 7: Silo-scope the orchestrator O(n²) batch normalizer — via the STORE path + propose cross-silo
 
-**Files:** Modify `orchestrator/src/pipeline/embedding_normalizer.py::run_batch_normalization` (both `_run_batch_store`/`_run_batch_conn`). Test: `orchestrator/tests/test_silo_scope_batch_nested.py`.
+**Files:** Modify `orchestrator/src/repositories/sqlite_store.py::get_all_for_normalization` (silo-aware; production `/normalize` fuses through it — Finding 2), `orchestrator/src/pipeline/embedding_normalizer.py::_run_batch_store` (the store branch). Test: `orchestrator/tests/test_silo_scope_batch_nested.py` — **against the store path** (`test_store` fixture).
 
-- [ ] Same behaviour as Task 6 for the **different** (nested-loop, no faiss) algorithm: plural collapse + the all-pairs comparison restricted to same-silo; cross-silo similars → `graph_issues` proposal by id. Separate test (this impl is not a mirror of the worker's — spec §3.1). Commit.
+- [ ] Same behaviour as Task 6 for this **different** (nested-loop, no faiss) algorithm, but through the repository: have `get_all_for_normalization` return each entity with its silo-set (or the all-pairs loop joins to it); plural collapse + all-pairs comparison auto-merge only same-silo; cross-silo similars → `graph_issues` proposal by id — **reuse `graph_repair.propose_correction` here** (the orchestrator CAN import it). Separate test (not a mirror of the worker's — spec §3.1). **Do not regress:** `get_all_for_normalization` currently doesn't filter `invalid_at` — preserve that behaviour while adding the silo join. Commit.
 
 ---
 
@@ -209,8 +220,8 @@ When neither matches, a **new** entity is created (existing behaviour) — now c
 
 **Files:** Modify `orchestrator/src/pipeline/graph_v5.py` (+ snapshot), entity read routes, `orchestrator/src/mcp_server.py` (annotate nodes with silo), `frontend/public/viz/*` (filter control). Test: `orchestrator/tests/test_graph_silo_filter.py`.
 
-- [ ] **Step 1: Failing test.** `GET /graph` nodes carry their `silo_id`; a `?silo=<id>` filter returns only that silo's nodes/edges (and unsiloed with `?silo=none` or similar). `get_entity` sources annotate silo.
-- [ ] **Step 2–4: Implement** the silo on nodes + a filter param on the graph read; add a viz filter control (verify per CLAUDE.md canvas rules — drive a browser + screenshot). **Note:** `kind` exposure is Phase 2; this task exposes **silo id/filter only**, which is what #50's acceptance requires.
+- [ ] **Step 1: Failing test.** `GET /graph` nodes carry their `silo_id`; `?silo=<id>` returns only that silo's nodes/edges (`?silo=none` for the null pool). `get_entity` sources annotate silo.
+- [ ] **Step 2–4: Implement (mind the cached snapshot — Finding 7).** `GET /graph` serves a **materialized snapshot** via `get_or_build` (`routes/graph.py`, `graph_snapshot.py`), not a live query. So: (a) attach node `silo_id` in the **snapshot builder** `graph_v5.build_graph_v5(store, …)` — which reads through the repository layer, so add the silo to the entity/doc rows it already fetches; (b) apply `?silo=` as a **post-filter over the loaded payload** in the route (the snapshot itself stays whole/cached). Add a viz filter control (verify per CLAUDE.md canvas rules — drive a browser + screenshot; Canvas2D can't be DOM-inspected). **`kind` exposure is Phase 2** — this task exposes **silo id + filter only**, which is exactly what #50's acceptance requires.
 - [ ] **Step 5: Commit.**
 
 ---
