@@ -50,6 +50,14 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
     matched_entities = 0
     docs_processed = 0
 
+    # Seed progress so the detail page shows the denominator immediately (issue #51).
+    seed_conn = get_connection(db_path)
+    seed_conn.execute(
+        "UPDATE jobs SET progress = ? WHERE id = ?",
+        (json.dumps({"docs_done": 0, "docs_total": len(docs), "entities_so_far": 0}), job_id))
+    seed_conn.commit()
+    seed_conn.close()
+
     for doc_row in docs:
         doc_id = doc_row[0]
         conn = get_connection(db_path)
@@ -95,9 +103,14 @@ async def run_extract_batch(job: dict, db_path: str) -> None:
 
         new_status = "enriched" if scope == "domain" else "extracted"
         conn.execute("UPDATE documents SET status = ? WHERE id = ?", (new_status, doc_id))
+        docs_processed += 1
+        # Live progress for the detail-page bar (issue #51); WAL keeps this per-doc write cheap.
+        conn.execute(
+            "UPDATE jobs SET progress = ? WHERE id = ?",
+            (json.dumps({"docs_done": docs_processed, "docs_total": len(docs),
+                         "entities_so_far": total_entities}), job_id))
         conn.commit()
         conn.close()
-        docs_processed += 1
         print(f"  Extracted doc {docs_processed}/{len(docs)}: {total_entities} entities ({new_entities} new)", flush=True)
 
     # Store batch results summary on the job

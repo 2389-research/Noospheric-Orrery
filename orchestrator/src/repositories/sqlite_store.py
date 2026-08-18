@@ -608,6 +608,7 @@ class SQLiteJobRepository(JobRepository):
         return Job(id=row["id"], type=row["type"], target=row["target"], status=row["status"],
                    config=json.loads(row["config"]) if row["config"] else None,
                    result=json.loads(row["result"]) if row["result"] else None,
+                   progress=_safe_json(row["progress"]),
                    created_at=row["created_at"], started_at=row["started_at"],
                    completed_at=row["completed_at"])
 
@@ -620,6 +621,7 @@ class SQLiteJobRepository(JobRepository):
         return [Job(id=r["id"], type=r["type"], target=r["target"], status=r["status"],
                      config=json.loads(r["config"]) if r["config"] else None,
                      result=_safe_json(r["result"]),
+                     progress=_safe_json(r["progress"]),
                      created_at=r["created_at"], started_at=r["started_at"],
                      completed_at=r["completed_at"]) for r in rows]
 

@@ -13,10 +13,26 @@ def list_jobs(status: str | None = None, auth: AuthStore = Depends(get_auth_stor
         {
             "id": j.id, "type": j.type, "target": j.target, "status": j.status,
             "created_at": j.created_at, "started_at": j.started_at, "completed_at": j.completed_at,
-            "results": j.result,
+            "results": j.result, "progress": j.progress,
         }
         for j in jobs
     ]
+
+
+@router.get("/jobs/{job_id}")
+def get_job(job_id: str, auth: AuthStore = Depends(get_auth_store)):
+    """A single job with its live `progress` (docs_done/docs_total/entities_so_far) — the
+    extraction detail page polls this for a real progress bar instead of the whole list."""
+    store = auth.store
+    job = store.jobs.get(job_id)
+    store.close()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {
+        "id": job.id, "type": job.type, "target": job.target, "status": job.status,
+        "created_at": job.created_at, "started_at": job.started_at, "completed_at": job.completed_at,
+        "results": job.result, "progress": job.progress,
+    }
 
 
 @router.get("/jobs/{job_id}/iterations")
