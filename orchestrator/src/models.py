@@ -71,6 +71,14 @@ class DirectoryIngestRequest(BaseModel):
     path: str
 
 
+class TextIngestRequest(BaseModel):
+    """Ingest a document from raw text (no file upload) — the JSON entry point used by
+    programmatic callers and the MCP `ingest_text` tool. The text IS the source, so no
+    raw artifact is stored (source_path is None)."""
+    title: str
+    content: str
+
+
 class RepoIngestRequest(BaseModel):
     """A git checkout to summarize into a collection of code_intent documents.
 

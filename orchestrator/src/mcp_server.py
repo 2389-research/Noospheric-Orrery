@@ -2,6 +2,12 @@
 
 Run with: python -m src.mcp_server
 
+Install (Claude Code) — register the stdio server once (orchestrator must be running):
+    claude mcp add noospheric-orrery -- \
+        env ORCHESTRATOR_URL=http://localhost:8100 python -m src.mcp_server
+(run from the `orchestrator/` dir, or point at its venv). Transport is stdio today; an
+HTTP transport for Docker/remote callers is a follow-up.
+
 Tools — Session:
 - list_noospheres() — see available workspaces
 - select_noosphere(name_or_id) — set active workspace for subsequent calls
@@ -21,7 +27,14 @@ Tools — Graph Traversal:
 - get_subgraph(entity_names, max_hops) — bounded subgraph around seed entities
 - explore_domain(domain_path) — domain overview with top entities and related domains
 
-Tools — Corrections (write):
+Tools — Write (ingestion & jobs; direct writes, no human gate):
+- ingest_text(title, content) — ingest a document from raw text into the active noosphere
+- create_noosphere(name, description) — create a new workspace
+- trigger_simmer(domain) — start a spec-simmer job (general, or a domain path)
+- trigger_normalization() — cluster + merge near-duplicate entities (uncertain pairs → review queue)
+- get_job_status(job_id) — a job's status + live progress, or list running/queued jobs
+
+Tools — Corrections (write; human-gated):
 - propose_correction(action, entity, rationale, target_b, proposed_type, proposed_name) — file a graph correction for human review
 """
 
@@ -442,6 +455,95 @@ async def propose_correction(
     if "detail" in result:
         return f"Could not file correction: {result['detail']}"
     return f"Filed correction {result['issue_id']} ({action} on '{entity}') — status: {result['status']}. It will be reviewed by a human."
+
+
+# ── Write: ingestion, jobs, workspaces ────────────────────────────────────────
+# These are DIRECT writes (ingestion, job triggers, workspace creation) — fine to apply
+# without human review. Graph *mutations* (invalidate/merge/retype/rename) still go only
+# through propose_correction above, which files for human approval. Do not add a tool that
+# edits the graph directly.
+
+@mcp.tool()
+async def ingest_text(title: str, content: str) -> str:
+    """Ingest a new document into the active noosphere from raw text (no file needed).
+    Runs the full pipeline: classify into a domain, extract entities, compute co-occurrence.
+    Select a noosphere first with select_noosphere(). Returns the new document id, its
+    assigned domains, and how many entities were extracted."""
+    result = await call_api("/ingest/text", method="POST", body={"title": title, "content": content})
+    if "document_id" not in result:
+        return f"Ingest failed: {result.get('detail', result)}"
+    domains = ", ".join(result.get("domains") or []) or "none"
+    return (f"Ingested '{result['title']}' (id: {result['document_id']}) — "
+            f"domains: {domains}, {result.get('entity_count', 0)} entities extracted.")
+
+
+@mcp.tool()
+async def create_noosphere(name: str, description: str = "") -> str:
+    """Create a new noosphere (workspace). Does NOT switch to it — call
+    select_noosphere() with the returned id to start working in it."""
+    result = await call_api("/workspaces", method="POST",
+                            body={"name": name, "description": description})
+    if "workspaceId" not in result:
+        return f"Could not create noosphere: {result.get('detail', result)}"
+    return (f"Created noosphere '{result['name']}' (id: {result['workspaceId']}). "
+            f"Use select_noosphere('{result['workspaceId']}') to switch to it.")
+
+
+@mcp.tool()
+async def trigger_simmer(domain: str = "") -> str:
+    """Start a spec-simmer job. With no domain, simmers the GENERAL extraction spec; with
+    a domain path (e.g. 'techniques/wet-blending') simmers that domain's spec. When the
+    simmer finishes, the worker automatically runs a batch re-extraction with the improved
+    spec. Returns the job id — track it with get_job_status()."""
+    path = "/simmer/general" if not domain else f"/simmer/{quote(domain, safe='/')}"
+    result = await call_api(path, method="POST")
+    if "job_id" not in result:
+        return f"Could not start simmer: {result.get('detail', result)}"
+    scope = "the general spec" if not domain else f"domain '{domain}'"
+    return f"Started simmer for {scope} — job {result['job_id']}. Poll with get_job_status('{result['job_id']}')."
+
+
+@mcp.tool()
+async def trigger_normalization() -> str:
+    """Run entity normalization over the active noosphere: cluster near-duplicate entities
+    by embedding similarity and LLM-review the ambiguous pairs. Confident duplicates merge
+    automatically; uncertain pairs go to the human review queue. Returns a summary of what
+    merged and what awaits review."""
+    result = await call_api("/normalize", method="POST")
+    if "detail" in result:
+        return f"Normalization failed: {result['detail']}"
+    return f"Normalization complete: {json.dumps(result)}"
+
+
+@mcp.tool()
+async def get_job_status(job_id: str = "") -> str:
+    """Check background job status. With a job_id, returns that job's status plus live
+    progress for extractions (docs done / total, entities so far). With no id, lists the
+    jobs currently running or queued in the active noosphere."""
+    if job_id:
+        result = await call_api(f"/jobs/{quote(job_id, safe='')}")
+        if "status" not in result:
+            return f"Could not fetch job: {result.get('detail', result)}"
+        lines = [f"Job {result['id']} ({result['type']}) — {result['status']}"]
+        prog = result.get("progress")
+        if prog:
+            lines.append(f"  progress: {prog.get('docs_done')}/{prog.get('docs_total')} docs, "
+                         f"{prog.get('entities_so_far')} entities so far")
+        if result.get("results"):
+            lines.append(f"  result: {json.dumps(result['results'])}")
+        return "\n".join(lines)
+    jobs = await call_api("/jobs")
+    if isinstance(jobs, dict) and "detail" in jobs:
+        return f"Could not list jobs: {jobs['detail']}"
+    active = [j for j in jobs if j.get("status") in ("running", "queued")]
+    if not active:
+        return "No running or queued jobs."
+    lines = [f"Active jobs ({len(active)}):"]
+    for j in active:
+        prog = j.get("progress")
+        p = f" — {prog['docs_done']}/{prog['docs_total']} docs" if prog else ""
+        lines.append(f"  • {j['id']} ({j['type']}) — {j['status']}{p}")
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":
