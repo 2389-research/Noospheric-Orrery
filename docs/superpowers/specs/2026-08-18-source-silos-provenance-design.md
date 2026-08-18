@@ -38,15 +38,27 @@ This maps almost 1:1 onto what #78 already built: `documents.source_id → watch
 
 ### 3.1 How scoping actually works (the hard part — #50's "design pass before code")
 
-Silo lives on **documents**, but normalization operates on **entities**. An entity's effective silo is the silo(s) of its source documents (`entity_sources → documents.silo_id`). Because auto-merge is silo-scoped, an entity's sources stay within one silo until a human cross-silo merge — so "the entity's silo" is well-defined in the common case.
+Silo lives on **documents**; normalization operates on **entities**. An entity's effective silo is the silo(s) of its source documents (`entity_sources → documents.silo_id`). **Multi-silo entities are real and expected:** after a human-approved cross-silo merge, the survivor legitimately has sources in two silos. The rule: **a multi-silo entity participates in the candidate set of *every* silo it has a source in** (so re-ingest from either silo re-attaches to it); **cross-silo *auto*-merge stays barred regardless.** `entities` rows carry no silo, so every scoping query joins `entity_sources → documents.silo_id`, and needs an index on `documents.silo_id`.
 
-Three call sites must become silo-aware (all identified, grounded):
+**FOUR auto-merge paths must become silo-aware — and within each, *every* sub-check that can fuse two names, not just the embedding query.** These were mis-inventoried in an earlier draft; grounded here:
 
-- **`orchestrator/src/pipeline/normalizer.py::normalize_entity`** (per-entity, inline during ingest). The `merge_map` / existing-entity lookup for a new mention from a doc in silo *S* must only match entities whose sources are in *S*. Concretely: the candidate `SELECT` joins `entity_sources → documents` and filters `documents.silo_id = S` (or `silo_id IS NULL` when *S* is null).
-- **`orchestrator/src/pipeline/embedding_normalizer.py::run_batch_normalization`** and **`worker/src/normalizer.py::run_batch_normalization`** (batch, faiss candidate search — currently partitioned *per type*, `worker/src/normalizer.py:161`). Candidate search becomes partitioned **per (type, silo)**: an entity only clusters against candidates sharing its silo. Both implementations must change identically (they are a schema/behaviour mirror — see the schema-mirror discipline).
-- **Cross-silo detection → proposal.** When the batch normalizer finds a high-similarity pair that straddles silos (or silo ↔ null), instead of merging it files a `graph_issues` proposal (`graph_repair.py`) — `action=merge`, the two entity ids, similarity as rationale — for human review. This reuses the exact merge/rollback bookkeeping in `docs/graph-corrections.md`, so a human-approved cross-silo merge (and its undo) stays consistent.
+1. **`worker/src/jobs/upsert_document.py::extract_document_entities` (the PRIMARY inline path, lines ~96-105).** This is the hand-rolled inline dedup for **every repo / tracker / watched-vault ingest — i.e. exactly the corpora that become silos.** It runs at extraction time, *before* batch normalization. Both of its lookups are currently global and must be silo-scoped:
+   - the `merge_map` short-circuit (`SELECT to_entity_id FROM merge_map WHERE from_name = ?`) — see the merge_map note below;
+   - the exact `SELECT id FROM entities WHERE canonical_name = ? AND type = ?` — must additionally require a source in the current silo.
+   *If this path is left global, "Mercury" auto-merges across two repo silos at extraction time and #50 fails for the sources it matters for most. This is the heart of the fix.*
+2. **`orchestrator/src/pipeline/normalizer.py::normalize_entity`** — the inline dedup for **loose single-doc uploads only** (called from `routes/ingest.py`), i.e. the `silo_id IS NULL` pool. Same scoping for consistency (mostly a no-op since null-pool behaviour is unchanged).
+3. **`worker/src/normalizer.py::run_batch_normalization`** (faiss). Two auto-merge stages, both currently global, both must be silo-scoped: **Tier-1 plural collapse** (`agents`→`agent` via a global `all_names` set / `get_by_name`) *and* the faiss candidate search. The faiss index is **ephemeral, built per-type in memory each run** — not a persistent global index — so partitioning is just widening the grouping key from `type` to **`(type, silo)`** and restricting the query set. Cheap.
+4. **`orchestrator/src/pipeline/embedding_normalizer.py::run_batch_normalization`** — a **different algorithm** from #3 (an O(n²) all-pairs nested loop, no faiss, no incremental gate). Its plural collapse + all-pairs comparison must be silo-scoped independently.
 
-**Open scoping decision (for review):** is the within-silo scope *hard* ("never auto-merge across silo, full stop") or is there a per-noosphere policy knob? Default proposal: **hard by default**, cross-silo only via corrections. No config knob in v1 (YAGNI); revisit if a real need appears.
+**The two batch normalizers are NOT a mirror.** They are already different implementations, and `test_schema_mirror` only diffs `db.py` + `classifier.py` DDL — it does **not** cover the normalizers. So each must be silo-scoped *separately* and get its **own** silo-scoping test. (Decision for review: consolidate the two batch normalizers first, or scope both in place.)
+
+**merge_map is a global alias table** (`from_name` PRIMARY KEY, no silo) — the biggest leak. A `merge_map` hit currently short-circuits straight onto the aliased entity regardless of silo, never touching the candidate `SELECT` we're scoping. Scoping rule: **honor a `merge_map` hit only if the target entity has a source in the current silo; otherwise treat the mention as new (do not follow the alias).** (Alternative for review: key merge_map by `(silo_id, from_name)`. Cleaner long-term but a schema + backfill change.)
+
+**Cross-silo detection → proposal (by entity id).** When any batch stage finds a high-similarity pair straddling silos (or silo ↔ null), it does **not** merge — it files a `graph_issues` proposal via `graph_repair.propose_correction` (`action="merge"`, `target_b`, similarity as rationale), **keyed on entity id, not name** (names are ambiguous once they legally coexist across silos). `resolve_correction → apply_merge → rollback_merge` round-trips cleanly (verified), so an approved cross-silo merge and its undo stay consistent. **Note the LIFO undo ordering constraint** in `docs/graph-corrections.md` (undo a merge before an overlapping invalidation; "not yet enforced") — cross-silo merges add overlapping-neighborhood merges, making that unenforced constraint more load-bearing; worth enforcing or at least flagging.
+
+**Two review queues, kept apart:** within-silo review-band pairs (~0.70–0.85) continue to `normalization_review_queue` exactly as today (it has no silo awareness and no merge-snapshot/rollback — fine, it never sees cross-silo pairs). **Any cross-silo pair — auto-band *or* review-band — goes to `graph_issues` only.**
+
+**Open scoping decision (for review):** is within-silo scope *hard* ("never auto-merge across silo, full stop") or a per-noosphere policy knob? Default proposal: **hard**, cross-silo only via corrections. No config knob in v1 (YAGNI).
 
 ## 4. Provenance `kind` (the #79 remnant)
 
@@ -60,14 +72,18 @@ Each silo has a **`kind`** — a small, closed vocabulary. Candidate set (final 
 | `human_reviewed` | An `agent_report` a human vetted | yes | high |
 
 The `kind` drives two things and is **read-exposed** (see §6):
-- **Co-occurrence emission** — reuses the existing `document_collections.emits_cooccurrence` lever; `agent_report` silos default to gated so opinion docs don't reshape shared edge weights.
+- **Co-occurrence emission** — an `agent_report` silo defaults to gated so opinion docs don't reshape shared edge weights. **This must be a silo-level attribute, NOT the existing `document_collections.emits_cooccurrence` column** — that column lives on a `document_collections` membership row, which a watched **vault** silo never creates (`scan_source.py` vault path calls `upsert_document(collection_id=None)`), and `recompute_cooccurrence` treats a doc with no membership row as *emitting by default* (`COALESCE(...,1)=1`). So the lever is unreachable for exactly the non-collection silos §4 most wants to gate. Design: put an `emits_cooccurrence` default on the **silo row** and have `recompute_cooccurrence` also consult it via `documents.silo_id → silo.emits_cooccurrence` (the per-membership column stays as a finer per-doc override where it exists, e.g. a repo's root/rollup summaries).
 - **Agent trust** — surfaced in reads so a consuming agent can weight or disbelieve a node's provenance.
 
 `kind` is **not** used for normalization scoping — scoping is by silo *id* (§3). Two `neutral_summary` repos are still different silos and don't auto-merge. `kind` is metadata about the silo, for emission + trust, not a scoping key.
 
 ## 5. Data model
 
-- **`documents.silo_id`** — the silo key. Proposal: **reuse/rename around the existing `source_id`** rather than add a parallel column. Reconciliation needed (a real design item): today a watched-source doc carries `source_id`, a repo/tracker doc carries `collection_id` (via `document_collections`), and a one-off carries neither. Define `silo_id` as the document's **single source-of-origin UUID**, populated at ingest from whichever applies; null for one-offs. (Decision for review: one unified `silo_id` column vs a computed view over `source_id`/`collection_id`.)
+- **`documents.silo_id`** — the silo key, resolved at ingest with an **explicit precedence** (the earlier "source_id XOR collection_id" dichotomy was wrong — a *watched repo* produces BOTH a `watched_sources` row *and* a `collections` row, different UUIDs, on the same document):
+  - **`source_id` wins when present** (the collection is derived from and keyed on the watched source), else
+  - **`collection_id`** (this makes a **one-shot `POST /ingest/repo`/tracker ingest a silo too** — it has a durable `collection_id` even with no watched source), else
+  - **`NULL`** — and null is *only* the loose `POST /ingest` / `/ingest/text` document upload. So "one-off = null" means *ad-hoc uploads*, not one-shot repo/tracker ingests (those are silos).
+  Decision for review: a single materialized `silo_id` column populated at ingest (proposed — one indexed column to scope on), vs a computed view over `source_id`/`collection_id` (no migration but every scoping query re-derives the precedence).
 - **Silo registry + `kind`** — silos need a home that carries `kind`. `collections.kind` already exists (`git_repo`/`tracker_run`); `watched_sources` needs a `kind` too. Proposal: a per-silo `kind` attribute on the silo's owning row (watched_sources + collections), with a small migration, OR a thin unified `silos` table. (Decision for review.)
 - **No change to `entities`/`entity_sources`** — an entity's silo is derived through `entity_sources → documents.silo_id`. Indexing: normalization candidate queries now join on `documents.silo_id`, so it needs an index.
 
@@ -92,11 +108,16 @@ Provenance is worthless unless it rides along in what agents read. Surface **sil
 
 ## 8. Testing
 
-- **Scoping unit tests:** two silos with an identically-named entity → `normalize_entity` and both `run_batch_normalization`s keep them distinct; same name *within* one silo → merges. Null-silo docs still normalize among themselves (regression: today's behaviour unchanged).
-- **Cross-silo proposal:** a high-similarity cross-silo pair produces a `graph_issues` row (not a merge); approving it merges and `rollback_merge` reverses it.
-- **Emission:** an `agent_report` silo's docs do **not** emit co-occurrence edges (or are down-weighted) by default.
-- **Read exposure:** `get_entity` / graph snapshot include silo + kind.
-- **Schema mirror:** the two `run_batch_normalization` implementations and any mirrored DDL stay identical (`test_schema_mirror`).
+Cover **all four auto-merge paths** from §3.1, plus the two leaks (merge_map, plural collapse) — a test that only checks the faiss candidate query would pass while the real bugs remain:
+
+- **Primary inline path (the #50 crux):** two repo/vault silos ingested through `extract_document_entities`, both mentioning "Mercury" → two distinct entities, not one. Same name *within* one silo → one entity.
+- **Loose path:** `normalize_entity` on two null-silo docs still merges (regression: today's behaviour unchanged).
+- **merge_map leak:** an alias created in silo A does **not** short-circuit a same-name mention from silo B onto A's entity.
+- **Plural-collapse leak:** `agents`(silo A) and `agent`(silo B) do **not** auto-collapse; within one silo they do.
+- **Both batch normalizers, separately:** `worker/src/normalizer.py` (faiss) and `orchestrator/src/pipeline/embedding_normalizer.py` (O(n²)) each keep cross-silo names distinct — separate tests, since they are separate algorithms (`test_schema_mirror` does **not** cover them).
+- **Cross-silo proposal + reversal:** a high-similarity cross-silo pair produces a `graph_issues` row (not a merge), by **entity id**; approving it merges and `rollback_merge` reverses it.
+- **Emission:** an `agent_report` **vault** silo's docs do **not** emit co-occurrence edges by default — specifically exercising the non-`document_collections` path (B6), since that's the one the old lever missed.
+- **Read exposure:** `get_entity` / graph snapshot / MCP reads include silo + kind.
 
 ## 9. Out of scope / phasing
 
@@ -110,3 +131,5 @@ Provenance is worthless unless it rides along in what agents read. Surface **sil
 3. **Scoping hardness** — hard "never auto-merge cross-silo" (proposed), vs a per-noosphere policy knob?
 4. **`kind` vocabulary** — the 4 above, or the minimal `neutral` vs `claim`?
 5. **Phasing** — ship #50 (silos) and #79 (kind/exposure) as one PR or two?
+6. **merge_map scoping** — honor a hit only if the target shares the silo (no migration), vs re-key `merge_map` by `(silo_id, from_name)` (cleaner, but a schema + backfill change)?
+7. **Batch normalizers** — consolidate the two divergent `run_batch_normalization` implementations into one first, or silo-scope both in place (and test both)?
