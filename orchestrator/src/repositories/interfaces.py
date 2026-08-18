@@ -88,6 +88,7 @@ class Job:
     status: str = "queued"
     config: dict | None = None
     result: dict | None = None
+    progress: dict | None = None       # live mid-run counters (docs_done/docs_total/entities_so_far)
     created_at: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
