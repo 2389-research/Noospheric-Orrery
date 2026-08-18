@@ -13,6 +13,7 @@ dependencies = [
     # needs its own declaration because neither package imports the other.
     "faiss-cpu>=1.7.0",
     "numpy>=1.26.0",
+    "pyyaml>=6.0",
     # simmer-sdk: install from PyPI or local path (see worker/Dockerfile)
     # "simmer-sdk>=0.2.0",
     "orrery-relay",

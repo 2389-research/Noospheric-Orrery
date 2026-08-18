@@ -12,6 +12,28 @@ router = APIRouter()
 
 
 class WatchedSourceCreate(BaseModel):
+    """Register a source the worker re-syncs.
+
+    `config_json` is a per-type featurizer config. For a **vault** (Obsidian-style note
+    directory) the worker's vault featurizer reads:
+      - `ext`: list of note extensions to ingest (default `[".md"]`); leading dot optional.
+      - `ignore`: extra directory *names* to prune, on top of the built-in defaults
+        (any dotfolder — so `.obsidian`/`.trash` are always skipped — plus `.git`,
+        `node_modules`, `__pycache__`, and binary/attachment suffixes). Text-only MVP:
+        attachments (PDF/image) are intentionally skipped.
+      - `folder_domains` (bool, default off): when true, each note's parent folder path
+        becomes its domain (lowercase `/`-separated), skipping LLM classification. Left
+        opt-in so existing imports keep today's classify behavior.
+    Parsed YAML frontmatter is stripped from the body and carried on the document's
+    `metadata` (provenance); wikilinks/embeds/comments are cleaned before extraction.
+
+    Known limitations (see plan 2026-08-17-obsidian-vault-import-41):
+      - Renaming a note changes its `source_path` -> treated as delete + create (no move
+        detection).
+      - `source_path` is the mounted absolute path -> remounting the vault elsewhere
+        re-ingests everything. Relativization is a spine decision, tracked separately.
+      - Attachments (PDF/image) are not ingested (text-only).
+    """
     type: str                      # 'vault' | 'repo'
     uri: str
     noosphere: str | None = None

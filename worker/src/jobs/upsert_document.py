@@ -173,7 +173,7 @@ def _recount_domains(conn, paths) -> None:
 async def upsert_document(conn, relay, settings, *, source_path, title, content,
                           source_id=None, emits_cooccurrence=True,
                           collection_id=None, role=None, parent_path=None,
-                          content_type="text", domain_path=None,
+                          content_type="text", metadata=None, domain_path=None,
                           classify=True, pre_chunked=False) -> dict:
     """Create / update-in-place / skip a document keyed on `source_path`.
 
@@ -192,9 +192,10 @@ async def upsert_document(conn, relay, settings, *, source_path, title, content,
     Commits once at the end (crash-safe / resumable per document).
     """
     chash = _content_hash(content)
+    meta_json = json.dumps(metadata, default=str) if metadata else None
 
     existing = conn.execute(
-        "SELECT id, content_hash, source_id FROM documents "
+        "SELECT id, content_hash, source_id, title, metadata FROM documents "
         "WHERE source_path = ? AND invalid_at IS NULL", (source_path,)).fetchone()
 
     if existing is not None:
@@ -204,8 +205,23 @@ async def upsert_document(conn, relay, settings, *, source_path, title, content,
         if ex_source is not None and source_id is not None and ex_source != source_id:
             return {"action": "conflict", "document_id": ex_id, "entities": 0}
         if ex_hash == chash:
+            # Body unchanged -> skip the expensive re-chunk + re-extract. But the content
+            # hash is over the cleaned BODY only, so a note whose frontmatter changed
+            # (its title/metadata) without a body edit would otherwise keep stale fields.
+            # Persist just those (cheap, no re-extraction), alongside source adoption.
+            sets, params = [], []
             if ex_source is None and source_id is not None:
-                conn.execute("UPDATE documents SET source_id = ? WHERE id = ?", (source_id, ex_id))
+                sets.append("source_id = ?")
+                params.append(source_id)
+            if existing["title"] != title:
+                sets.append("title = ?")
+                params.append(title)
+            if (existing["metadata"] or None) != meta_json:
+                sets.append("metadata = ?")
+                params.append(meta_json)
+            if sets:
+                params.append(ex_id)
+                conn.execute(f"UPDATE documents SET {', '.join(sets)} WHERE id = ?", params)
                 conn.commit()
             return {"action": "skipped", "document_id": ex_id, "entities": 0}
         # Update-in-place: retract the old derived rows, keep the same document id.
@@ -220,9 +236,9 @@ async def upsert_document(conn, relay, settings, *, source_path, title, content,
         conn.execute("DELETE FROM document_collections WHERE document_id = ?", (doc_id,))
         conn.execute(
             "UPDATE documents SET title = ?, content = ?, content_hash = ?, content_type = ?, "
-            "modified_at = CURRENT_TIMESTAMP, source_id = COALESCE(source_id, ?), "
+            "metadata = ?, modified_at = CURRENT_TIMESTAMP, source_id = COALESCE(source_id, ?), "
             "status = 'pending' WHERE id = ?",
-            (title, content, chash, content_type, source_id, doc_id))
+            (title, content, chash, content_type, meta_json, source_id, doc_id))
         action = "updated"
     else:
         doc_id = str(uuid.uuid4())
@@ -230,8 +246,8 @@ async def upsert_document(conn, relay, settings, *, source_path, title, content,
         old_domain_paths = []
         conn.execute(
             "INSERT INTO documents (id, title, content, content_hash, source_path, source_id, "
-            "content_type, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
-            (doc_id, title, content, chash, source_path, source_id, content_type))
+            "content_type, metadata, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
+            (doc_id, title, content, chash, source_path, source_id, content_type, meta_json))
         action = "created"
 
     # Collection membership (repo hierarchy). The emits_cooccurrence flag lands HERE, so
