@@ -187,6 +187,8 @@ async def run_evaluation(args: argparse.Namespace) -> None:
         except Exception as exc:
             print(f"  Warning: VLLM failed for {img_path.name}: {exc}", file=sys.stderr)
             result = {"entities": [], "description": "", "tags": []}
+        if isinstance(result, list):        # tolerate a bare-list result (issue #36)
+            result = {"entities": result}
 
         # Write raw output
         output_file = eval_dir / f"{img_path.stem}.json"
