@@ -128,7 +128,7 @@ Provenance is worthless unless it rides along in what agents read. Surface **sil
 
 ## 8. Testing
 
-Cover **all four auto-merge paths** from §3.1, plus the two leaks (merge_map, plural collapse) — a test that only checks the faiss candidate query would pass while the real bugs remain:
+Cover **all five auto-merge paths** from §3.1 (incl. the image inline fuse), plus the two leaks (merge_map, plural collapse) — a test that only checks the faiss candidate query would pass while the real bugs remain:
 
 - **Primary inline path (the #50 crux):** two repo/vault silos ingested through `extract_document_entities`, both mentioning "Mercury" → two distinct entities, not one. Same name *within* one silo → one entity.
 - **Loose path:** `normalize_entity` on two null-silo docs still merges (regression: today's behaviour unchanged).
@@ -147,11 +147,11 @@ Cover **all four auto-merge paths** from §3.1, plus the two leaks (merge_map, p
 - **Phase 2:** the `kind` vocabulary + `emits_cooccurrence`-per-kind + read/viz exposure. Delivers #79. Can ship as a follow-up PR on the same model.
 - **Not now:** a per-noosphere scoping-policy knob; per-doc provenance sub-tagging within a silo (the whole point is provenance = silo, not per-doc); merging two vaults into one silo (they stay distinct; cross-silo merge is per-entity via corrections).
 
-## 10. Open decisions for review
-1. **`silo_id` column** — one unified column populated at ingest, vs a computed view over `source_id`/`collection_id`?
-2. ~~**Silo `kind` home**~~ — **SETTLED (§4.1):** `kind` on the silo row (`watched_sources`+`collections`), flow-defaulted, `config_json`-overridable, not derived from content, not a separate table. Backfilled for existing noospheres (§5.1).
-3. **Scoping hardness** — hard "never auto-merge cross-silo" (proposed), vs a per-noosphere policy knob?
-4. **`kind` vocabulary** — the 4 above, or the minimal `neutral` vs `claim`?
-5. **Phasing** — ship #50 (silos) and #79 (kind/exposure) as one PR or two?
-6. **merge_map scoping** — honor a hit only if the target shares the silo (no migration), vs re-key `merge_map` by `(silo_id, from_name)` (cleaner, but a schema + backfill change)?
-7. **Batch normalizers** — consolidate the two divergent `run_batch_normalization` implementations into one first, or silo-scope both in place (and test both)?
+## 10. Decisions — LOCKED
+1. **`silo_id`** — **materialized column** populated at ingest (one indexed column to scope on; the join is hot). Not a computed view.
+2. **Silo `kind` home** — `kind` on the silo row (`watched_sources`+`collections`), flow-defaulted, `config_json`-overridable, not content-derived, not a separate table (§4.1). Backfilled (§5.1).
+3. **Scoping hardness** — **hard**: cross-silo only via corrections. No per-noosphere policy knob (YAGNI).
+4. **`kind` vocabulary** — the **4 kinds** (`neutral_summary` / `human_vault` / `agent_report` / `human_reviewed`); extensible later.
+5. **Phasing** — **two PRs**: Phase 1 = silos (#50, ships value first); Phase 2 = `kind` + emission + read/viz exposure (#79).
+6. **merge_map scoping** — **filter-by-target-silo** (no migration) for v1; re-key `(silo_id, from_name)` is a deferred option if global aliases prove too lossy.
+7. **Batch normalizers** — **scope both in place** now + test both separately; "consolidate the two implementations" is a tracked follow-up, not a prerequisite.
