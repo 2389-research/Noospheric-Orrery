@@ -78,6 +78,18 @@ The `kind` drives two things and is **read-exposed** (see §6):
 
 `kind` is **not** used for normalization scoping — scoping is by silo *id* (§3). Two `neutral_summary` repos are still different silos and don't auto-merge. `kind` is metadata about the silo, for emission + trust, not a scoping key.
 
+### 4.1 Setting `kind` — owned at the ingestion level, overridable
+
+`kind` cannot be reliably **derived from content** (an agent's retro and a human's note read identically). What's authoritative is **how the doc was produced — which ingestion flow ran.** So `kind` is **set at the flow/source level, not inferred per-doc**, with a most-specific-wins resolution:
+
+1. **Flow default (Orrery-set).** Each featurizer declares its default `kind` in code: `vault → human_vault`, `codesum → neutral_summary`, `tracksum → neutral_summary`, an agent-report parser → `agent_report`. **A user who does nothing gets the right `kind` for free** — this is the "most of Orrery is just set" part.
+2. **Per-source override (user-set, optional).** At source registration the user may override `kind` — e.g. "this vault is actually agent-generated → `agent_report`." Stored in the **existing `watched_sources.config_json`** (same place #41 put `ext`/`ignore`/`folder_domains`), so no new registration surface is needed; for collection-only silos (one-shot repo/tracker), an optional `kind` arg on the ingest call.
+3. **Resolution at ingest:** `silo.kind = source override ?? flow default`. The user only touches `kind` to *override* a sensible default — zero ceremony for the common case, full control when wanted.
+
+**This is forward-compatible with the pipeline-preset direction** (a HuggingFace-like suite of shareable ingestion flows). A "pipeline" is a bundle `{ featurizer, extraction_spec, kind, config }`; `kind` is just one knob in the same config surface that already carries the featurizer choice and the (simmerable) extraction spec. A published preset ships sensible defaults including `kind`; a user installs it and overrides only what they care about. **No new mechanism** is required for that future — `kind` rides the config that's already there.
+
+**This settles open-decision #2:** `kind` lives on the silo row (a `kind` column/attribute on `watched_sources`, and on `collections` which already has one), flow-defaulted, `config_json`-overridable — not a separate `silos` table.
+
 ## 5. Data model
 
 - **`documents.silo_id`** — the silo key, resolved at ingest with an **explicit precedence** (the earlier "source_id XOR collection_id" dichotomy was wrong — a *watched repo* produces BOTH a `watched_sources` row *and* a `collections` row, different UUIDs, on the same document):
@@ -85,8 +97,15 @@ The `kind` drives two things and is **read-exposed** (see §6):
   - **`collection_id`** (this makes a **one-shot `POST /ingest/repo`/tracker ingest a silo too** — it has a durable `collection_id` even with no watched source), else
   - **`NULL`** — the loose `POST /ingest` / `/ingest/text` document upload. So "one-off = null" means *ad-hoc uploads*, not one-shot repo/tracker ingests (those are silos). **`POST /ingest/directory` is also null** — it mints no durable `watched_sources`/`collections` row (it just loops files through `_ingest_document`), so there's no id to key a silo on. Consistent with "silo only where a durable source exists"; a future enhancement could mint a silo id for a named directory if users want it treated as one corpus.
   Decision for review: a single materialized `silo_id` column populated at ingest (proposed — one indexed column to scope on), vs a computed view over `source_id`/`collection_id` (no migration but every scoping query re-derives the precedence).
-- **Silo registry + `kind`** — silos need a home that carries `kind`. `collections.kind` already exists (`git_repo`/`tracker_run`); `watched_sources` needs a `kind` too. Proposal: a per-silo `kind` attribute on the silo's owning row (watched_sources + collections), with a small migration, OR a thin unified `silos` table. (Decision for review.)
+- **Silo `kind` home (settled — see §4.1)** — a `kind` attribute on the silo's owning row: `collections.kind` already exists (`git_repo`/`tracker_run`); add one to `watched_sources`. Flow-defaulted, `config_json`-overridable. No separate `silos` table.
 - **No change to `entities`/`entity_sources`** — an entity's silo is derived through `entity_sources → documents.silo_id`. Indexing: normalization candidate queries now join on `documents.silo_id`, so it needs an index.
+
+### 5.1 Backfill for existing noospheres
+
+Existing noospheres have documents but no `silo_id` and no silo-level `kind`. The migration backfills both so current data (including our demo workspaces) is testable without re-ingesting:
+- **`documents.silo_id`** — populate from each doc's existing `source_id` / `document_collections.collection_id` via the §5 precedence; loose/`directory` uploads stay `NULL`. A pure derived backfill, no re-extraction.
+- **Silo `kind`** — set each existing silo's `kind` from its flow default (a `collections` row's `kind` already tells us `git_repo`/`tracker_run` → `neutral_summary`; a `watched_sources` row's `type` tells us `vault → human_vault`, `repo → neutral_summary`). Idempotent, and re-runnable if the vocabulary changes.
+- **Existing entities are NOT retro-split.** Backfill assigns silos to *documents*; it does not un-merge entities that were already fused across what are now different silos (that history is real). Silo scoping applies to *future* normalization; a pre-existing cross-silo merge a user wants undone goes through the corrections flow like any other. (Call this out so the acceptance test uses freshly-ingested silos, not the backfilled blend, to prove distinctness.)
 
 ## 6. Reads, MCP, and viz (the #79 exposure half)
 
@@ -120,6 +139,8 @@ Cover **all four auto-merge paths** from §3.1, plus the two leaks (merge_map, p
 - **Emission:** an `agent_report` **vault** silo's docs do **not** emit co-occurrence edges by default — specifically exercising the non-`document_collections` path (B6), since that's the one the old lever missed.
 - **Read exposure:** `get_entity` / graph snapshot / MCP reads include silo + kind.
 
+**Live acceptance (same loop we used for #41/#51):** on a rebuilt stack, register **two sample git orgs/repos + one sample Obsidian vault** as distinct silos, ingest each, then verify against the running instance — an identically-named entity stays two nodes across silos, the viz/`GET /graph` filters per silo, a deliberate cross-silo merge via corrections applies and reverses. Use *freshly-ingested* silos for the distinctness assertion (not the backfilled blend — see §5.1).
+
 ## 9. Out of scope / phasing
 
 - **Phase 1 (this spec's core):** `silo_id` model, silo-scoped normalization (all three call sites), cross-silo → proposal, tests. Delivers #50's substance.
@@ -128,7 +149,7 @@ Cover **all four auto-merge paths** from §3.1, plus the two leaks (merge_map, p
 
 ## 10. Open decisions for review
 1. **`silo_id` column** — one unified column populated at ingest, vs a computed view over `source_id`/`collection_id`?
-2. **Silo `kind` home** — attribute on `watched_sources`+`collections`, vs a thin unified `silos` table?
+2. ~~**Silo `kind` home**~~ — **SETTLED (§4.1):** `kind` on the silo row (`watched_sources`+`collections`), flow-defaulted, `config_json`-overridable, not derived from content, not a separate table. Backfilled for existing noospheres (§5.1).
 3. **Scoping hardness** — hard "never auto-merge cross-silo" (proposed), vs a per-noosphere policy knob?
 4. **`kind` vocabulary** — the 4 above, or the minimal `neutral` vs `claim`?
 5. **Phasing** — ship #50 (silos) and #79 (kind/exposure) as one PR or two?
