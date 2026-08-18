@@ -40,6 +40,10 @@ async def extract_entities_from_chunk(relay: Relay, chunk_text: str, spec: str, 
         tool_name="extract_entities",
         tool_description="Extract named entities from the text according to the extraction spec",
     )
+    # Some backends (Anthropic/gateway) intermittently return the entities array at the
+    # top level instead of {"entities": [...]}. Tolerate both shapes (issue #36).
+    if isinstance(result, list):
+        return result
     return result.get("entities", [])
 
 
