@@ -122,6 +122,8 @@ async def run_simmer_domain_image(job: dict, db_path: str) -> None:
                 }, "required": ["entities", "description", "details"]},
                 tool_name="prescan", tool_description="Pre-scan image",
             )
+            if isinstance(prescan, list):        # tolerate a bare-list result (issue #36)
+                prescan = {"entities": prescan}
             lines = [f"IMAGE: {img_file.name}", f"DESCRIPTION: {prescan.get('description', '')}", "", "ENTITIES:"]
             for e in prescan.get("entities", []):
                 if isinstance(e, dict) and "name" in e:

@@ -161,6 +161,9 @@ async def extract_chunk(relay, chunk_text: str, spec: str, model: str) -> list[d
         tool_name="extract_entities",
         tool_description="Extract named entities from the text according to the extraction spec",
     )
+    # Tolerate a top-level array (some backends return it instead of {"entities": [...]}); issue #36.
+    if isinstance(result, list):
+        return result
     return result.get("entities", [])
 
 
@@ -249,6 +252,8 @@ async def run_evaluation(args: argparse.Namespace) -> None:
                     tool_name="extract_image",
                     tool_description="Extract entities and metadata from an image",
                 )
+                if isinstance(result, list):        # tolerate a bare-list result (issue #36)
+                    result = {"entities": result}
                 for e in result.get("entities", []):
                     key = (e["name"].lower().strip(), e["type"])
                     if key not in seen:

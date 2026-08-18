@@ -80,6 +80,8 @@ async def run_extract_batch_image(job: dict, db_path: str) -> None:
                 tool_name="extract_image",
                 tool_description="Extract entities and metadata from image",
             )
+            if isinstance(result, list):        # tolerate a bare-list result (issue #36)
+                result = {"entities": result}
         except Exception as e:
             print(f"  Failed {doc['title']}: {e}", flush=True)
             continue
