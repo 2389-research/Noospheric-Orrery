@@ -874,7 +874,7 @@ git push -u origin plan/obsidian-vault-import-41   # NOTE: do not open/merge a P
 
 The automated tests (Levels 1–3) never touch the real model or the UI. Final sign-off is this runbook against the running instance (`noospheric-orrery-*` containers). The **hygiene** checks are deterministic; only "are the entities sensible" needs a human eye (it's LLM output).
 
-1. **Register the vault.** `POST /watched-sources` with `{type:"vault", uri:"/data/e2e_vault", config:{ext:[".md"], ignore:[], folder_domains:false}}` (path must be inside the container's `/data` bind-mount). Note the returned `source_id`.
+1. **Register the vault.** `POST /watched-sources` with `{"type":"vault", "uri":"/data/e2e_vault", "config_json":{"ext":[".md"], "ignore":[], "folder_domains":false}}` (path must be inside the container's `/data` bind-mount). Note the returned `source_id`.
 2. **Trigger one scan.** `POST /watched-sources/{source_id}/scan`. Watch `GET /jobs` until the `scan_source` job completes; check `GET /watched-sources` shows `last_status: ok`.
 3. **Verify hygiene (deterministic):**
    - `GET /documents` — only the real notes present; **no** `.obsidian`, `.trash`, or non-`.md` documents.

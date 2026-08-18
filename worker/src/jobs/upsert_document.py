@@ -195,7 +195,7 @@ async def upsert_document(conn, relay, settings, *, source_path, title, content,
     meta_json = json.dumps(metadata, default=str) if metadata else None
 
     existing = conn.execute(
-        "SELECT id, content_hash, source_id FROM documents "
+        "SELECT id, content_hash, source_id, title, metadata FROM documents "
         "WHERE source_path = ? AND invalid_at IS NULL", (source_path,)).fetchone()
 
     if existing is not None:
@@ -205,8 +205,23 @@ async def upsert_document(conn, relay, settings, *, source_path, title, content,
         if ex_source is not None and source_id is not None and ex_source != source_id:
             return {"action": "conflict", "document_id": ex_id, "entities": 0}
         if ex_hash == chash:
+            # Body unchanged -> skip the expensive re-chunk + re-extract. But the content
+            # hash is over the cleaned BODY only, so a note whose frontmatter changed
+            # (its title/metadata) without a body edit would otherwise keep stale fields.
+            # Persist just those (cheap, no re-extraction), alongside source adoption.
+            sets, params = [], []
             if ex_source is None and source_id is not None:
-                conn.execute("UPDATE documents SET source_id = ? WHERE id = ?", (source_id, ex_id))
+                sets.append("source_id = ?")
+                params.append(source_id)
+            if existing["title"] != title:
+                sets.append("title = ?")
+                params.append(title)
+            if (existing["metadata"] or None) != meta_json:
+                sets.append("metadata = ?")
+                params.append(meta_json)
+            if sets:
+                params.append(ex_id)
+                conn.execute(f"UPDATE documents SET {', '.join(sets)} WHERE id = ?", params)
                 conn.commit()
             return {"action": "skipped", "document_id": ex_id, "entities": 0}
         # Update-in-place: retract the old derived rows, keep the same document id.

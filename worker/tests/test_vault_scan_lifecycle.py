@@ -22,9 +22,13 @@ async def test_vault_scan_lifecycle(tmp_path, monkeypatch):
     _write(vault / ".obsidian" / "app.json", "{}")          # junk: must never ingest
     _write(vault / ".trash" / "old.md", "deleted note\n")   # junk: must never ingest
 
-    db = str(tmp_path / "t.db"); init_db(db); conn = get_connection(db)
+    db = str(tmp_path / "t.db")
+    init_db(db)
+    conn = get_connection(db)
     conn.execute("INSERT INTO watched_sources (id, type, uri) VALUES ('v1','vault',?)",
-                 (str(vault),)); conn.commit(); conn.close()
+                 (str(vault),))
+    conn.commit()
+    conn.close()
     monkeypatch.setattr(scan_source_mod, "Relay", FakeRelay)
 
     # scan #1 — both real notes created; junk excluded; frontmatter in metadata, not body
@@ -35,7 +39,8 @@ async def test_vault_scan_lifecycle(tmp_path, monkeypatch):
     assert names == ["a.md", "b.md"]                                   # no .obsidian/.trash docs
     a = conn.execute("SELECT id, content, metadata FROM documents WHERE source_path LIKE '%a.md'").fetchone()
     assert "tags:" not in a["content"] and json.loads(a["metadata"])["tags"] == ["x"]
-    a_id = a["id"]; conn.close()
+    a_id = a["id"]
+    conn.close()
 
     # scan #2 — no disk change -> skip; same id; still two active docs
     await _run_scan(db, source_id="v1")
