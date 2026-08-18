@@ -459,9 +459,12 @@ async def propose_correction(
 
 # ── Write: ingestion, jobs, workspaces ────────────────────────────────────────
 # These are DIRECT writes (ingestion, job triggers, workspace creation) — fine to apply
-# without human review. Graph *mutations* (invalidate/merge/retype/rename) still go only
-# through propose_correction above, which files for human approval. Do not add a tool that
-# edits the graph directly.
+# without human review. NOTE: trigger_normalization runs batch normalization, which
+# auto-merges confident duplicate entities — sanctioned pipeline behaviour, already
+# reachable via REST, not new here. What stays HUMAN-GATED is an agent proposing a
+# graph correction from its OWN judgment (invalidate/merge/retype/rename a specific
+# node): that goes only through propose_correction above, which files for approval. Do
+# not add a tool that edits the graph directly on the agent's say-so.
 
 @mcp.tool()
 async def ingest_text(title: str, content: str) -> str:
@@ -469,6 +472,8 @@ async def ingest_text(title: str, content: str) -> str:
     Runs the full pipeline: classify into a domain, extract entities, compute co-occurrence.
     Select a noosphere first with select_noosphere(). Returns the new document id, its
     assigned domains, and how many entities were extracted."""
+    if _active_workspace is None:
+        return "No noosphere selected — call select_noosphere() first so the document lands in the right workspace."
     result = await call_api("/ingest/text", method="POST", body={"title": title, "content": content})
     if "document_id" not in result:
         return f"Ingest failed: {result.get('detail', result)}"
@@ -495,6 +500,8 @@ async def trigger_simmer(domain: str = "") -> str:
     a domain path (e.g. 'techniques/wet-blending') simmers that domain's spec. When the
     simmer finishes, the worker automatically runs a batch re-extraction with the improved
     spec. Returns the job id — track it with get_job_status()."""
+    if _active_workspace is None:
+        return "No noosphere selected — call select_noosphere() first."
     path = "/simmer/general" if not domain else f"/simmer/{quote(domain, safe='/')}"
     result = await call_api(path, method="POST")
     if "job_id" not in result:
@@ -509,6 +516,8 @@ async def trigger_normalization() -> str:
     by embedding similarity and LLM-review the ambiguous pairs. Confident duplicates merge
     automatically; uncertain pairs go to the human review queue. Returns a summary of what
     merged and what awaits review."""
+    if _active_workspace is None:
+        return "No noosphere selected — call select_noosphere() first."
     result = await call_api("/normalize", method="POST")
     if "detail" in result:
         return f"Normalization failed: {result['detail']}"
@@ -517,24 +526,25 @@ async def trigger_normalization() -> str:
 
 @mcp.tool()
 async def get_job_status(job_id: str = "") -> str:
-    """Check background job status. With a job_id, returns that job's status plus live
-    progress for extractions (docs done / total, entities so far). With no id, lists the
-    jobs currently running or queued in the active noosphere."""
+    """Check background job status. With a job_id, returns that job's status (plus live
+    extraction progress — docs done / total, entities so far — when the running job reports
+    it). With no id, lists the jobs currently running or queued in the active noosphere.
+    Reads the job list (GET /jobs) and resolves the id client-side."""
+    jobs = await call_api("/jobs")
+    if isinstance(jobs, dict) and "detail" in jobs:
+        return f"Could not fetch jobs: {jobs['detail']}"
     if job_id:
-        result = await call_api(f"/jobs/{quote(job_id, safe='')}")
-        if "status" not in result:
-            return f"Could not fetch job: {result.get('detail', result)}"
-        lines = [f"Job {result['id']} ({result['type']}) — {result['status']}"]
-        prog = result.get("progress")
+        job = next((j for j in jobs if j.get("id") == job_id), None)
+        if job is None:
+            return f"No job with id '{job_id}' in the active noosphere."
+        lines = [f"Job {job['id']} ({job['type']}) — {job['status']}"]
+        prog = job.get("progress")
         if prog:
             lines.append(f"  progress: {prog.get('docs_done')}/{prog.get('docs_total')} docs, "
                          f"{prog.get('entities_so_far')} entities so far")
-        if result.get("results"):
-            lines.append(f"  result: {json.dumps(result['results'])}")
+        if job.get("results"):
+            lines.append(f"  result: {json.dumps(job['results'])}")
         return "\n".join(lines)
-    jobs = await call_api("/jobs")
-    if isinstance(jobs, dict) and "detail" in jobs:
-        return f"Could not list jobs: {jobs['detail']}"
     active = [j for j in jobs if j.get("status") in ("running", "queued")]
     if not active:
         return "No running or queued jobs."
