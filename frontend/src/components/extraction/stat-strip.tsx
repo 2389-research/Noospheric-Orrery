@@ -32,6 +32,11 @@ interface StatStripProps {
 
 export function StatStrip({ job, typeNames, totalMerges, isRunning }: StatStripProps) {
   const results = job?.results;
+  const progress = job?.progress;
+  const hasLiveProgress = isRunning && !!progress && progress.docs_total > 0;
+  const pct = hasLiveProgress
+    ? Math.min(100, Math.round((progress.docs_done / progress.docs_total) * 100))
+    : 0;
   const docsProcessed = results?.docs_processed ?? 0;
   const entitiesFound = results?.entities_found ?? 0;
   const entitiesNew = results?.entities_new ?? 0;
@@ -59,28 +64,51 @@ export function StatStrip({ job, typeNames, totalMerges, isRunning }: StatStripP
     <div className="grid grid-cols-5 border border-border/30 rounded overflow-hidden">
       {/* DOCS */}
       <div className="px-4 py-3 border-r border-border/30">
-        <p className="text-xl font-bold text-blue-400">
-          {isRunning && docsProcessed === 0 ? (
-            <span className="animate-pulse text-muted-foreground/70">—</span>
-          ) : (
-            docsProcessed
-          )}
-        </p>
-        <p className="text-[9px] tracking-[3px] text-muted-foreground/90 mt-1">DOCS</p>
-        <p className="text-[9px] text-muted-foreground/70 mt-0.5">
-          {job?.status === "failed" ? (
-            <span className="text-red-400/80">partial results</span>
-          ) : (
-            "all extracted"
-          )}
-        </p>
+        {hasLiveProgress ? (
+          <>
+            <p className="text-xl font-bold text-blue-400">
+              {progress?.docs_done ?? 0}
+              <span className="text-sm font-medium text-muted-foreground/60">/{progress?.docs_total ?? 0}</span>
+            </p>
+            <div className="h-1 mt-1.5 rounded-full bg-border/40 overflow-hidden">
+              <div
+                className="h-full bg-blue-400 transition-all duration-500"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <p className="text-[9px] tracking-[3px] text-muted-foreground/90 mt-1">DOCS</p>
+            <p className="text-[9px] text-muted-foreground/70 mt-0.5">{pct}% · extracting…</p>
+          </>
+        ) : (
+          <>
+            <p className="text-xl font-bold text-blue-400">
+              {isRunning && docsProcessed === 0 ? (
+                <span className="animate-pulse text-muted-foreground/70">—</span>
+              ) : (
+                docsProcessed
+              )}
+            </p>
+            <p className="text-[9px] tracking-[3px] text-muted-foreground/90 mt-1">DOCS</p>
+            <p className="text-[9px] text-muted-foreground/70 mt-0.5">
+              {job?.status === "failed" ? (
+                <span className="text-red-400/80">partial results</span>
+              ) : (
+                "all extracted"
+              )}
+            </p>
+          </>
+        )}
       </div>
 
       {/* ENTITIES */}
       <div className="px-4 py-3 border-r border-border/30">
         {isRunning && !results ? (
           <>
-            <p className="text-xl font-bold text-muted-foreground/70 animate-pulse">—</p>
+            {progress ? (
+              <p className="text-xl font-bold text-emerald-400">{progress.entities_so_far}</p>
+            ) : (
+              <p className="text-xl font-bold text-muted-foreground/70 animate-pulse">—</p>
+            )}
             <p className="text-[9px] tracking-[3px] text-muted-foreground/90 mt-1">ENTITIES</p>
             <p className="text-[9px] text-muted-foreground/70 mt-0.5">extracting…</p>
           </>

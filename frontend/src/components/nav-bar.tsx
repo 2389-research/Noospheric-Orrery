@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { UserMenu } from "./user-menu";
 import { NoosphereSwitcher } from "./noosphere-switcher";
+import { RunningJobsIndicator } from "./running-jobs-indicator";
 
 const TABS = [
   { label: "Upload", href: "upload", writeOnly: true },
@@ -49,6 +50,8 @@ export function NavBar({
       </div>
 
       <div className="flex-1" />
+
+      <RunningJobsIndicator noosphereId={currentNoosphereId} />
 
       <UserMenu />
     </nav>
