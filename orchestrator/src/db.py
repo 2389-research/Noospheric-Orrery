@@ -652,7 +652,10 @@ def init_db(db_path: str) -> None:
             # Extraction progress: live mid-run counters on the job (issue #51).
             job_cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
             if "progress" not in job_cols:
-                conn.execute("ALTER TABLE jobs ADD COLUMN progress TEXT")
+                try:
+                    conn.execute("ALTER TABLE jobs ADD COLUMN progress TEXT")
+                except sqlite3.OperationalError:
+                    pass  # orchestrator + worker init_db race on the same DB; the loser sees it already added
             # Migrate specs table
             spec_cols = {r[1] for r in conn.execute("PRAGMA table_info(specs)").fetchall()}
             if "media_type" not in spec_cols:
