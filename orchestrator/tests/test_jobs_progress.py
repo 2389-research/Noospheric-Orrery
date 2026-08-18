@@ -19,11 +19,8 @@ def test_get_job_returns_progress(test_store, test_client):
     assert body["progress"] == {"docs_done": 3, "docs_total": 10, "entities_so_far": 42}
 
 
-def test_get_job_404_for_unknown():
-    # separate client so the missing-progress path is isolated
-    from src.main import app
-    from fastapi.testclient import TestClient
-    assert TestClient(app).get("/jobs/does-not-exist").status_code == 404
+def test_get_job_404_for_unknown(test_client):
+    assert test_client.get("/jobs/does-not-exist").status_code == 404
 
 
 def test_list_jobs_includes_progress(test_store, test_client):

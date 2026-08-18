@@ -625,8 +625,11 @@ def init_db(db_path: str) -> None:
     if "progress" not in job_cols:
         try:
             conn.execute("ALTER TABLE jobs ADD COLUMN progress TEXT")
-        except sqlite3.OperationalError:
-            pass  # orchestrator + worker init_db race on the same DB; whoever lost sees the column already added
+        except sqlite3.OperationalError as e:
+            # Only the orchestrator/worker init_db race (column already added) is expected;
+            # don't swallow a real error like 'database is locked'.
+            if "duplicate column" not in str(e).lower():
+                raise
     # Migrate specs table
     spec_cols = {r[1] for r in conn.execute("PRAGMA table_info(specs)").fetchall()}
     if "media_type" not in spec_cols:
