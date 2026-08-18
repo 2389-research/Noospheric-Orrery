@@ -13,7 +13,7 @@ from orrery_relay import Relay
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
 from ..models import (IngestResult, DirectoryIngestRequest, RepoIngestRequest,
-                      TrackerRunsIngestRequest)
+                      TrackerRunsIngestRequest, TextIngestRequest)
 from ..pipeline.chunker import chunk_document
 from ..pipeline.excerpt import build_classification_excerpt
 from ..pipeline.classifier import classify_document
@@ -372,6 +372,22 @@ async def ingest_file(
     doc_id = result.get("document_id") if isinstance(result, dict) else getattr(result, "document_id", None)
     if doc_id:
         response.headers["Location"] = f"/documents/{doc_id}"
+    return result
+
+
+@router.post("/ingest/text", response_model=IngestResult, status_code=status.HTTP_201_CREATED)
+async def ingest_text(request: TextIngestRequest, auth: AuthStore = Depends(get_auth_store)):
+    """Ingest a document from raw text (JSON) — the programmatic / MCP entry point.
+
+    Runs the same pipeline as a file upload (classify -> extract -> co-occurrence) minus
+    file handling: the text IS the source, so nothing is written to `documents_dir` and
+    `source_path` is None (GET /documents/{id}/file will 404, which is correct — there is
+    no raw artifact)."""
+    store = auth.store
+    try:
+        result = await _ingest_document(store, request.title, request.content, None)
+    finally:
+        store.close()
     return result
 
 
