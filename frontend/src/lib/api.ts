@@ -44,9 +44,7 @@ export const api = {
   },
   getJobs: () => fetchAPI<(import("./types").JobInfo & { results?: import("./types").BatchResults })[]>("/jobs"),
   getJob: (jobId: string) =>
-    fetchAPI<(import("./types").JobInfo & { results?: import("./types").BatchResults })[]>("/jobs").then(
-      (jobs) => jobs.find((j) => j.id === jobId) ?? null
-    ),
+    fetchAPI<import("./types").JobInfo & { results?: import("./types").BatchResults }>(`/jobs/${jobId}`),
   ingestFile: async (file: File) => {
     const form = new FormData();
     form.append("file", file);

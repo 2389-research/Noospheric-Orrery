@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     status TEXT DEFAULT 'queued',
     config TEXT,
     result TEXT,
+    progress TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     started_at TIMESTAMP,
     completed_at TIMESTAMP
@@ -619,6 +620,16 @@ def init_db(db_path: str) -> None:
         conn.execute("ALTER TABLE documents ADD COLUMN invalid_at TIMESTAMP")
     if "source_id" not in cols:
         conn.execute("ALTER TABLE documents ADD COLUMN source_id TEXT")
+    # Extraction progress: live mid-run counters on the job (issue #51).
+    job_cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    if "progress" not in job_cols:
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN progress TEXT")
+        except sqlite3.OperationalError as e:
+            # Only the orchestrator/worker init_db race (column already added) is expected;
+            # don't swallow a real error like 'database is locked'.
+            if "duplicate column" not in str(e).lower():
+                raise
     # Migrate specs table
     spec_cols = {r[1] for r in conn.execute("PRAGMA table_info(specs)").fetchall()}
     if "media_type" not in spec_cols:

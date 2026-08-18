@@ -41,7 +41,11 @@ _MIRRORED_TABLES = ["graph_snapshot", "domain_edges", "collections",
                     # Incremental source sync: the worker writes invalid_at/modified_at/
                     # source_id on documents (via migration ALTERs in both files) and both
                     # services read watched_sources — both are now cross-service surface.
-                    "documents", "watched_sources"]
+                    "documents", "watched_sources",
+                    # The worker writes jobs.progress (extraction counters) and the
+                    # orchestrator serves it to the extraction UI — same cross-service
+                    # hazard: a one-sided column edit would be invisible until runtime.
+                    "jobs"]
 
 # Indexes on that surface. Table DDL alone is not enough: an index dropped from one
 # file costs nothing structurally and everything in latency, so it is exactly the kind

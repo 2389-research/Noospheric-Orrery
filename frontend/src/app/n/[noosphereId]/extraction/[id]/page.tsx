@@ -53,7 +53,9 @@ export default function ExtractionPage() {
       setEntities(entitiesData as EntityWithNew[]);
       setNormSummary(normData);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load extraction");
+      const msg = e instanceof Error ? e.message : "Failed to load extraction";
+      // getJob now hits GET /jobs/{id}, which 404s for a stale link or wrong-workspace URL.
+      setError(msg.includes("404") ? "Extraction job not found." : msg);
     }
   }, [jobId]);
 

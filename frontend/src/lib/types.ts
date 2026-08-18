@@ -40,6 +40,12 @@ export interface EntitySummary {
   source_count: number;
 }
 
+export interface JobProgress {
+  docs_done: number;
+  docs_total: number;
+  entities_so_far: number;
+}
+
 export interface JobInfo {
   id: string;
   type: string;
@@ -48,6 +54,7 @@ export interface JobInfo {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  progress?: JobProgress | null;
 }
 
 export interface Stats {
