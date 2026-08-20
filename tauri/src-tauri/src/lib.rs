@@ -530,7 +530,7 @@ fn launch_impl(app: tauri::AppHandle) -> Result<String, String> {
     for (port, what) in [(ORCH_PORT, "orchestrator"), (FRONT_PORT, "frontend")] {
         if port_open(port) {
             return Err(format!(
-                "Port {port} is already in use ({what}). Is another copy of Noospheric (or docker compose) running?"
+                "Port {port} is already in use ({what}). Is another copy of Orrery (or docker compose) running?"
             ));
         }
     }
@@ -663,7 +663,7 @@ fn open_logs_window(app: &tauri::AppHandle) {
         "logs",
         tauri::WebviewUrl::App("logs.html".into()),
     )
-    .title("Noospheric — Service Logs")
+    .title("Orrery — Service Logs")
     .inner_size(980.0, 640.0)
     .build();
 }
@@ -682,7 +682,7 @@ fn open_updates_window(app: &tauri::AppHandle) {
         "updates",
         tauri::WebviewUrl::App("updates.html".into()),
     )
-    .title("Noospheric — Software Update")
+    .title("Orrery — Software Update")
     .inner_size(520.0, 420.0)
     .build();
 }
@@ -755,7 +755,7 @@ pub fn run() {
             install_update
         ])
         .setup(|app| {
-            println!("\n┌─ Noospheric ─────────────────────────────────");
+            println!("\n┌─ Orrery ─────────────────────────────────");
             println!("│ Desktop window opened — complete setup there.");
             println!("│ After launch:");
             println!("│   Frontend  → http://127.0.0.1:{FRONT_PORT}");
@@ -773,7 +773,7 @@ pub fn run() {
             let quit = PredefinedMenuItem::quit(app, None)?;
             let submenu = Submenu::with_items(
                 app,
-                "Noospheric",
+                "Orrery",
                 true,
                 &[&logs_item, &settings_item, &updates_item, &quit],
             )?;

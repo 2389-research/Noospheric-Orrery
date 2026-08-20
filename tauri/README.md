@@ -1,4 +1,4 @@
-# Noospheric
+# Orrery
 
 Desktop packaging of [Noospheric-Orrery](https://github.com/2389-research/Noospheric-Orrery) — install one app, get the whole adaptive knowledge-graph pipeline (FastAPI orchestrator, background worker, Next.js frontend) with no Docker and no dev toolchain.
 
