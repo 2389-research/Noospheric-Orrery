@@ -1,8 +1,8 @@
 # Installing the Tauri Desktop App (Orrery)
 
-This is the installation guide for the **desktop packaging** of orrery.
+This is the installation guide for the **desktop packaging** of Orrery.
 It assumes you've already read the project overview and setup notes in
-[orrery's CLAUDE.md](https://github.com/2389-research/orrery/blob/main/CLAUDE.md)
+[Orrery's CLAUDE.md](https://github.com/2389-research/orrery/blob/main/CLAUDE.md)
 — what the pipeline is, its three services, the LLM backends, and where data
 lives. This doc only covers building and running the Tauri app that bundles all
 of that into a single desktop application (no Docker needed).
@@ -23,7 +23,7 @@ of that into a single desktop application (no Docker needed).
 ## Install
 
 The Tauri app lives in this repo's `tauri/` subfolder, one level below
-orrery itself — the stage script resolves the Orrery checkout as
+Orrery itself — the stage script resolves the Orrery checkout as
 its own parent directory by default (override with `ORRERY_DIR` if staging
 from a different Orrery checkout):
 

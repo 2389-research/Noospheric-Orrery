@@ -1,6 +1,6 @@
 # Orrery
 
-Desktop packaging of [orrery](https://github.com/2389-research/orrery) — install one app, get the whole adaptive knowledge-graph pipeline (FastAPI orchestrator, background worker, Next.js frontend) with no Docker and no dev toolchain.
+Desktop packaging of [Orrery](https://github.com/2389-research/orrery) — install one app, get the whole adaptive knowledge-graph pipeline (FastAPI orchestrator, background worker, Next.js frontend) with no Docker and no dev toolchain.
 
 > **New here?** Read [tauri.md](tauri.md) for the installation guide (assumes you know the Orrery project).
 
