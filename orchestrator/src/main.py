@@ -121,7 +121,7 @@ async def lifespan(app: FastAPI):
         except (asyncio.CancelledError, Exception):
             pass
 
-app = FastAPI(title="Noospheric Orrery", lifespan=lifespan)
+app = FastAPI(title="Orrery", lifespan=lifespan)
 
 # The graph payload is large and highly repetitive, and nothing was compressing it:
 # /graph served ~31 MB raw on the large graph with no content-encoding at all. It

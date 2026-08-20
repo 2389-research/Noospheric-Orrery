@@ -9,7 +9,7 @@ export function Landing() {
     <div className="min-h-[calc(100vh-57px)] flex flex-col items-center justify-center gap-8 px-6">
       <div className="text-center space-y-4 max-w-lg">
         <h1 className="text-2xl font-light tracking-[8px] text-muted-foreground uppercase">
-          Noospheric Orrery
+          Orrery
         </h1>
         <p className="text-sm text-muted-foreground/70 leading-relaxed">
           An adaptive knowledge graph. Upload documents, discover domains,

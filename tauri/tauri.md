@@ -1,4 +1,4 @@
-# Installing the Tauri Desktop App (Noospheric)
+# Installing the Tauri Desktop App (Orrery)
 
 This is the installation guide for the **desktop packaging** of Noospheric-Orrery.
 It assumes you've already read the project overview and setup notes in
@@ -55,7 +55,7 @@ same time.
 ## Where things go
 
 - Settings: `~/.local/share/ai.2389.noospheric/settings.json`
-  (use the app's **Noospheric → Change Settings…** menu item to reconfigure
+  (use the app's **Orrery → Change Settings…** menu item to reconfigure
   the backend/API key without reinstalling — it restarts the services with
   the new settings automatically)
 - Data (the equivalent of the compose stack's `./data/`):

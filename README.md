@@ -1,4 +1,4 @@
-# Noospheric Orrery
+# Orrery
 
 An adaptive knowledge graph pipeline. Upload documents and images, the system classifies them into domains, builds extraction specs through iterative refinement, extracts entities, and visualizes the result as an interactive galaxy map.
 

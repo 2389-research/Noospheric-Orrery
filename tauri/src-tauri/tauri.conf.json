@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Noospheric",
+  "productName": "Orrery",
   "version": "0.1.0",
   "identifier": "ai.2389.noospheric",
   "build": {
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Noospheric Orrery",
+        "title": "Orrery",
         "width": 1280,
         "height": 840
       }

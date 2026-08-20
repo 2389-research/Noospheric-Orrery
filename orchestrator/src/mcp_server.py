@@ -1,4 +1,4 @@
-"""MCP server exposing the Noospheric Orrery knowledge graph as tools.
+"""MCP server exposing the Orrery knowledge graph as tools.
 
 Run with: python -m src.mcp_server
 
