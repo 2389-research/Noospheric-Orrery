@@ -102,6 +102,7 @@ class Spec:
     golden_set: str | None = None
     score: float | None = None
     created_at: str | None = None
+    source: str = "simmered"
 
 
 @dataclass
@@ -344,7 +345,8 @@ class JobRepository(ABC):
 class SpecRepository(ABC):
     @abstractmethod
     def create(self, id: str, domain_path: str | None, version: int,
-               content: str, golden_set: str | None = None, score: float | None = None) -> None: ...
+               content: str, golden_set: str | None = None, score: float | None = None,
+               source: str = "simmered") -> None: ...
 
     @abstractmethod
     def get_general(self) -> Spec | None: ...

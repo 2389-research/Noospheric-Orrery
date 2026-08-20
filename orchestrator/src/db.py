@@ -200,6 +200,7 @@ CREATE TABLE IF NOT EXISTS specs (
     golden_set TEXT,
     score REAL,
     media_type TEXT DEFAULT 'text',
+    source TEXT DEFAULT 'simmered',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 -- ── Graph read-model foundations ────────────────────────────────────────────
@@ -309,6 +310,11 @@ def init_db(db_path: str) -> None:
             spec_cols = {r[1] for r in conn.execute("PRAGMA table_info(specs)").fetchall()}
             if "media_type" not in spec_cols:
                 conn.execute("ALTER TABLE specs ADD COLUMN media_type TEXT DEFAULT 'text'")
+            # `source` is the authored/simmered CONTRACT, not just provenance: an authored
+            # spec is complete and suppresses the general pass, a simmered one is additive
+            # and depends on it. Existing rows are all simmered.
+            if "source" not in spec_cols:
+                conn.execute("ALTER TABLE specs ADD COLUMN source TEXT DEFAULT 'simmered'")
             # Migrate chunks table — SigLIP image embedding column
             chunk_cols = {r[1] for r in conn.execute("PRAGMA table_info(chunks)").fetchall()}
             if "image_embedding" not in chunk_cols:

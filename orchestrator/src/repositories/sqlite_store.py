@@ -652,10 +652,12 @@ class SQLiteSpecRepository(SpecRepository):
     def __init__(self, conn):
         self._conn = conn
 
-    def create(self, id, domain_path, version, content, golden_set=None, score=None):
+    def create(self, id, domain_path, version, content, golden_set=None, score=None,
+               source="simmered"):
         self._conn.execute(
-            "INSERT INTO specs (id, domain_path, version, spec_content, golden_set, score) VALUES (?, ?, ?, ?, ?, ?)",
-            (id, domain_path, version, content, golden_set, score),
+            "INSERT INTO specs (id, domain_path, version, spec_content, golden_set, score, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (id, domain_path, version, content, golden_set, score, source),
         )
         self._conn.commit()
 
@@ -667,7 +669,7 @@ class SQLiteSpecRepository(SpecRepository):
             return None
         return Spec(id=row["id"], domain_path=None, version=row["version"],
                     spec_content=row["spec_content"], golden_set=row["golden_set"],
-                    score=row["score"])
+                    score=row["score"], source=row["source"] or "simmered")
 
     def get_for_domain(self, domain_path):
         row = self._conn.execute(
@@ -678,7 +680,7 @@ class SQLiteSpecRepository(SpecRepository):
             return None
         return Spec(id=row["id"], domain_path=row["domain_path"], version=row["version"],
                     spec_content=row["spec_content"], golden_set=row["golden_set"],
-                    score=row["score"])
+                    score=row["score"], source=row["source"] or "simmered")
 
     def get_latest_version(self, domain_path):
         row = self._conn.execute(
