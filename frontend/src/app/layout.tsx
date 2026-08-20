@@ -4,7 +4,7 @@ import { AuthProvider } from "@/lib/auth-context";
 import { AuthGate } from "@/components/auth-gate";
 
 export const metadata: Metadata = {
-  title: "Noospheric Orrery",
+  title: "Orrery",
   description: "Adaptive knowledge graph extraction pipeline",
 };
 
