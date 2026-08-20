@@ -2,7 +2,7 @@
 
 **Plan:** `docs/superpowers/plans/2026-08-20-domain-charter.md`
 **Spec:** `docs/superpowers/specs/2026-08-20-domain-charter-design.md`
-**Branch:** _not yet created_ — currently on `feature/onboarding-tutorial` (unrelated)
+**Branch:** `feature/domain-charter`
 
 Update the status column as tasks land. Keep this file honest: a task is Done only when its
 tests pass and it is committed.
@@ -11,17 +11,21 @@ tests pass and it is committed.
 
 ## Progress
 
-**0 / 7 tasks complete.** Nothing built yet.
+**7 / 7 tasks complete.** All committed on `feature/domain-charter`.
 
 ```
-Task 1  specs.source column          [ ] not started
-Task 2  resolve_extraction_plan      [ ] not started
-Task 3  wire into ingest             [ ] not started
-Task 4  dry_run on POST /ingest      [ ] not started
-Task 5  POST/GET /charter            [ ] not started
-Task 6  simmer authored-seed mode    [ ] not started
-Task 7  design-my-domain skill       [ ] not started
+Task 1  specs.source column          [x] 91ea144
+Task 2  resolve_extraction_plan      [x] 5523c2d
+Task 3  wire into ingest             [x] 418c24f
+Task 4  dry_run on POST /ingest      [x] 163b425
+Task 5  POST/GET /charter            [x] 12c0faa
+Task 6  simmer authored-seed mode    [x] af3fe15
+Task 7  design-my-domain skill       [x] 3aad8e5
 ```
+
+**Verification:** orchestrator 322 passed / 3 pre-existing failures (image columns and image
+simmer routes — failing on `main` before this branch, untouched by it); worker 95 passed.
+`tests/test_ingest_route.py` is unmodified, which is the no-opinion guarantee.
 
 ---
 
@@ -48,24 +52,24 @@ estimating — the new code is small because the slots exist.
 
 | # | Task | Deliverable | Files | Status |
 |---|---|---|---|---|
-| 1 | `specs.source` column | the authored/simmered contract flag | `orchestrator/src/db.py`, `worker/src/db.py`, `interfaces.py`, `sqlite_store.py` | ☐ Not started |
-| 2 | `resolve_extraction_plan` | pure decision function `(run_general, specs)` | `orchestrator/src/pipeline/extraction_plan.py` (new) | ☐ Not started |
-| 3 | Wire into ingest | general pass becomes conditional | `orchestrator/src/routes/ingest.py:108-182` | ☐ Not started |
-| 4 | `dry_run` | classify + extract, persist nothing | `orchestrator/src/models.py`, `routes/ingest.py` | ☐ Not started |
-| 5 | `POST/GET /charter` | the one write endpoint | `orchestrator/src/routes/charter.py` (new), `main.py` | ☐ Not started |
-| 6 | Authored-seed simmer | refinement keeps the authored contract | `worker/src/jobs/simmer_domain.py` | ☐ Not started |
-| 7 | `design-my-domain` skill | the guided conversation | `.claude/skills/design-my-domain/SKILL.md` (new) | ☐ Not started |
+| 1 | `specs.source` column | the authored/simmered contract flag | `orchestrator/src/db.py`, `worker/src/db.py`, `interfaces.py`, `sqlite_store.py` | ✅ Done |
+| 2 | `resolve_extraction_plan` | pure decision function `(run_general, specs)` | `orchestrator/src/pipeline/extraction_plan.py` (new) | ✅ Done |
+| 3 | Wire into ingest | general pass becomes conditional | `orchestrator/src/routes/ingest.py:108-182` | ✅ Done |
+| 4 | `dry_run` | classify + extract, persist nothing | `orchestrator/src/models.py`, `routes/ingest.py` | ✅ Done |
+| 5 | `POST/GET /charter` | the one write endpoint | `orchestrator/src/routes/charter.py` (new), `main.py` | ✅ Done |
+| 6 | Authored-seed simmer | refinement keeps the authored contract | `worker/src/jobs/simmer_domain.py` | ✅ Done |
+| 7 | `design-my-domain` skill | the guided conversation | `.claude/skills/design-my-domain/SKILL.md` (new) | ✅ Done |
 
 ### New test files
 
 | File | Tests | Status |
 |---|---|---|
-| `orchestrator/tests/test_spec_source.py` | 4 | ☐ |
-| `orchestrator/tests/test_extraction_plan.py` | 8 | ☐ |
-| `orchestrator/tests/test_ingest_authored_spec.py` | 3 | ☐ |
-| `orchestrator/tests/test_ingest_dry_run.py` | 3 | ☐ |
-| `orchestrator/tests/test_charter_route.py` | 10 | ☐ |
-| `worker/tests/test_simmer_authored_seed.py` | 4 | ☐ |
+| `orchestrator/tests/test_spec_source.py` | 4 | ✅ |
+| `orchestrator/tests/test_extraction_plan.py` | 8 | ✅ |
+| `orchestrator/tests/test_ingest_authored_spec.py` | 3 | ✅ |
+| `orchestrator/tests/test_ingest_dry_run.py` | 3 | ✅ |
+| `orchestrator/tests/test_charter_route.py` | 10 | ✅ |
+| `worker/tests/test_simmer_authored_seed.py` | 4 | ✅ |
 
 **32 new tests total.**
 
@@ -77,16 +81,16 @@ Every section of the design doc maps to a task. Nothing in the spec is unclaimed
 
 | Design section | Task | Status |
 |---|---|---|
-| The authored/simmered contract split | 1 | ☐ |
-| §1 The extraction rule | 2, 3 | ☐ |
-| §2 Pipeline change | 3 | ☐ |
-| §3 Schema | 1 | ☐ |
-| §4 Endpoints — `dry_run` | 4 | ☐ |
-| §4 Endpoints — `POST /charter` | 5 | ☐ |
+| The authored/simmered contract split | 1 | ✅ |
+| §1 The extraction rule | 2, 3 | ✅ |
+| §2 Pipeline change | 3 | ✅ |
+| §3 Schema | 1 | ✅ |
+| §4 Endpoints — `dry_run` | 4 | ✅ |
+| §4 Endpoints — `POST /charter` | 5 | ✅ |
 | §5 No taxonomy overlay | — | ✅ deliberately nothing to build |
-| §6 Simmer seeding | 6 | ☐ |
-| §7 The skill | 7 | ☐ |
-| §8 Worth-it analysis | 7 | ☐ |
+| §6 Simmer seeding | 6 | ✅ |
+| §7 The skill | 7 | ✅ |
+| §8 Worth-it analysis | 7 | ✅ |
 
 ---
 
@@ -144,10 +148,12 @@ usable by a non-engineer.
 
 ## Next action
 
-**Start Task 1.** Create a branch first — the current branch is `feature/onboarding-tutorial`
-and unrelated:
+All seven tasks are committed. The branch is ready for review and merge.
 
-```bash
-git checkout -b feature/domain-charter
-cd orchestrator && pytest tests/ -q   # confirm green before starting
-```
+**One bug was found and fixed during execution** (Task 6): skipping type discovery for an
+authored spec left `n_domain` undefined in a `print` further down — a `NameError` on the
+authored path only, invisible to the unit tests because it lives inside the long async job.
+Caught by reading the edited region back, then by `pyflakes`. Fixed in `af3fe15`.
+
+**Not done, by design:** the manual end-to-end check against a running stack. Everything above
+is unit-level.
