@@ -16,8 +16,8 @@ The system is queryable from the first upload. Domain-specific richness comes la
 ## Quick Start
 
 ```bash
-git clone https://github.com/2389-research/Noospheric-Orrery.git
-cd Noospheric-Orrery
+git clone https://github.com/2389-research/orrery.git
+cd orrery
 cp .env.example .env    # edit with your credentials
 docker compose up       # or: docker-compose up
 ```

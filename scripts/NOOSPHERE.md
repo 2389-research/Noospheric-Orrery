@@ -20,8 +20,8 @@ database, so none of the uploaded originals are needed.
 ## Install
 
 ```bash
-git clone https://github.com/2389-research/Noospheric-Orrery.git
-cd Noospheric-Orrery
+git clone https://github.com/2389-research/orrery.git
+cd orrery
 git checkout <exported_from_commit>       # from manifest.json, or anything NEWER
 
 cp .env.example .env                      # add LLM credentials, or use Ollama (below)

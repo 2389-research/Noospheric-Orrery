@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Stage Noospheric-Orrery services, the built frontend, and runtime binaries
+# Stage orrery services, the built frontend, and runtime binaries
 # into src-tauri/resources for bundling. Run before `tauri dev` / `tauri build`.
 #
 # Usage: scripts/stage.sh [--skip-frontend] [--skip-runtimes]
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-# Noospheric-Orrery is now this script's grandparent (tauri/ is a subfolder
+# orrery is now this script's grandparent (tauri/ is a subfolder
 # of the Orrery repo itself) rather than a sibling repo checkout. Override
 # with ORRERY_DIR if staging from elsewhere (e.g. a standalone checkout).
 ORRERY="${ORRERY_DIR:-$HERE/..}"
@@ -26,7 +26,7 @@ for arg in "$@"; do
   esac
 done
 
-[ -d "$ORRERY/orchestrator" ] || { echo "Noospheric-Orrery not found at $ORRERY (set ORRERY_DIR)" >&2; exit 1; }
+[ -d "$ORRERY/orchestrator" ] || { echo "orrery not found at $ORRERY (set ORRERY_DIR)" >&2; exit 1; }
 
 echo "==> Staging services from $ORRERY"
 rm -rf "$RES/services"
