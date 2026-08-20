@@ -17,6 +17,7 @@ from ..pipeline.chunker import chunk_document
 from ..pipeline.excerpt import build_classification_excerpt
 from ..pipeline.classifier import classify_document
 from ..pipeline.domain_normalizer import assign_document_domains
+from ..pipeline.extraction_plan import resolve_extraction_plan
 from ..pipeline.extractor import extract_document
 from ..pipeline.normalizer import normalize_entity
 from ..pipeline.cooccurrence import compute_cooccurrence_edges
@@ -105,77 +106,67 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
     domains = assign_document_domains(store, doc_id, classification)
     store.documents.update_status(doc_id, "classified")
 
-    # 3. Extract — use simmered general spec if available, otherwise built-in general spec
+    # 3. Extract. An AUTHORED domain spec is a complete declaration by a domain expert,
+    # so it replaces the general pass; a SIMMERED one is additive and runs alongside it.
+    run_general, domain_specs = resolve_extraction_plan(store, domains)
+
     entity_count = 0
     chunk_entities: dict[str, list[str]] = {}
-    spec = store.specs.get_general()
-    spec_content = spec.spec_content if spec else GENERAL_TEXT_SPEC
-    spec_version = spec.version if spec else 0
-    extraction_pass = "general_simmered" if spec else "general"
 
-    entities = await extract_document(
-        relay=relay, chunks=chunks, spec=spec_content, model=settings.extraction_model,
-    )
-    for entity in entities:
-        entity_id = normalize_entity(store, entity["name"], entity["type"])
-        store.entity_sources.create(
-            entity_id=entity_id,
-            document_id=doc_id,
-            chunk_id=entity.get("chunk_id"),
-            extraction_pass=extraction_pass,
-            spec_version=spec_version,
+    if run_general:
+        spec = store.specs.get_general()
+        spec_content = spec.spec_content if spec else GENERAL_TEXT_SPEC
+        spec_version = spec.version if spec else 0
+        extraction_pass = "general_simmered" if spec else "general"
+
+        entities = await extract_document(
+            relay=relay, chunks=chunks, spec=spec_content, model=settings.extraction_model,
         )
-        chunk_id = entity.get("chunk_id")
-        if chunk_id:
-            chunk_entities.setdefault(chunk_id, []).append(entity_id)
+        for entity in entities:
+            entity_id = normalize_entity(store, entity["name"], entity["type"])
+            store.entity_sources.create(
+                entity_id=entity_id,
+                document_id=doc_id,
+                chunk_id=entity.get("chunk_id"),
+                extraction_pass=extraction_pass,
+                spec_version=spec_version,
+            )
+            chunk_id = entity.get("chunk_id")
+            if chunk_id:
+                chunk_entities.setdefault(chunk_id, []).append(entity_id)
+        entity_count = len(entities)
 
+    store.documents.update_status(doc_id, "extracted")
+
+    # 4. Run the resolved domain specs (deepest first, deduplicated)
+    domain_entity_count = 0
+    for domain_spec in domain_specs:
+        d_entities = await extract_document(
+            relay=relay, chunks=chunks,
+            spec=domain_spec.spec_content, model=settings.extraction_model,
+        )
+        for entity in d_entities:
+            entity_id = normalize_entity(store, entity["name"], entity["type"])
+            store.entity_sources.create(
+                entity_id=entity_id,
+                document_id=doc_id,
+                chunk_id=entity.get("chunk_id"),
+                extraction_pass="domain-specific",
+                spec_version=domain_spec.version,
+            )
+            chunk_id = entity.get("chunk_id")
+            if chunk_id:
+                chunk_entities.setdefault(chunk_id, []).append(entity_id)
+        domain_entity_count += len(d_entities)
+
+    # Co-occurrence is computed once over the accumulated chunk->entity map. The previous
+    # code recomputed it inside the per-domain loop; the upserts are idempotent and the map
+    # only grows, so the final edge set is identical — this just stops redoing the work.
     edges = compute_cooccurrence_edges(chunk_entities)
     for edge in edges:
         store.relationships.upsert_cooccurrence(
             edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
         )
-
-    entity_count = len(entities)
-    store.documents.update_status(doc_id, "extracted")
-
-    # 4. Cascade through domain specs
-    domain_entity_count = 0
-    seen_specs = set()
-
-    for domain_path in domains:
-        parts = domain_path.split("/")
-        ancestor_paths = ["/".join(parts[:i+1]) for i in range(len(parts))]
-
-        for ancestor in reversed(ancestor_paths):  # deepest first
-            domain_spec = store.specs.get_for_domain(ancestor)
-
-            if domain_spec and domain_spec.id not in seen_specs:
-                seen_specs.add(domain_spec.id)
-                d_entities = await extract_document(
-                    relay=relay, chunks=chunks,
-                    spec=domain_spec.spec_content, model=settings.extraction_model,
-                )
-                for entity in d_entities:
-                    entity_id = normalize_entity(store, entity["name"], entity["type"])
-                    store.entity_sources.create(
-                        entity_id=entity_id,
-                        document_id=doc_id,
-                        chunk_id=entity.get("chunk_id"),
-                        extraction_pass="domain-specific",
-                        spec_version=domain_spec.version,
-                    )
-                    chunk_id = entity.get("chunk_id")
-                    if chunk_id:
-                        chunk_entities.setdefault(chunk_id, []).append(entity_id)
-                domain_entity_count += len(d_entities)
-
-        # Recompute co-occurrence with domain entities included
-        if domain_entity_count > 0:
-            edges = compute_cooccurrence_edges(chunk_entities)
-            for edge in edges:
-                store.relationships.upsert_cooccurrence(
-                    edge["id"], edge["from"], edge["to"], edge["weight"], edge["source_chunk"],
-                )
 
     if domain_entity_count > 0:
         entity_count += domain_entity_count
