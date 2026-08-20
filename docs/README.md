@@ -1,6 +1,6 @@
 # docs/
 
-Design specs, architecture docs, and research for the Noospheric Orrery.
+Design specs, architecture docs, and research for Orrery.
 
 ## Directory Structure
 

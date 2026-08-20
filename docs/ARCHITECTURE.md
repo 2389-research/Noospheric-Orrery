@@ -1,4 +1,4 @@
-# Noospheric Orrery — Architecture Reference
+# Orrery — Architecture Reference
 
 **Date:** 2026-05-20
 
