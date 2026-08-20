@@ -1,8 +1,8 @@
 # Installing the Tauri Desktop App (Orrery)
 
-This is the installation guide for the **desktop packaging** of Noospheric-Orrery.
+This is the installation guide for the **desktop packaging** of orrery.
 It assumes you've already read the project overview and setup notes in
-[Noospheric-Orrery's CLAUDE.md](https://github.com/2389-research/Noospheric-Orrery/blob/main/CLAUDE.md)
+[orrery's CLAUDE.md](https://github.com/2389-research/orrery/blob/main/CLAUDE.md)
 — what the pipeline is, its three services, the LLM backends, and where data
 lives. This doc only covers building and running the Tauri app that bundles all
 of that into a single desktop application (no Docker needed).
@@ -23,13 +23,13 @@ of that into a single desktop application (no Docker needed).
 ## Install
 
 The Tauri app lives in this repo's `tauri/` subfolder, one level below
-Noospheric-Orrery itself — the stage script resolves the Orrery checkout as
+orrery itself — the stage script resolves the Orrery checkout as
 its own parent directory by default (override with `ORRERY_DIR` if staging
 from a different Orrery checkout):
 
 ```bash
-git clone https://github.com/2389-research/Noospheric-Orrery.git
-cd Noospheric-Orrery/tauri
+git clone https://github.com/2389-research/orrery.git
+cd orrery/tauri
 npm install
 npm run stage        # stages services, frontend build, uv/node binaries into src-tauri/resources
 npm run tauri dev    # compile and open the app
@@ -67,7 +67,7 @@ same time.
 
 | Problem | Fix |
 |---|---|
-| `npm run stage`: "Noospheric-Orrery not found" | Run from `Noospheric-Orrery/tauri` — or set `ORRERY_DIR=/path/to/Noospheric-Orrery npm run stage` if staging from elsewhere |
+| `npm run stage`: "orrery not found" | Run from `orrery/tauri` — or set `ORRERY_DIR=/path/to/orrery npm run stage` if staging from elsewhere |
 | "Port 8100/3100 already in use" | The docker-compose stack (or another copy) is running — stop it first |
 | First-run setup fails partway | Network hiccup — click **Retry**, it resumes from where it stopped |
 | Uploads fail after launch | `Ctrl+L`, look for red lines — usually a bad/empty API key |

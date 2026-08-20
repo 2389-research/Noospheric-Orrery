@@ -1,6 +1,6 @@
 # Orrery
 
-Desktop packaging of [Noospheric-Orrery](https://github.com/2389-research/Noospheric-Orrery) — install one app, get the whole adaptive knowledge-graph pipeline (FastAPI orchestrator, background worker, Next.js frontend) with no Docker and no dev toolchain.
+Desktop packaging of [orrery](https://github.com/2389-research/orrery) — install one app, get the whole adaptive knowledge-graph pipeline (FastAPI orchestrator, background worker, Next.js frontend) with no Docker and no dev toolchain.
 
 > **New here?** Read [tauri.md](tauri.md) for the installation guide (assumes you know the Orrery project).
 
@@ -57,4 +57,4 @@ docs/superpowers/specs/  Design docs
 
 - Windows and Intel-macOS staging targets (stage.sh has the platform table; needs per-platform runs + signing)
 - App icon (still the Tauri default)
-- Migration helper for existing docker-compose data (copy `Noospheric-Orrery/data/*` into `<app-data>/orrery-data/`)
+- Migration helper for existing docker-compose data (copy `orrery/data/*` into `<app-data>/orrery-data/`)
