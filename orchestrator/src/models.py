@@ -67,5 +67,26 @@ class IngestResult(BaseModel):
     jobs_queued: list[str]
     content_type: str = "text"
 
+class DryRunEntityType(BaseModel):
+    type: str
+    count: int
+    examples: list[str]
+
+
+class DryRunResult(BaseModel):
+    primary_domain: str
+    secondary_domains: list[str]
+    confidence: float
+    run_general: bool
+    specs_applied: list[str]
+    entity_types: list[DryRunEntityType]
+
+
+class CharterRequest(BaseModel):
+    domain: str
+    aliases: list[str] = []
+    spec: str
+
+
 class DirectoryIngestRequest(BaseModel):
     path: str

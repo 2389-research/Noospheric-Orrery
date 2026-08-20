@@ -12,7 +12,7 @@ from orrery_relay import Relay
 from ..config import get_settings
 from ..db import mark_graph_dirty
 from ..dependencies import get_auth_store, AuthStore
-from ..models import IngestResult, DirectoryIngestRequest
+from ..models import IngestResult, DirectoryIngestRequest, DryRunResult
 from ..pipeline.chunker import chunk_document
 from ..pipeline.excerpt import build_classification_excerpt
 from ..pipeline.classifier import classify_document
@@ -210,6 +210,69 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
     }
 
 
+async def _dry_run_document(store, title: str, content: str) -> dict:
+    """Classify and extract a document WITHOUT writing anything.
+
+    Deliberately avoids `assign_document_domains`/`normalize_domain_label`, which create
+    domain rows as a side effect. Merge targets are resolved read-only instead, so a dry
+    run over an unfamiliar document cannot pollute the taxonomy the classifier reads.
+    """
+    settings = get_settings()
+    relay = Relay.from_settings(settings)
+
+    chunks = chunk_document(content, chunk_size=settings.chunk_size)
+    for i, chunk in enumerate(chunks):
+        chunk["id"] = f"dry-run-{i}"
+
+    excerpt = build_classification_excerpt(title, content)
+    classification = await classify_document(
+        relay=relay, title=title, excerpt=excerpt,
+        existing_taxonomy=store.domains.get_all_paths(),
+        model=settings.classification_model,
+    )
+
+    def _resolve(label: str) -> str:
+        return store.domains.get_merge_target(label) or label
+
+    primary = _resolve(classification.get("primary_domain") or "")
+    secondaries = [_resolve(s) for s in classification.get("secondary_domains", [])]
+    domains = [d for d in [primary, *secondaries] if d]
+
+    run_general, domain_specs = resolve_extraction_plan(store, domains)
+
+    entities: list[dict] = []
+    if run_general:
+        spec = store.specs.get_general()
+        entities += await extract_document(
+            relay=relay, chunks=chunks,
+            spec=spec.spec_content if spec else GENERAL_TEXT_SPEC,
+            model=settings.extraction_model,
+        )
+    for domain_spec in domain_specs:
+        entities += await extract_document(
+            relay=relay, chunks=chunks, spec=domain_spec.spec_content,
+            model=settings.extraction_model,
+        )
+
+    grouped: dict[str, list[str]] = {}
+    for entity in entities:
+        grouped.setdefault(entity["type"], []).append(entity["name"])
+
+    entity_types = [
+        {"type": t, "count": len(names), "examples": list(dict.fromkeys(names))[:3]}
+        for t, names in sorted(grouped.items(), key=lambda kv: -len(kv[1]))
+    ]
+
+    return {
+        "primary_domain": primary,
+        "secondary_domains": secondaries,
+        "confidence": classification.get("confidence", 0.0),
+        "run_general": run_general,
+        "specs_applied": [s.domain_path for s in domain_specs],
+        "entity_types": entity_types,
+    }
+
+
 async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -> dict:
     """Ingest an image: describe via vision LLM, classify, extract entities."""
     settings = get_settings()
@@ -335,10 +398,14 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
     }
 
 
-@router.post("/ingest", response_model=IngestResult, status_code=status.HTTP_201_CREATED)
+# `response_model` is not declared because this endpoint returns one of two shapes —
+# IngestResult normally, DryRunResult under ?dry_run=true. Both are still validated:
+# each branch constructs its model explicitly.
+@router.post("/ingest", status_code=status.HTTP_201_CREATED)
 async def ingest_file(
     response: Response,
     file: UploadFile = File(...),
+    dry_run: bool = False,
     auth: AuthStore = Depends(get_auth_store),
 ):
     file_bytes = await file.read()
@@ -354,6 +421,22 @@ async def ingest_file(
         raise HTTPException(status_code=415, detail=f"Unsupported file type: {suffix or '(no extension)'}")
 
     store = auth.store
+
+    if dry_run:
+        # Nothing is created, so no 201 and no Location header.
+        if is_image_file(title):
+            raise HTTPException(status_code=415, detail="dry_run is not supported for images")
+        try:
+            content = extract_text(title, file_bytes)
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Could not extract text from file: {e}")
+        try:
+            result = await _dry_run_document(store, title, content)
+        finally:
+            store.close()
+        response.status_code = status.HTTP_200_OK
+        return DryRunResult(**result)
+
     try:
         if is_image_file(title):
             doc_path = os.path.join(settings.documents_dir, f"{uuid.uuid4()}_{title}")
