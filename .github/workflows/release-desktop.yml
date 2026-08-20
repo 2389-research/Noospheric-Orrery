@@ -176,7 +176,7 @@ jobs:
         with:
           projectPath: tauri
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          releaseName: ${{ github.ref_type == 'tag' && format('Noospheric {0}', github.ref_name) || '' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('Orrery {0}', github.ref_name) || '' }}
           releaseDraft: true
           prerelease: ${{ github.ref_type == 'tag' && contains(github.ref_name, '-') }}
           includeUpdaterJson: true
