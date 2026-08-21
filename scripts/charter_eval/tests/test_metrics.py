@@ -57,8 +57,31 @@ def test_mergeability_with_no_names_is_zero_not_an_error():
 
 def test_median_name_words_uses_distinct_names():
     docs = [doc("a", obligation=["tenant — pay rent", "tenant — pay rent", "a b c d e f g"])]
-    # distinct = ["tenant — pay rent" (4 words), "a b c d e f g" (7 words)] -> median 5.5
-    assert metrics.median_name_words(docs, "obligation") == pytest.approx(5.5)
+    # distinct = ["tenant — pay rent" (3 words: the em-dash is a separator, not a word),
+    #             "a b c d e f g" (7 words)] -> median (3+7)/2 = 5.0
+    assert metrics.median_name_words(docs, "obligation") == pytest.approx(5.0)
+
+
+def test_word_count_does_not_count_the_mandated_em_dash():
+    # Variant B MANDATES "<party> — <duty>". Counting the em-dash would enforce the
+    # frozen 6-word threshold as 5.
+    assert metrics.word_count("tenant — pay rent") == 3
+    assert metrics.word_count("tenant — pay rent within ten days") == 6
+
+
+def test_a_six_word_b_name_passes_the_m2_threshold():
+    from charter_eval import report
+    docs = [doc("a", obligation=["tenant — pay rent within ten days"])]
+    assert metrics.median_name_words(docs, "obligation") == pytest.approx(6.0)
+    assert metrics.median_name_words(docs, "obligation") <= report.THRESHOLDS["m2_max_words"]
+
+
+def test_word_count_of_an_unpunctuated_name_is_unchanged():
+    assert metrics.word_count("a b c d e f g") == 7
+    assert metrics.word_count("indemnification") == 1
+    # a hyphenated word is one word; a standalone hyphen or en-dash is not a word
+    assert metrics.word_count("tenant - pay one-year rent") == 4
+    assert metrics.word_count("tenant – pay rent") == 3
 
 
 def test_median_name_words_of_absent_type_is_zero():
@@ -74,6 +97,22 @@ def test_volume_per_doc_averages_over_distinct_documents():
         doc("b", repeat=0, clause=["x"]),             # -> 1.0
     ]
     assert metrics.volume_per_doc(docs, "clause") == pytest.approx((2.5 + 1.0) / 2)
+
+
+def test_volume_and_cv_read_count_not_len_names():
+    """M3/M5 must use TypeResult.count: `names` is empty without full_names=true."""
+    def counted(repeat, n):
+        return DocResult(
+            doc_id="a", instrument="lease", executed=True, variant="B", repeat=repeat,
+            primary_domain="business/legal-compliance/contracts", run_general=False,
+            specs_applied=(), latency_s=1.0,
+            types=(TypeResult(type="obligation", count=n, names=()),))
+
+    one, two = counted(0, 5), counted(1, 15)
+    assert metrics.volume_per_doc([one], "obligation") == pytest.approx(5.0)
+    assert one.count_for("obligation") == 5 and one.names_for("obligation") == ()
+    # counts 5 and 15 -> mean 10, population stddev 5 -> cv 0.5
+    assert metrics.count_cv([one, two], "a", "obligation") == pytest.approx(0.5)
 
 
 # --- M4 type stability ----------------------------------------------------
@@ -116,6 +155,15 @@ def test_count_cv_matches_hand_computation():
 def test_count_cv_of_absent_type_is_zero():
     docs = [doc("a", repeat=r, clause=["x"]) for r in (0, 1)]
     assert metrics.count_cv(docs, "a", "obligation") == 0.0
+
+
+# --- M7 latency -----------------------------------------------------------
+
+def test_mean_latency_averages_repeats_then_documents():
+    docs = [doc("a", repeat=0, clause=["x"]), doc("a", repeat=1, clause=["x"]),
+            doc("b", repeat=0, clause=["x"])]
+    assert metrics.mean_latency_s(docs) == pytest.approx(10.0)
+    assert metrics.mean_latency_s([]) == 0.0
 
 
 # --- filtering ------------------------------------------------------------

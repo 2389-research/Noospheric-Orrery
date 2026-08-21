@@ -1,6 +1,5 @@
 # ABOUTME: Harness tests with a fake transport. No live LLM in pytest, ever.
 import json
-import pytest
 from charter_eval import harness
 
 MANIFEST = {

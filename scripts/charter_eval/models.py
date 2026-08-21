@@ -46,6 +46,18 @@ class DocResult:
                 return t.names
         return ()
 
+    def count_for(self, type_: str) -> int:
+        """The reported count for `type_`, which is NOT len(names_for(type_)).
+
+        `names` is empty whenever the ingest response was fetched without
+        `full_names=true`, but `count` is always populated — so any count-based
+        metric (M3, M5) must read this, not the length of the name tuple.
+        """
+        for t in self.types:
+            if t.type == type_:
+                return t.count
+        return 0
+
     def fired_types(self) -> frozenset[str]:
         return frozenset(t.type for t in self.types if t.count > 0)
 

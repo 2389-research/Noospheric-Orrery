@@ -1,4 +1,4 @@
-# ABOUTME: Pure metric functions M1-M5 over collected DocResults. No I/O, no LLM, so the
+# ABOUTME: Pure metric functions M1-M5 and M7 over collected DocResults. No I/O, no LLM, so the
 # ABOUTME: A/B decision arithmetic is unit-tested in CI while collection stays out of it.
 import statistics
 from collections import defaultdict
@@ -33,19 +33,41 @@ def mergeability(docs: Sequence[DocResult], type_: str) -> float:
     return shared / len(by_name)
 
 
+def word_count(name: str) -> int:
+    """Words in an entity name, counting only tokens that contain a letter or digit.
+
+    The design doc's M2 says "words", not "whitespace tokens". Variant B mandates the
+    name form `<party> — <duty>`, where the em-dash is its own whitespace token; counting
+    it would over-count every B name by exactly one and enforce the frozen 6-word
+    threshold as 5. Separator punctuation (em-dash, en-dash, a standalone hyphen) is
+    therefore not a word; "one-year" still is.
+    """
+    return sum(1 for tok in name.split() if any(ch.isalnum() for ch in tok))
+
+
 def median_name_words(docs: Sequence[DocResult], type_: str) -> float:
     """M2 — median word count over DISTINCT names (a name repeated 40x is one shape)."""
     names = {n for d in docs for n in d.names_for(type_)}
     if not names:
         return 0.0
-    return float(statistics.median(len(n.split()) for n in names))
+    return float(statistics.median(word_count(n) for n in names))
 
 
 def volume_per_doc(docs: Sequence[DocResult], type_: str) -> float:
     """M3 — mean count of `type_` per distinct document, averaging repeats first."""
     per_doc: dict[str, list[int]] = defaultdict(list)
     for d in docs:
-        per_doc[d.doc_id].append(len(d.names_for(type_)))
+        per_doc[d.doc_id].append(d.count_for(type_))
+    if not per_doc:
+        return 0.0
+    return float(statistics.mean(statistics.mean(v) for v in per_doc.values()))
+
+
+def mean_latency_s(docs: Sequence[DocResult]) -> float:
+    """M7 — mean seconds per document, averaging repeats of one document first."""
+    per_doc: dict[str, list[float]] = defaultdict(list)
+    for d in docs:
+        per_doc[d.doc_id].append(d.latency_s)
     if not per_doc:
         return 0.0
     return float(statistics.mean(statistics.mean(v) for v in per_doc.values()))
@@ -68,7 +90,7 @@ def type_stability(docs: Sequence[DocResult], doc_id: str) -> float:
 
 def count_cv(docs: Sequence[DocResult], doc_id: str, type_: str) -> float:
     """M5 — coefficient of variation of per-type counts across repeats of one document."""
-    counts = [len(d.names_for(type_)) for d in docs if d.doc_id == doc_id]
+    counts = [d.count_for(type_) for d in docs if d.doc_id == doc_id]
     if len(counts) < 2:
         return 0.0
     mean = statistics.mean(counts)

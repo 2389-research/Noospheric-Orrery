@@ -10,7 +10,14 @@ from .models import DocResult
 FIELDNAMES = ["doc_id", "type", "name", "correct"]
 
 
-def stratified_sample(docs: Sequence[DocResult], per_type: int, seed: int = 42) -> list[dict]:
+def stratified_sample(docs: Sequence[DocResult], per_type: int = 25,
+                      seed: int = 42) -> list[dict]:
+    """Up to `per_type` distinct (doc_id, name) pairs per type, for hand-labelling.
+
+    The default is 25, not 10: M6 for `obligation` is judged against a 0.80 threshold,
+    and 10 labels can only ever express multiples of 0.10 — they cannot distinguish
+    0.80 from 0.79.
+    """
     pool: dict[str, set[tuple[str, str]]] = defaultdict(set)
     for d in docs:
         for t in d.types:

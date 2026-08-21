@@ -23,8 +23,8 @@ def test_ships_b_when_all_three_pass():
     d = report.decide(docs, precision_b=0.9)
     assert d.ship == "B"
     assert d.m1 == pytest.approx(1.0)
-    # distinct names are 3 words ("tenant — insure") and 4 words ("tenant — pay rent")
-    assert d.m2 == pytest.approx(3.5)
+    # the em-dash separator is not a word: "tenant — insure" is 2, "tenant — pay rent" is 3
+    assert d.m2 == pytest.approx(2.5)
 
 
 def test_ships_a_when_mergeability_is_too_low():
