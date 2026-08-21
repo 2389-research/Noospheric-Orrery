@@ -9,8 +9,9 @@ spec that runs here, so anything it omits is not extracted at all.
 **Design principle:** A contract's value is in its **provisions**, not its proper nouns. The
 general spec extracts named things — people, companies, dollar figures — and on an unexecuted
 template it therefore extracts almost nothing, even from a document with eighteen fully-worded
-provisions. Extract the *structure of the bargain*: who is bound, to what, by when, and what
-happens on breach. Do this whether or not the names and figures have been filled in.
+provisions. Extract the *structure of the bargain*: who the parties are, which provisions the
+agreement contains, what money and time periods they turn on, and what law governs
+them. Do this whether or not the names and figures have been filled in.
 
 ---
 

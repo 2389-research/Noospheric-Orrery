@@ -88,7 +88,7 @@ than about the spec as a whole.
 | **M3** | volume | entities per document | Graph bloat. |
 | **M4** | type stability | mean Jaccard of the *fired-type set* across R repeats of one document | Detects a spec too complex to follow. **Measured at 1.00 for v1** (3 repeats, sublease template). |
 | **M5** | count variance | coefficient of variation of per-type counts across R repeats | Boundary-judgment noise. v1: ±7% total, concentrated in `clause`/`obligation`. |
-| **M6** | precision | human-labelled correct / (correct + incorrect), stratified sample | The only way to catch type-confusion. Two suspected v1 errors already: `organization: "supervising architect"` (a role, not an organization) and `document: "fire and extended coverage insurance policies"` (not an external instrument). |
+| **M6** | precision | human-labelled correct / (correct + incorrect), stratified sample | The only way to catch type-confusion. Two suspected v1 errors already: `organization: "supervising architect"` (a role, not an organization) and `document: "fire and extended coverage insurance policies"` (not an external instrument). Needs **≥ 25 labels for the judged type**: at 10, the measurable values are multiples of 0.10, which cannot separate 0.80 from 0.79. |
 | **M7** | latency | seconds per document | v1: 126s/lease vs 53s general. |
 
 ## Corpus requirement — the current corpus cannot answer the question
@@ -128,6 +128,19 @@ is a judgement call, stated up front so it cannot be adjusted to fit the result.
 3. **M6 ≥ 0.80** — shortening did not destroy meaning
 
 **Otherwise ship A.**
+
+### Secondary check (an observation, not a threshold)
+
+Record `clause` M2 and M3 for **all three arms** (v1, A, B). Variant A deletes
+`obligation` and `condition_trigger` but does not stop the model from seeing the
+provisions they used to capture: span-shaped names can migrate into `clause`, so A can
+satisfy the rule above while producing exactly the shape this evaluation exists to
+eliminate. If `clause` M2 or M3 moves sharply between arms, say so in the experiment
+record and treat it as a follow-up.
+
+This is explicitly **not a fourth threshold**. It was added after the rule was written,
+and promoting it to a gate would be precisely the post-hoc rule change pre-registration
+forbids. It is reported, not decided on.
 
 If B fails only on M2, the failure mode is instructive: it means a naming rule cannot
 constrain generated names, and no rewording will fix it. Do not iterate on the wording
