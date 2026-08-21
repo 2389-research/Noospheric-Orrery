@@ -59,12 +59,12 @@ def collect_with_errors(manifest: Manifest, variant: str, repeats: int,
         for entry in manifest.entries:
             try:
                 payload, latency = transport(entry.path)
+                docs.append(DocResult.from_response(
+                    entry.doc_id, entry.instrument, entry.executed,
+                    variant, repeat, latency, payload))
             except Exception as e:            # one bad document must not lose the run
                 errors.append({"doc_id": entry.doc_id, "repeat": repeat, "error": str(e)})
                 continue
-            docs.append(DocResult.from_response(
-                entry.doc_id, entry.instrument, entry.executed,
-                variant, repeat, latency, payload))
     return docs, errors
 
 

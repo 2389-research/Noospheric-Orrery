@@ -66,6 +66,23 @@ def test_collect_records_the_failure_and_continues(tmp_path):
     assert "422" in errors[0]["error"]
 
 
+def test_collect_records_a_malformed_payload_and_continues(tmp_path):
+    p = tmp_path / "corpus.json"
+    p.write_text(json.dumps(MANIFEST))
+
+    def malformed(file_path):
+        if "nda" in file_path:
+            # HTTP succeeded; the body is not a shape from_response can parse
+            return {"entity_types": [{"examples": [], "names": []}]}, 1.0
+        return _payload(["tenant — pay rent"]), 1.0
+
+    docs, errors = harness.collect_with_errors(
+        harness.Manifest.load(str(p)), "B", repeats=1, transport=malformed)
+    assert len(docs) == 1
+    assert len(errors) == 1
+    assert errors[0]["doc_id"] == "nda-01"
+
+
 def test_save_load_round_trip(tmp_path):
     p = tmp_path / "corpus.json"
     p.write_text(json.dumps(MANIFEST))
