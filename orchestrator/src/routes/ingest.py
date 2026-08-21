@@ -210,7 +210,8 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
     }
 
 
-async def _dry_run_document(store, title: str, content: str) -> dict:
+async def _dry_run_document(store, title: str, content: str,
+                            full_names: bool = False) -> dict:
     """Classify and extract a document WITHOUT writing anything.
 
     Deliberately avoids `assign_document_domains`/`normalize_domain_label`, which create
@@ -259,7 +260,9 @@ async def _dry_run_document(store, title: str, content: str) -> dict:
         grouped.setdefault(entity["type"], []).append(entity["name"])
 
     entity_types = [
-        {"type": t, "count": len(names), "examples": list(dict.fromkeys(names))[:3]}
+        {"type": t, "count": len(names),
+         "examples": list(dict.fromkeys(names))[:3],
+         "names": list(names) if full_names else []}
         for t, names in sorted(grouped.items(), key=lambda kv: -len(kv[1]))
     ]
 
@@ -406,6 +409,7 @@ async def ingest_file(
     response: Response,
     file: UploadFile = File(...),
     dry_run: bool = False,
+    full_names: bool = False,
     auth: AuthStore = Depends(get_auth_store),
 ):
     file_bytes = await file.read()
@@ -431,7 +435,7 @@ async def ingest_file(
         except Exception as e:
             raise HTTPException(status_code=422, detail=f"Could not extract text from file: {e}")
         try:
-            result = await _dry_run_document(store, title, content)
+            result = await _dry_run_document(store, title, content, full_names=full_names)
         finally:
             store.close()
         response.status_code = status.HTTP_200_OK

@@ -71,6 +71,10 @@ class DryRunEntityType(BaseModel):
     type: str
     count: int
     examples: list[str]
+    # Untruncated, non-deduplicated names. Populated only under ?full_names=true, because
+    # cross-document mergeability cannot be computed from a 3-item sample. Default empty
+    # keeps every existing dry-run response byte-identical.
+    names: list[str] = []
 
 
 class DryRunResult(BaseModel):
