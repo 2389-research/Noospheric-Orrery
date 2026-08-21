@@ -48,6 +48,26 @@ jobs:
             --deselect tests/test_image_routes.py::test_image_simmer_trigger \
             --deselect tests/test_image_routes.py::test_image_simmer_conflict
 
+  charter-eval-pytest:
+    name: charter_eval pytest
+    runs-on: ubuntu-latest
+    # The evaluation harness scores collected results; the suite is pure (no LLM, no
+    # services, no env vars), so it belongs in the gate even though collection cannot.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test deps
+        run: pip install pytest
+
+      - name: Run pytest
+        working-directory: scripts
+        run: python -m pytest charter_eval/ -v
+
   desktop:
     name: desktop (signing scripts + supervisor)
     runs-on: macos-latest

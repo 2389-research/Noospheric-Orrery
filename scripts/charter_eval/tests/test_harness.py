@@ -95,3 +95,10 @@ def test_save_load_round_trip(tmp_path):
 def test_http_transport_builds_the_dry_run_url():
     t = harness.HttpTransport("http://localhost:8000")
     assert t.url == "http://localhost:8000/ingest?dry_run=true&full_names=true"
+
+
+def test_http_transport_url_pins_full_names():
+    """M1/M2 need every name, not the three `examples`. Without full_names=true the
+    response carries counts only and the decision rule silently reads zeros."""
+    assert "full_names=true" in harness.HttpTransport("http://localhost:8000/").url
+    assert "dry_run=true" in harness.HttpTransport("http://localhost:8000/").url

@@ -66,3 +66,67 @@ def test_boundary_values_pass():
     assert d.m2 == pytest.approx(6.0)
     assert d.ship == "B", "thresholds are inclusive; boundary must not fail"
     assert d.reasons == ()
+
+
+def test_boundary_fixture_has_no_punctuation_so_the_word_rule_cannot_move_it():
+    """The boundary fixture's names are unpunctuated, so M2 stays exactly 6.0."""
+    from charter_eval import metrics
+    assert metrics.word_count("s0 b c d e f") == 6
+    assert metrics.word_count("u0 b c d e f") == 6
+
+
+# --- insufficient data ----------------------------------------------------
+
+def test_no_documents_is_insufficient_data_not_ship_a():
+    d = report.decide([], precision_b=0.9)
+    assert d.ship == report.INSUFFICIENT_DATA
+    assert d.ship != "A"
+    assert any("no obligation names" in r for r in d.reasons)
+
+
+def test_all_obligation_names_absent_is_insufficient_data():
+    empty = DocResult(
+        doc_id="a", instrument="lease", executed=True, variant="B", repeat=0,
+        primary_domain="business/legal-compliance/contracts", run_general=False,
+        specs_applied=(), latency_s=1.0,
+        types=(TypeResult(type="clause", count=3, names=("indemnification",)),
+               TypeResult(type="obligation", count=0, names=()),))
+    d = report.decide([empty], precision_b=0.9)
+    assert d.ship == report.INSUFFICIENT_DATA
+
+
+def test_a_genuine_low_mergeability_result_still_ships_a():
+    docs = [doc("a", ["tenant — pay rent"]), doc("b", ["landlord — repair roof"])]
+    d = report.decide(docs, precision_b=0.9)
+    assert d.ship == "A"
+    assert any(r.startswith("m1") for r in d.reasons)
+
+
+# --- reason precision -----------------------------------------------------
+
+def test_m1_reason_does_not_read_as_a_contradiction(monkeypatch):
+    monkeypatch.setattr(report.metrics, "mergeability", lambda docs, t: 0.2999)
+    d = report.decide([doc("a", ["tenant — pay rent"])], precision_b=0.9)
+    reason = next(r for r in d.reasons if r.startswith("m1"))
+    assert "0.30 < 0.3" not in reason
+    assert reason == "m1 mergeability 0.2999 < 0.3000"
+
+
+# --- render_table ---------------------------------------------------------
+
+def test_render_table_reports_m4_and_m5_and_labels_the_aggregation():
+    docs = [doc("a", ["tenant — pay rent"]), doc("b", ["tenant — pay rent"])]
+    out = report.render_table(docs, ["obligation", "clause"])
+    assert "M4 type stability" in out
+    assert "mean over documents" in out
+    assert "M5 cv" in out
+    assert "obligation" in out and "clause" in out
+
+
+def test_render_table_does_not_raise_on_a_type_absent_everywhere():
+    out = report.render_table([doc("a", ["tenant — pay rent"])], ["governing_law"])
+    assert "governing_law" in out
+
+
+def test_render_table_on_no_documents_does_not_raise():
+    assert "documents: 0" in report.render_table([], ["obligation"])
