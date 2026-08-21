@@ -1,0 +1,7 @@
+{
+  "_comment": "Copy to corpus.json and point paths at your DS-scratch corpus dir. Never commit real contracts.",
+  "documents": [
+    {"doc_id": "lease-01",    "path": "/home/yi/Downloads/lease.txt",              "instrument": "lease",   "executed": true},
+    {"doc_id": "sublease-01", "path": "/home/yi/Downloads/sublease-agreement.docx", "instrument": "sublease", "executed": false}
+  ]
+}
