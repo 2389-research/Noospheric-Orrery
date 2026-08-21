@@ -21,3 +21,4 @@ firebase-debug.log
 worker-cloud/simmer-sdk/
 orchestrator/worker-cloud/simmer-sdk/
 worker/simmer-sdk/
+.superpowers/
