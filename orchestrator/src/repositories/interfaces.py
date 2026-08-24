@@ -63,6 +63,11 @@ class Entity:
     source_count: int = 0
     embedding: bytes | None = None
     created_at: str | None = None
+    # DISTINCT documents.silo_id over the entity's sources. Only populated by
+    # get_all_for_normalization() (batch normalization's silo-scoping, #50);
+    # None elsewhere means "not computed", not "no silo info" — do not treat
+    # a None here as the empty-set wildcard used by the silo-overlap check.
+    silo_ids: frozenset | None = None
 
 
 @dataclass
@@ -271,7 +276,11 @@ class EntityRepository(ABC):
     def update_embedding(self, entity_id: str, embedding: bytes) -> None: ...
 
     @abstractmethod
-    def get_all_for_normalization(self) -> list[Entity]: ...
+    def get_all_for_normalization(self) -> list[Entity]:
+        """Every entity (invalidated ones included — batch normalization must be able
+        to re-attach to them, same as get()/get_by_name() with include_invalid=True),
+        each with its silo_ids populated (see Entity.silo_ids)."""
+        ...
 
     @abstractmethod
     def get_for_document(self, doc_id: str) -> list[Entity]: ...

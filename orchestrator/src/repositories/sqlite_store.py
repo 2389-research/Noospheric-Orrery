@@ -400,10 +400,27 @@ class SQLiteEntityRepository(EntityRepository):
         self._conn.commit()
 
     def get_all_for_normalization(self):
+        # No invalid_at filter — intentional (#50): batch normalization must see
+        # invalidated entities too, same as get_by_name(include_invalid=True).
         rows = self._conn.execute(
             "SELECT id, canonical_name, type FROM entities ORDER BY canonical_name"
         ).fetchall()
-        return [Entity(id=r["id"], canonical_name=r["canonical_name"], type=r["type"]) for r in rows]
+
+        # One extra query for every entity's silo-set, grouped in Python rather than
+        # via SQL GROUP_CONCAT (which silently drops NULL members — losing exactly
+        # the null-silo membership the overlap check needs to see).
+        silo_map: dict[str, set] = {}
+        for r in self._conn.execute(
+            "SELECT DISTINCT es.entity_id, d.silo_id FROM entity_sources es "
+            "JOIN documents d ON d.id = es.document_id"
+        ):
+            silo_map.setdefault(r["entity_id"], set()).add(r["silo_id"])
+
+        return [
+            Entity(id=r["id"], canonical_name=r["canonical_name"], type=r["type"],
+                   silo_ids=frozenset(silo_map.get(r["id"], set())))
+            for r in rows
+        ]
 
     def get_for_document(self, doc_id):
         rows = self._conn.execute("""
