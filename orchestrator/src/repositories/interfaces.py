@@ -10,6 +10,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+# Sentinel distinguishing "silo not supplied" (back-compat, unscoped) from
+# `silo=None` (a REAL value: the null-silo pool). Never use None as the default.
+_UNSET = object()
+
+
 # ── Data classes ──────────────────────────────────────────
 
 @dataclass
@@ -250,7 +255,8 @@ class EntityRepository(ABC):
     def get(self, entity_id: str, include_invalid: bool = False) -> Entity | None: ...
 
     @abstractmethod
-    def get_by_name(self, name: str, type: str, include_invalid: bool = False) -> Entity | None: ...
+    def get_by_name(self, name: str, type: str, include_invalid: bool = False,
+                     silo: object = _UNSET) -> Entity | None: ...
 
     @abstractmethod
     def list(self, limit: int = 50, offset: int = 0,
@@ -383,7 +389,7 @@ class NormalizationRepository(ABC):
     def get_merge_summary(self) -> dict: ...
 
     @abstractmethod
-    def get_merge_map_entry(self, name: str) -> str | None: ...
+    def get_merge_map_entry(self, name: str, silo: object = _UNSET) -> str | None: ...
 
     @abstractmethod
     def create_merge_map_entry(self, from_name: str, to_entity_id: str) -> None: ...

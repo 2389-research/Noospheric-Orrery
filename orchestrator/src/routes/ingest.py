@@ -119,7 +119,7 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
         relay=relay, chunks=chunks, spec=spec_content, model=settings.extraction_model,
     )
     for entity in entities:
-        entity_id = normalize_entity(store, entity["name"], entity["type"])
+        entity_id = normalize_entity(store, entity["name"], entity["type"], silo=None)
         store.entity_sources.create(
             entity_id=entity_id,
             document_id=doc_id,
@@ -152,7 +152,7 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
                     spec=domain_spec.spec_content, model=settings.extraction_model,
                 )
                 for entity in d_entities:
-                    entity_id = normalize_entity(store, entity["name"], entity["type"])
+                    entity_id = normalize_entity(store, entity["name"], entity["type"], silo=None)
                     store.entity_sources.create(
                         entity_id=entity_id,
                         document_id=doc_id,

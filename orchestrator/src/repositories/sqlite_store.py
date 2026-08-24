@@ -16,8 +16,10 @@ from .interfaces import (
     LayoutRepository, SimmerIterationRepository,
     Document, Chunk, Domain, Entity, EntitySource, Relationship,
     Job, Spec, SimmerIteration, NormalizationReview, DomainAssignment, CoEntity,
+    _UNSET,
 )
 from ..db import get_connection, init_db
+from ..pipeline.silo import silo_match
 
 
 def _safe_json(value):
@@ -344,11 +346,16 @@ class SQLiteEntityRepository(EntityRepository):
         return Entity(id=row["id"], canonical_name=row["canonical_name"], type=row["type"],
                       source_count=count, embedding=row["embedding"], created_at=row["created_at"])
 
-    def get_by_name(self, name, type, include_invalid=False):
+    def get_by_name(self, name, type, include_invalid=False, silo=_UNSET):
         clause = "" if include_invalid else " AND invalid_at IS NULL"
+        params = [name, type]
+        silo_clause = ""
+        if silo is not _UNSET:
+            silo_clause = f" AND {silo_match('e.id')}"
+            params.append(silo)
         row = self._conn.execute(
-            f"SELECT * FROM entities WHERE canonical_name = ? AND type = ?{clause}",
-            (name, type)
+            f"SELECT * FROM entities e WHERE canonical_name = ? AND type = ?{clause}{silo_clause}",
+            params
         ).fetchone()
         if not row:
             return None
@@ -785,8 +792,15 @@ class SQLiteNormalizationRepository(NormalizationRepository):
                                 "similarity": r["similarity"], "date": r["created_at"]} for r in recent],
         }
 
-    def get_merge_map_entry(self, name):
-        row = self._conn.execute("SELECT to_entity_id FROM merge_map WHERE from_name = ?", (name,)).fetchone()
+    def get_merge_map_entry(self, name, silo=_UNSET):
+        params = [name]
+        silo_clause = ""
+        if silo is not _UNSET:
+            silo_clause = f" AND {silo_match('to_entity_id')}"
+            params.append(silo)
+        row = self._conn.execute(
+            f"SELECT to_entity_id FROM merge_map WHERE from_name = ?{silo_clause}", params
+        ).fetchone()
         return row["to_entity_id"] if row else None
 
     def create_merge_map_entry(self, from_name, to_entity_id):
