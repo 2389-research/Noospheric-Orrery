@@ -91,22 +91,6 @@ is reversible.
   corrections LIFO across overlapping neighborhoods). A future rollback UI must respect this or
   guard it.
 
-## Cross-silo near-duplicates are a merge PROPOSAL source, too
-
-Per-source silos (spec #50, #79 — see "Per-source silos + provenance" below) scope
-**automatic** entity normalization to within one source: a pair of same-name entities in
-*different* silos is never auto-merged, because two silos can legitimately use the same
-name for different things (two repos both calling something `Config`). Batch normalization
-still wants to surface the *likely-same-thing* case for a human to decide, so instead of
-merging, both batch normalizers (`orchestrator/src/pipeline/embedding_normalizer.py` and
-`worker/src/normalizer.py`, both via a local `_propose_cross_silo_merge` helper) file a
-`pending` **merge** row into `graph_issues` when they find a cross-silo embedding-similarity
-candidate — the exact same queue, judge, human-approve, and reversible-apply path described
-above (`propose_correction` → judge → `CorrectionsPanel` → `apply_merge`/`rollback_merge`).
-Nothing new to build for this: cross-silo duplicates are just another `proposer` feeding the
-existing loop. Round-trip (approve merges the pair; rollback restores both, silo-scoped) is
-covered by `orchestrator/tests/test_cross_silo_merge_roundtrip.py`.
-
 ## Trust ramp (future, not built)
 
 v1 is 100% human-gated. Every human decision is logged next to the model's verdict

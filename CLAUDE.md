@@ -310,37 +310,6 @@ Normalization happens at two levels:
 
 The `normalization_review_queue` table holds pairs the system is uncertain about. Use `GET /normalize/review` + `POST /normalize/review/{id}` to resolve them.
 
-### Per-Source Silos + Provenance (#50, #79)
-
-Every document is scoped to a **silo** (`documents.silo_id`, resolved `source_id > collection_id
-> None` by the shared `resolve_silo_id` helper — mirrored byte-identical between
-`orchestrator/src/pipeline/silo.py` and `worker/src/silo.py`, enforced by
-`test_schema_mirror.py`). A silo is "one source" — a `watched_sources` row (a vault, a synced
-repo) or a `collections` row (a one-shot `POST /ingest/repo`/`/ingest/tracker-runs` batch).
-
-- **Normalization is silo-scoped.** `normalize_entity()`, merge_map lookups, and canonical-entity
-  dedup all filter to the document's own silo (via `silo_match()`, a `NULL`-safe SQL fragment), so
-  two silos using the same name for different things (`Config` in repo A vs. repo B) land as two
-  distinct entities instead of auto-merging. Cross-silo near-duplicates aren't ignored — both
-  batch normalizers (orchestrator's `embedding_normalizer.py`, the worker's `normalizer.py`) file
-  a `pending` merge into `graph_issues` for a human to decide, riding the existing
-  corrections loop (see `docs/graph-corrections.md`'s "Cross-silo near-duplicates" section) rather
-  than a new mechanism.
-- **`provenance_kind`** (`neutral_summary` | `human_vault` | `agent_report` | `human_reviewed`) is
-  a property of the silo, not the document — read via the `silo_kind` view
-  (`documents.silo_id → silo_kind.kind`), never materialized per-row, so reclassifying a source
-  later doesn't require a backfill. It is **flow-defaulted** by featurizer/source type
-  (`FLOW_DEFAULT_KIND`: vault→`human_vault`, repo/tracker/codesum/tracksum→`neutral_summary`) and
-  **overridable** at create time (`provenance_kind` on `POST /watched-sources` / `/ingest/repo`) or
-  later by updating the silo row directly.
-- **Emission gating:** an `agent_report` silo's documents are excluded from co-occurrence edge
-  emission (`recompute_cooccurrence`) — an agent's own account of what it did isn't treated as
-  neutral evidence of what co-occurs. Other kinds emit normally. Flipping a silo's
-  `provenance_kind` takes effect on the next `recompute_cooccurrence` pass, not retroactively.
-- **Read exposure:** `GET /graph` accepts `?silo=<id>` and `?kind=<provenance_kind>` filters;
-  entity/document reads and the MCP tools surface `silo_id`/`kind` on nodes; the galaxy viz has a
-  matching silo/kind filter control (`frontend/public/viz/`, client-side over the loaded payload).
-
 ### Graph Corrections (self-healing loop) — see `docs/graph-corrections.md`
 
 Agents consuming the graph can propose corrections (`propose_correction` MCP write tool → `graph_issues`); an advisory model **judge** annotates each; a human approves/rejects in the `CorrectionsPanel`; approval **reversibly** edits the graph. **`docs/graph-corrections.md` is the canonical reference for how each action (invalidate · retype · rename · merge; split unbuilt) applies AND reverses — read/update it when touching this code.** Key invariants:

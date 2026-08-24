@@ -1,16 +1,10 @@
 import uuid
 
-from ..repositories.interfaces import _UNSET
 
-
-def normalize_entity(store_or_conn, name: str, entity_type: str, silo=_UNSET) -> str:
+def normalize_entity(store_or_conn, name: str, entity_type: str) -> str:
     """Normalize an entity name: check merge map, find existing, or create new.
 
     Accepts either a DataStore or raw sqlite3.Connection for backward compat.
-
-    `silo` scopes the dedup lookup to a source silo. Omit it (default sentinel)
-    for unscoped, back-compat behavior; pass `silo=None` explicitly to scope to
-    the null-silo pool (loose uploads), or a real silo id to scope to that silo.
     """
     clean_name = name.lower().strip()
 
@@ -18,12 +12,12 @@ def normalize_entity(store_or_conn, name: str, entity_type: str, silo=_UNSET) ->
     if hasattr(store_or_conn, 'normalization'):
         store = store_or_conn
         # Check merge map
-        merged_to = store.normalization.get_merge_map_entry(clean_name, silo=silo)
+        merged_to = store.normalization.get_merge_map_entry(clean_name)
         if merged_to:
             return merged_to
         # Check existing entity — include invalidated nodes so a re-mention
         # re-attaches to the (still-invalidated) node instead of duplicating it.
-        existing = store.entities.get_by_name(clean_name, entity_type, include_invalid=True, silo=silo)
+        existing = store.entities.get_by_name(clean_name, entity_type, include_invalid=True)
         if existing:
             return existing.id
         # Create new
