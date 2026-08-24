@@ -39,6 +39,19 @@ canvas:active { cursor: grabbing; }
 }
 #layer-selector button:hover { border-color: rgba(100,180,255,0.5); color: #eef0f8; }
 #layer-selector button.active { background: rgba(224,160,48,0.25); border-color: #e0a030; color: #ffe6b0; }
+#filter-controls {
+  position: fixed; top: 12px; right: 14px; z-index: 30;
+  display: flex; gap: 4px; font-size: 10px;
+}
+#filter-controls select {
+  background: rgba(6,13,34,0.9); color: rgba(140,200,255,0.7);
+  border: 1px solid rgba(100,180,255,0.2); border-radius: 4px;
+  padding: 5px 7px; cursor: pointer; font-family: 'Courier New', monospace;
+  font-size: 10px; max-width: 170px;
+}
+#filter-controls select:hover { border-color: rgba(100,180,255,0.5); color: #eef0f8; }
+#filter-controls select:focus { outline: none; border-color: #e0a030; }
+#filter-controls select.active-filter { border-color: #e0a030; color: #ffe6b0; }
 </style>
 </head>
 <body>
@@ -49,6 +62,14 @@ canvas:active { cursor: grabbing; }
   <button data-layer="1">L1 · + repos</button>
   <button data-layer="2">L2 · + entities</button>
   <button data-layer="auto" class="active">auto</button>
+</div>
+<div id="filter-controls">
+  <select id="silo-select" title="Filter the galaxy by silo (source)">
+    <option value="all">silo: all</option>
+  </select>
+  <select id="kind-select" title="Filter the galaxy by provenance kind">
+    <option value="all">kind: all</option>
+  </select>
 </div>
 <div id="hud"></div>
 <div id="zoom-level"></div>
@@ -139,6 +160,7 @@ fetch(graphUrl, { headers: fetchHeaders }).then(r => r.json()).then(data => {
   state.loadGraphData(data);
   console.log(`Loaded: ${state.domains.size} domains, ${state.entities.size} entities, ${state.clusters.length} clusters`);
   updateHUD();
+  populateFilterControls();
 
   // Fit camera to show all domains AND repos (repos are UMAP-placed by their
   // own summary, so they can sit far from any domain — include them or they
@@ -357,6 +379,62 @@ document.querySelectorAll('#layer-selector button').forEach(btn => {
     const c = layerCentroid(layer);
     camera.flyTo(c.x, c.y, LAYER_ZOOM[layer], 600);
   });
+});
+
+// ── SILO / KIND FILTER (task 11b) ──────────────────────────────────────────
+// Client-side filter over the already-loaded graph — silo_id/kind ship on every
+// entity/collection node in the /graph payload, so no re-fetch is needed. The
+// renderers (galaxy.js) consult state.matchesFilter() inline in their existing
+// per-node draw loops; this block only owns the <select> UI and its wiring.
+const siloSelect = document.getElementById('silo-select');
+const kindSelect = document.getElementById('kind-select');
+
+function populateFilterControls() {
+  const prevSilo = siloSelect.value, prevKind = kindSelect.value;
+  const siloOpts = state.getSiloOptions();
+  const kindOpts = state.getKindOptions();
+
+  siloSelect.innerHTML = '<option value="all">silo: all</option>' + siloOpts
+    .map(o => `<option value="${esc(o.id)}">${esc(o.label)} (${o.count})</option>`)
+    .join('');
+  kindSelect.innerHTML = '<option value="all">kind: all</option>' + kindOpts
+    .map(k => `<option value="${esc(k)}">kind: ${esc(k)}</option>`)
+    .join('');
+
+  // Restore the prior selection across a data reload if it still exists;
+  // otherwise fall back to "all" rather than silently pointing at a stale value.
+  const hasOption = (sel, v) => [...sel.options].some(o => o.value === v);
+  siloSelect.value = hasOption(siloSelect, prevSilo) ? prevSilo : 'all';
+  kindSelect.value = hasOption(kindSelect, prevKind) ? prevKind : 'all';
+  state.siloFilter = siloSelect.value === 'all' ? null : siloSelect.value;
+  state.kindFilter = kindSelect.value === 'all' ? null : kindSelect.value;
+}
+
+// If the pinned node is an entity/collection that the new filter now excludes,
+// drop the selection (and tell the shell) rather than leaving the side panel
+// pointing at a node that just vanished from the canvas. Domains always match
+// (no silo of their own), so a pinned domain is left alone.
+function clearPinnedIfFiltered() {
+  if (!state.pinnedId) return;
+  let node = null;
+  if (state.pinnedId.startsWith('collection:')) node = state.collections.get(state.pinnedId.slice(11));
+  else if (state.entities.has(state.pinnedId)) node = state.entities.get(state.pinnedId);
+  else return;
+  if (node && !state.matchesFilter(node)) {
+    state.pinnedId = null;
+    window.parent.postMessage({ type: 'node_cleared' }, '*');
+  }
+}
+
+siloSelect.addEventListener('change', () => {
+  state.siloFilter = siloSelect.value === 'all' ? null : siloSelect.value;
+  siloSelect.classList.toggle('active-filter', state.siloFilter !== null);
+  clearPinnedIfFiltered();
+});
+kindSelect.addEventListener('change', () => {
+  state.kindFilter = kindSelect.value === 'all' ? null : kindSelect.value;
+  kindSelect.classList.toggle('active-filter', state.kindFilter !== null);
+  clearPinnedIfFiltered();
 });
 
 // ── ATTRACT MODE (idle "screensaver") ──────────────────────────────────────
@@ -597,6 +675,7 @@ function hitTest(wx, wy) {
   // Wins over the entities that cluster on top of the little gold core.
   if (camera.zoom >= 0.35) {
     const repo = nearest(state.collections, r => {
+      if (!state.matchesFilter(r)) return null;   // silo/kind filter (task 11b)
       const d = Math.hypot(wx - r.x, wy - r.y);
       return (d < r.radius * 1.2 + 6 || _inRepoLabel(r, wx, wy)) ? d : null;
     });
@@ -607,6 +686,7 @@ function hitTest(wx, wy) {
   // wins so a dense field is still individually clickable.
   if (camera.zoom >= 0.75) {
     const ent = nearest(state.entities, e => {
+      if (!state.matchesFilter(e)) return null;   // silo/kind filter (task 11b)
       if (e.sourceCount < minSource && e.activityGlow < 0.1) return null;
       const dist = Math.hypot(wx - e.x, wy - e.y);
       return dist < e.radius * 1.2 + 8 ? dist : null;

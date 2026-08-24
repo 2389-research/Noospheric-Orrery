@@ -13,6 +13,11 @@ import { WORLD_W, WORLD_H, sqrt, random, hypot, assignDomainColors, blendColors,
 // hydrated again.
 const EVICT_POOL_SIZE = 100;
 
+// Sentinel select-value for the "unsourced/none" silo bucket — no real silo_id
+// can collide with it (ids are hex/uuid-shaped), mirroring the orchestrator's
+// own `?silo=none` convention in routes/graph.py.
+export const NULL_SILO = '__none__';
+
 export class WorldState {
   constructor() {
     this.domains = new Map();    // path → domain node
@@ -36,6 +41,16 @@ export class WorldState {
     this.hoveredId = null;
     this.pinnedId = null;
 
+    // Provenance filter (task 11b) — null = no restriction ("All"). `siloFilter`
+    // holds a real silo_id, or the sentinel NULL_SILO for the "unsourced/none"
+    // bucket (nodes with no silo_id at all). `kindFilter` holds a provenance kind
+    // string (neutral_summary | human_vault | agent_report | human_reviewed).
+    // Only entity/collection nodes carry a silo — domains are the aggregate
+    // backbone and always match, per graph.py's "domains have no silo of their
+    // own" note, so the domain layout never reacts to this filter.
+    this.siloFilter = null;
+    this.kindFilter = null;
+
     // Raw data
     this.graphData = null;
 
@@ -47,6 +62,65 @@ export class WorldState {
 
   get activeId() {
     return this.pinnedId ?? this.hoveredId;
+  }
+
+  /**
+   * Does `node` (an entity or collection render node) pass the current
+   * silo/kind filter? Domains have no silo of their own, so callers never
+   * route a domain node through this — it always draws.
+   *
+   * Cheap by design (two nullable-equality checks, no allocation) so renderers
+   * can call it inline in their existing per-node per-frame loops without
+   * adding a distinct filter pass (per the Canvas2D perf rules).
+   */
+  matchesFilter(node) {
+    if (this.siloFilter != null) {
+      const want = this.siloFilter === NULL_SILO ? null : this.siloFilter;
+      if ((node.siloId ?? null) !== want) return false;
+    }
+    if (this.kindFilter != null && node.provenanceKind !== this.kindFilter) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Distinct silos present across the loaded entities + collections, for the
+   * filter control's option list. Labeled by a same-id collection's name when
+   * one exists (a repo/tracker-run collection is commonly its own dominant
+   * silo) — otherwise by the raw silo_id, since the API ships no silo→name
+   * directory (no `/silos` endpoint; `watched_sources` has no `name` column).
+   * The null-silo pool always sorts last under NULL_SILO.
+   */
+  getSiloOptions() {
+    const groups = new Map(); // siloId|NULL_SILO -> {id, label, count}
+    const tally = node => {
+      const key = node.siloId ?? NULL_SILO;
+      let g = groups.get(key);
+      if (!g) groups.set(key, g = { id: key, count: 0 });
+      g.count++;
+    };
+    for (const [, e] of this.entities) tally(e);
+    for (const [, c] of this.collections) tally(c);
+    for (const g of groups.values()) {
+      if (g.id === NULL_SILO) { g.label = 'Unsourced / none'; continue; }
+      const coll = this.collections.get(g.id);
+      g.label = coll ? coll.label : g.id;
+    }
+    return [...groups.values()].sort((a, b) => {
+      if (a.id === NULL_SILO) return 1;
+      if (b.id === NULL_SILO) return -1;
+      return a.label.localeCompare(b.label);
+    });
+  }
+
+  /** Distinct provenance kinds present, for the filter control's option list. */
+  getKindOptions() {
+    const set = new Set();
+    const tally = node => { if (node.provenanceKind) set.add(node.provenanceKind); };
+    for (const [, e] of this.entities) tally(e);
+    for (const [, c] of this.collections) tally(c);
+    return [...set].sort();
   }
 
   /** Load from /graph API response */
@@ -65,6 +139,7 @@ export class WorldState {
       .map(n => ({
         id: n.id, name: n.label, path: n.path, document_count: n.degree || 0,
         domain: (n.memberships || []).find(m => m.container_type === 'domain')?.id ?? null,
+        siloId: n.silo_id ?? null, provenanceKind: n.kind ?? null,
       }));
     const collectionIds = new Set(collectionRecords.map(r => r.id));
     const domainPositions = Object.fromEntries(
@@ -174,6 +249,10 @@ export class WorldState {
         color: '#e0a030', radius: 16 + Math.min(sqrt(coll.document_count || 0) * 3, 10),
         worldX: rwx, worldY: rwy, x: rwx, y: rwy, docCount: coll.document_count || 0,
         phase: random() * TAU, birthScale: 0,
+        // Provenance (task 11b) — `kind` above is the render-node TYPE discriminator
+        // ('domain'/'entity'/'collection'/'cluster'), so the API's provenance kind
+        // lands in `provenanceKind` to avoid colliding with it.
+        siloId: coll.siloId, provenanceKind: coll.provenanceKind,
       });
     }
 
@@ -354,6 +433,10 @@ export class WorldState {
       birthScale: 0,
       stability: Math.min(0.9, 0.3 * Math.log(vc + 1) / Math.log(30)),
       activityGlow: 0,
+      // Provenance (task 11b) — `kind` above is the render-node TYPE discriminator,
+      // so the API's dominant-silo provenance kind lands in `provenanceKind`.
+      siloId: ent.silo_id ?? null,
+      provenanceKind: ent.kind ?? null,
     };
   }
 
