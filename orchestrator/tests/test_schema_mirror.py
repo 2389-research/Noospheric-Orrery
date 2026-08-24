@@ -45,7 +45,14 @@ _MIRRORED_TABLES = ["graph_snapshot", "domain_edges", "collections",
                     # The worker writes jobs.progress (extraction counters) and the
                     # orchestrator serves it to the extraction UI — same cross-service
                     # hazard: a one-sided column edit would be invisible until runtime.
-                    "jobs"]
+                    "jobs",
+                    # Silo-aware batch normalization (#50): the worker's faiss stage now
+                    # WRITES cross-silo merge proposals here directly (it cannot import
+                    # the orchestrator's graph_repair module), and the orchestrator both
+                    # writes proposals via propose_correction() and serves them to the
+                    # CorrectionsPanel — a one-sided column edit breaks either writer or
+                    # the reader silently.
+                    "graph_issues"]
 
 # Indexes on that surface. Table DDL alone is not enough: an index dropped from one
 # file costs nothing structurally and everything in latency, so it is exactly the kind
@@ -58,7 +65,10 @@ _MIRRORED_INDEXES = ["idx_document_collections_collection",
                      # full-scans a table the other keeps indexed.
                      "idx_relationships_pair", "idx_relationships_to",
                      # Sync identity lookups join documents on source_path.
-                     "idx_documents_source_path"]
+                     "idx_documents_source_path",
+                     # Per-source silos (spec: silos + provenance, task 1) — normalization
+                     # scoping will filter/join on this from both services.
+                     "idx_documents_silo"]
 
 _ALLOWED_DIVERGENCE: dict[str, str] = {
     # name -> why it is allowed to differ. Empty: nothing diverges today.
@@ -170,6 +180,23 @@ def test_the_mirror_check_can_actually_fail():
     assert _index_ddl(_ORCH.read_text(), "idx_document_collections_collection") is not None
 
 
+# ── silo.py ──────────────────────────────────────────────────────────────────────
+# Both processes resolve a document's silo the same way (source_id > collection_id >
+# None) and share the SQL fragment that scopes normalization to a silo. Kept
+# byte-identical below the ABOUTME header for the same reason as classifier.py.
+_ORCH_SILO = _ROOT / "orchestrator" / "src" / "pipeline" / "silo.py"
+_WORKER_SILO = _ROOT / "worker" / "src" / "silo.py"
+
+
+def test_silo_is_mirrored():
+    orch, worker = _below_header(_ORCH_SILO), _below_header(_WORKER_SILO)
+    assert orch == worker, (
+        "orchestrator/src/pipeline/silo.py and worker/src/silo.py have diverged "
+        "below their ABOUTME headers. Both resolve silo_id and scope normalization "
+        "the same way, so a one-sided edit means a document's silo depends on which "
+        "process ingested it.")
+
+
 def _fn_source(path, name):
     """Extract a top-level function's source text (def line through the last indented
     line before the next top-level statement or EOF)."""
@@ -186,4 +213,51 @@ def test_recompute_cooccurrence_is_mirrored():
     worker = _fn_source(_WORKER, "recompute_cooccurrence")
     assert orch is not None, "recompute_cooccurrence missing from orchestrator/src/db.py"
     assert worker is not None, "recompute_cooccurrence missing from worker/src/db.py"
+    assert orch == worker
+
+
+def test_backfill_silo_ids_is_mirrored():
+    """backfill_silo_ids (spec: per-source silos + provenance, task 1) is the pure
+    derivation both services rely on to have already run — same cross-service hazard
+    as recompute_cooccurrence. Compare the function source byte-for-byte."""
+    orch = _fn_source(_ORCH, "backfill_silo_ids")
+    worker = _fn_source(_WORKER, "backfill_silo_ids")
+    assert orch is not None, "backfill_silo_ids missing from orchestrator/src/db.py"
+    assert worker is not None, "backfill_silo_ids missing from worker/src/db.py"
+    assert orch == worker
+
+
+def _view_ddl(source: str, name: str) -> str | None:
+    # `\s+` (not a literal space) between AS and the SELECT — the view is authored
+    # multi-line in db.py, so a literal space would never match the newline.
+    m = re.search(rf"CREATE VIEW IF NOT EXISTS {name} AS\s+(.*?);", source, re.S)
+    if not m:
+        return None
+    return re.sub(r"\s+", " ", m.group(1)).strip()
+
+
+def test_silo_kind_view_is_mirrored():
+    """silo_kind (spec: per-source silos + provenance, task 9) unifies watched_sources
+    and collections so a document's provenance kind resolves via one join on
+    documents.silo_id. It's a VIEW, not a TABLE, so it isn't in _MIRRORED_TABLES (whose
+    `_table_ddl` regex only matches `CREATE TABLE ...` and would find nothing here) —
+    same cross-service hazard as the mirrored tables above, checked with a view-aware
+    regex instead."""
+    orch = _view_ddl(_ORCH.read_text(), "silo_kind")
+    worker = _view_ddl(_WORKER.read_text(), "silo_kind")
+    assert orch is not None, "silo_kind view missing from orchestrator/src/db.py"
+    assert worker is not None, "silo_kind view missing from worker/src/db.py"
+    assert orch == worker, (
+        "the `silo_kind` view differs between the two db.py files. Both processes open "
+        "the same databases, so whichever opens a workspace first decides its shape.")
+
+
+def test_backfill_provenance_kind_is_mirrored():
+    """backfill_provenance_kind (spec: per-source silos + provenance, task 9) is the
+    pure derivation both services rely on to have already run — same cross-service
+    hazard as backfill_silo_ids. Compare the function source byte-for-byte."""
+    orch = _fn_source(_ORCH, "backfill_provenance_kind")
+    worker = _fn_source(_WORKER, "backfill_provenance_kind")
+    assert orch is not None, "backfill_provenance_kind missing from orchestrator/src/db.py"
+    assert worker is not None, "backfill_provenance_kind missing from worker/src/db.py"
     assert orch == worker

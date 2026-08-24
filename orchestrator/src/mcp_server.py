@@ -145,12 +145,19 @@ async def search_knowledge_graph(query: str, top_k: int = 15, include_images: bo
     for e in result["entities"][:10]:
         paths = ",".join(e.get("paths", []))
         hits = e.get("appearances", 0)
-        lines.append(f"  • {e['name']} ({e['type']}) — {e.get('source_count', 0)} docs, score {e['score']:.4f} [{hits} sub-query hits, via {paths}]")
+        # silo_id/kind resolved live by the orchestrator (task 11a): a source
+        # re-classified after ingest shows up here on the next search, no re-ingest.
+        silo = e.get("silo_id") or "no silo"
+        kind = e.get("kind") or "unspecified kind"
+        lines.append(f"  • {e['name']} ({e['type']}) — {e.get('source_count', 0)} docs, score {e['score']:.4f} "
+                     f"[{hits} sub-query hits, via {paths}] [{silo}, {kind}]")
     lines.append("\nRelevant excerpts:")
     for c in result["chunks"][:5]:
         overlap = c.get("entity_overlap", 0)
         matching = c.get("matching_entities", "")
-        lines.append(f"  [{c['document_title']}] (entities:{overlap}): {c['text'][:200]}")
+        silo = c.get("silo_id") or "no silo"
+        kind = c.get("kind") or "unspecified kind"
+        lines.append(f"  [{c['document_title']}] (entities:{overlap}) [{silo}, {kind}]: {c['text'][:200]}")
         if matching:
             lines.append(f"    entities in chunk: {matching}")
     images = result.get("images") or []
@@ -223,6 +230,14 @@ async def get_entity(name: str) -> str:
         coocs = []
     lines = [f"{detail['canonical_name']} ({detail['type']})"]
     lines.append(f"Sources: {len(detail['sources'])} mentions across {len(set(s['document_id'] for s in detail['sources']))} docs")
+    # Silo + kind per source (task 11a) — resolved live by the orchestrator on every
+    # call, so a source re-classified after ingest is reflected immediately here too.
+    # Distinct, not per-mention: an entity usually sits in one silo, and spelling it
+    # out per source would just repeat the same value N times.
+    if detail["sources"]:
+        silos = sorted({s.get("silo_id") or "(none)" for s in detail["sources"]})
+        kinds = sorted({s.get("kind") or "(unspecified)" for s in detail["sources"]})
+        lines.append(f"Silo(s): {', '.join(silos)} — kind(s): {', '.join(kinds)}")
     if detail.get("merge_history"):
         lines.append(f"Also known as: {', '.join(detail['merge_history'])}")
     if cooc_warning:
@@ -298,7 +313,10 @@ async def get_neighborhood(entity_name: str, depth: int = 1, max_nodes: int = 20
     if "detail" in result:
         return f"Error: {result['detail']}"
     seed = result["seed"]
-    lines = [f"Neighborhood of {seed['name']} ({seed['type']}) — {result['node_count']} nodes, {result['edge_count']} edges, depth {result['depth']}"]
+    seed_kind = seed.get("kind") or "unspecified kind"
+    seed_silo = seed.get("silo_id") or "no silo"
+    lines = [f"Neighborhood of {seed['name']} ({seed['type']}) [{seed_silo}, {seed_kind}] — "
+             f"{result['node_count']} nodes, {result['edge_count']} edges, depth {result['depth']}"]
     # Group nodes by depth
     by_depth: dict[int, list] = {}
     for n in result["nodes"]:
@@ -309,7 +327,11 @@ async def get_neighborhood(entity_name: str, depth: int = 1, max_nodes: int = 20
         nodes = sorted(by_depth[d], key=lambda x: -x["source_count"])
         lines.append(f"\n  Hop {d}:")
         for n in nodes:
-            lines.append(f"    • {n['name']} ({n['type']}) — {n['source_count']} docs")
+            # silo_id/kind resolved live by the orchestrator (task 11a): a source
+            # re-classified after ingest shows up here on the next call, no re-ingest.
+            silo = n.get("silo_id") or "no silo"
+            kind = n.get("kind") or "unspecified kind"
+            lines.append(f"    • {n['name']} ({n['type']}) — {n['source_count']} docs [{silo}, {kind}]")
     return "\n".join(lines)
 
 
@@ -369,13 +391,17 @@ async def get_subgraph(entity_names: list[str], max_hops: int = 1) -> str:
     # Show seeds
     lines.append("\n  Seed entities:")
     for s in result["seeds"]:
-        lines.append(f"    ★ {s['name']} ({s['type']})")
+        silo = s.get("silo_id") or "no silo"
+        kind = s.get("kind") or "unspecified kind"
+        lines.append(f"    ★ {s['name']} ({s['type']}) [{silo}, {kind}]")
     # Show discovered (non-seed) nodes
     discovered = [n for n in result["nodes"] if not n.get("is_seed")]
     if discovered:
         lines.append(f"\n  Discovered entities ({len(discovered)}):")
         for n in discovered[:20]:
-            lines.append(f"    • {n['name']} ({n['type']})")
+            silo = n.get("silo_id") or "no silo"
+            kind = n.get("kind") or "unspecified kind"
+            lines.append(f"    • {n['name']} ({n['type']}) [{silo}, {kind}]")
     # Show strongest edges
     if result["edges"]:
         top_edges = sorted(result["edges"], key=lambda e: -e["weight"])[:10]

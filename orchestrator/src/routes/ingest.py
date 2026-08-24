@@ -76,8 +76,8 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
     doc_id = str(uuid.uuid4())
     title = _unique_title(store, title)
 
-    # 1. Store document
-    store.documents.create(doc_id, title, content, content_hash, source_path)
+    # 1. Store document (loose upload: no source, no collection -> null silo)
+    store.documents.create(doc_id, title, content, content_hash, source_path, silo_id=None)
 
     # 1b. Chunk and store
     chunks = chunk_document(content, chunk_size=settings.chunk_size)
@@ -119,7 +119,7 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
         relay=relay, chunks=chunks, spec=spec_content, model=settings.extraction_model,
     )
     for entity in entities:
-        entity_id = normalize_entity(store, entity["name"], entity["type"])
+        entity_id = normalize_entity(store, entity["name"], entity["type"], silo=None)
         store.entity_sources.create(
             entity_id=entity_id,
             document_id=doc_id,
@@ -152,7 +152,7 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
                     spec=domain_spec.spec_content, model=settings.extraction_model,
                 )
                 for entity in d_entities:
-                    entity_id = normalize_entity(store, entity["name"], entity["type"])
+                    entity_id = normalize_entity(store, entity["name"], entity["type"], silo=None)
                     store.entity_sources.create(
                         entity_id=entity_id,
                         document_id=doc_id,
@@ -279,7 +279,7 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
         relay=relay, chunks=chunks, spec=spec_content, model=settings.extraction_model,
     )
     for entity in entities:
-        entity_id = normalize_entity(store, entity["name"], entity["type"])
+        entity_id = normalize_entity(store, entity["name"], entity["type"], silo=None)
         store.entity_sources.create(
             entity_id=entity_id, document_id=doc_id,
             chunk_id=chunk_id, extraction_pass="general",
@@ -462,7 +462,8 @@ async def ingest_repo(request: RepoIngestRequest, auth: AuthStore = Depends(get_
         # domain with the vocabulary the extraction actually produces.
         collection_id = str(uuid.uuid4())
         try:
-            store.collections.create(collection_id, request.name, request.name, request.path)
+            store.collections.create(collection_id, request.name, request.name, request.path,
+                                      provenance_kind=request.provenance_kind)
         except sqlite3.IntegrityError:
             # The get_by_path check above is not a lock, so two requests for the same
             # name can both pass it. The UNIQUE constraint is what actually decides;

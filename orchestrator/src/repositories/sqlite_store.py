@@ -16,8 +16,10 @@ from .interfaces import (
     LayoutRepository, SimmerIterationRepository,
     Document, Chunk, Domain, Entity, EntitySource, Relationship,
     Job, Spec, SimmerIteration, NormalizationReview, DomainAssignment, CoEntity,
+    _UNSET,
 )
 from ..db import get_connection, init_db
+from ..pipeline.silo import silo_match, flow_default_kind, resolve_kind
 
 
 def _safe_json(value):
@@ -37,10 +39,10 @@ class SQLiteDocumentRepository(DocumentRepository):
     def count(self):
         return self._conn.execute("SELECT COUNT(*) FROM documents WHERE invalid_at IS NULL").fetchone()[0]
 
-    def create(self, id, title, content, content_hash, source_path=None, content_type="text"):
+    def create(self, id, title, content, content_hash, source_path=None, content_type="text", silo_id=None):
         self._conn.execute(
-            "INSERT INTO documents (id, title, content, content_hash, source_path, status, content_type) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-            (id, title, content, content_hash, source_path, content_type),
+            "INSERT INTO documents (id, title, content, content_hash, source_path, status, content_type, silo_id) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+            (id, title, content, content_hash, source_path, content_type, silo_id),
         )
         self._conn.commit()
         return id
@@ -55,25 +57,33 @@ class SQLiteDocumentRepository(DocumentRepository):
             status=row["status"], created_at=row["created_at"],
             content_type=row["content_type"] or "text",
             thumbnail_path=row["thumbnail_path"] if "thumbnail_path" in row.keys() else None,
+            silo_id=row["silo_id"] if "silo_id" in row.keys() else None,
         )
 
     def get_titles(self, ids):
-        """Map doc_id -> {title, content_type} for the given ids. Lets a caller
-        label a set of documents (e.g. an entity's source docs) without joining
+        """Map doc_id -> {title, content_type, silo_id, kind} for the given ids. Lets a
+        caller label a set of documents (e.g. an entity's source docs) without joining
         against the paginated `list()` — which only returns the first page, so
         callers were falling back to showing raw doc-id hashes. Batched to stay
-        under SQLite's bound-parameter limit (an entity can cite thousands)."""
+        under SQLite's bound-parameter limit (an entity can cite thousands).
+
+        `kind` is resolved LIVE via the `silo_kind` view join on every call — never
+        cached alongside the title — so a source re-classified after ingest shows up
+        on the very next read (task 11a)."""
         out = {}
         ids = list(dict.fromkeys(ids))  # de-dupe, preserve order
         for i in range(0, len(ids), 900):
             batch = ids[i:i + 900]
             placeholders = ",".join("?" * len(batch))
             rows = self._conn.execute(
-                f"SELECT id, title, content_type FROM documents WHERE id IN ({placeholders}) AND invalid_at IS NULL",
+                f"SELECT d.id, d.title, d.content_type, d.silo_id, sk.kind FROM documents d "
+                f"LEFT JOIN silo_kind sk ON sk.silo_id = d.silo_id "
+                f"WHERE d.id IN ({placeholders}) AND d.invalid_at IS NULL",
                 batch,
             ).fetchall()
             for r in rows:
-                out[r["id"]] = {"title": r["title"], "content_type": r["content_type"] or "text"}
+                out[r["id"]] = {"title": r["title"], "content_type": r["content_type"] or "text",
+                                 "silo_id": r["silo_id"], "kind": r["kind"]}
         return out
 
     def list(self, limit=50, offset=0):
@@ -126,14 +136,15 @@ class SQLiteDocumentRepository(DocumentRepository):
 
     def get_recent(self, limit=50):
         rows = self._conn.execute(
-            "SELECT d.id, d.title, d.content_type, GROUP_CONCAT(dd.domain_path) as domains "
+            "SELECT d.id, d.title, d.content_type, d.silo_id, GROUP_CONCAT(dd.domain_path) as domains "
             "FROM documents d LEFT JOIN document_domains dd ON d.id = dd.document_id "
             "WHERE d.invalid_at IS NULL "
             "GROUP BY d.id ORDER BY d.created_at DESC LIMIT ?", (limit,)
         ).fetchall()
         result = []
         for r in rows:
-            doc = Document(id=r["id"], title=r["title"], content_type=r["content_type"] or "text")
+            doc = Document(id=r["id"], title=r["title"], content_type=r["content_type"] or "text",
+                           silo_id=r["silo_id"])
             doc.domains = r["domains"].split(",") if r["domains"] else []
             result.append(doc)
         return result
@@ -344,11 +355,16 @@ class SQLiteEntityRepository(EntityRepository):
         return Entity(id=row["id"], canonical_name=row["canonical_name"], type=row["type"],
                       source_count=count, embedding=row["embedding"], created_at=row["created_at"])
 
-    def get_by_name(self, name, type, include_invalid=False):
+    def get_by_name(self, name, type, include_invalid=False, silo=_UNSET):
         clause = "" if include_invalid else " AND invalid_at IS NULL"
+        params = [name, type]
+        silo_clause = ""
+        if silo is not _UNSET:
+            silo_clause = f" AND {silo_match('e.id')}"
+            params.append(silo)
         row = self._conn.execute(
-            f"SELECT * FROM entities WHERE canonical_name = ? AND type = ?{clause}",
-            (name, type)
+            f"SELECT * FROM entities e WHERE canonical_name = ? AND type = ?{clause}{silo_clause}",
+            params
         ).fetchone()
         if not row:
             return None
@@ -393,10 +409,27 @@ class SQLiteEntityRepository(EntityRepository):
         self._conn.commit()
 
     def get_all_for_normalization(self):
+        # No invalid_at filter — intentional (#50): batch normalization must see
+        # invalidated entities too, same as get_by_name(include_invalid=True).
         rows = self._conn.execute(
             "SELECT id, canonical_name, type FROM entities ORDER BY canonical_name"
         ).fetchall()
-        return [Entity(id=r["id"], canonical_name=r["canonical_name"], type=r["type"]) for r in rows]
+
+        # One extra query for every entity's silo-set, grouped in Python rather than
+        # via SQL GROUP_CONCAT (which silently drops NULL members — losing exactly
+        # the null-silo membership the overlap check needs to see).
+        silo_map: dict[str, set] = {}
+        for r in self._conn.execute(
+            "SELECT DISTINCT es.entity_id, d.silo_id FROM entity_sources es "
+            "JOIN documents d ON d.id = es.document_id"
+        ):
+            silo_map.setdefault(r["entity_id"], set()).add(r["silo_id"])
+
+        return [
+            Entity(id=r["id"], canonical_name=r["canonical_name"], type=r["type"],
+                   silo_ids=frozenset(silo_map.get(r["id"], set())))
+            for r in rows
+        ]
 
     def get_for_document(self, doc_id):
         rows = self._conn.execute("""
@@ -785,8 +818,15 @@ class SQLiteNormalizationRepository(NormalizationRepository):
                                 "similarity": r["similarity"], "date": r["created_at"]} for r in recent],
         }
 
-    def get_merge_map_entry(self, name):
-        row = self._conn.execute("SELECT to_entity_id FROM merge_map WHERE from_name = ?", (name,)).fetchone()
+    def get_merge_map_entry(self, name, silo=_UNSET):
+        params = [name]
+        silo_clause = ""
+        if silo is not _UNSET:
+            silo_clause = f" AND {silo_match('to_entity_id')}"
+            params.append(silo)
+        row = self._conn.execute(
+            f"SELECT to_entity_id FROM merge_map WHERE from_name = ?{silo_clause}", params
+        ).fetchone()
         return row["to_entity_id"] if row else None
 
     def create_merge_map_entry(self, from_name, to_entity_id):
@@ -908,11 +948,16 @@ class SQLiteCollectionRepository:
     def __init__(self, conn):
         self._conn = conn
 
-    def create(self, id, name, path, root_path, parent_path=None, kind="git_repo"):
+    def create(self, id, name, path, root_path, parent_path=None, kind="git_repo",
+               provenance_kind=None):
+        """`provenance_kind` is an optional override; the flow default is derived from
+        `kind` (spec: per-source silos + provenance, task 9) and used whenever the
+        override is absent or not a recognized KINDS value."""
+        stamped_kind = resolve_kind(flow_default_kind(kind), provenance_kind)
         self._conn.execute(
-            "INSERT INTO collections (id, name, path, root_path, parent_path, kind) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (id, name, path, root_path, parent_path, kind),
+            "INSERT INTO collections (id, name, path, root_path, parent_path, kind, provenance_kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (id, name, path, root_path, parent_path, kind, stamped_kind),
         )
         self._conn.commit()
         return id
