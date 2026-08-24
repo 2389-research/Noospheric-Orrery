@@ -4,7 +4,7 @@
 
 **Goal:** Give each document a **silo** (its source's stable id) and a **provenance `kind`** (its epistemic nature), both set by the ingestion flow at the same moment. Normalization respects the silo — auto-merge only *within* a silo, never *across* (cross-silo near-duplicates route to the human-gated corrections flow). The `kind` gates co-occurrence emission for opinion sources and is surfaced in every agent read, so a consuming agent can tell "what the code does" from "what an agent thinks." Delivers **#50 and #79 together** — they are one feature (the ingestion flow determines both), built scoping-first then exposure.
 
-**Architecture:** A materialized `documents.silo_id` (precedence `source_id > collection_id > NULL`) and a materialized `documents.provenance_kind` (resolved at ingest from a per-featurizer flow default, overridable via `watched_sources.config_json` / an ingest arg), both populated at ingest and backfilled. **Five** entity auto-merge paths plus two internal leaks (global `merge_map`, plural collapse) become silo-aware by joining candidates through `entity_sources → documents.silo_id`. Cross-silo near-duplicates are *proposed* to `graph_issues` (by entity id), not merged. `recompute_cooccurrence` (both `db.py`) additionally suppresses edges from gated `kind`s. Silo + kind ride along in `GET /graph`, entity reads, the MCP read tools, and a viz filter.
+**Architecture:** *Materialize the immutable, resolve the mutable.* A materialized `documents.silo_id` (precedence `source_id > collection_id > NULL`, never changes after ingest) — populated at ingest and backfilled. Provenance `kind` (mutable — a user can re-classify a source later) lives as **`provenance_kind` on the silo row** (`watched_sources` + `collections`), stamped with the featurizer's flow default at source registration and editable to override; a `silo_kind` view unifies the two tables so reads/emission resolve kind by joining `documents.silo_id → silo_kind.kind` (one edit propagates everywhere, no staleness). **Five** entity auto-merge paths plus two internal leaks (global `merge_map`, plural collapse) become silo-aware by joining candidates through `entity_sources → documents.silo_id`. Cross-silo near-duplicates are *proposed* to `graph_issues` (by entity id), not merged. `recompute_cooccurrence` (both `db.py`) additionally suppresses edges from gated `kind`s (via the `silo_kind` join). Silo + kind ride along in `GET /graph`, entity reads, the MCP read tools, and a viz filter.
 
 **Tech Stack:** Python 3.12, SQLite (WAL), faiss (worker normalizer), pytest, Next.js/Canvas2D (viz). Orchestrator tests run natively/CI; worker tests run in the `noospheric-orrery-worker-1` container via `uv run` (see CLAUDE.md → Testing).
 
@@ -20,13 +20,14 @@
 - **Two `run_batch_normalization` impls, different algorithms** (`worker/src/normalizer.py` faiss vs `orchestrator/src/pipeline/embedding_normalizer.py` O(n²)) — NOT mirrored by `test_schema_mirror`. Each scoped + tested separately.
 - **Schema mirror:** `documents` DDL, the `recompute_cooccurrence` helper, and the mirrored index list live in both `orchestrator/src/db.py` and `worker/src/db.py` and are checked by `test_schema_mirror` — edit both identically, and add new indexes/tables to the mirror lists.
 - **⚠️ CRITICAL — the two orchestrator normalization paths run through the REPOSITORY layer, not raw SQL.** `normalize_entity(store, …)` (`normalizer.py`, the `_ingest_document` production path) and `run_batch_normalization(store)` (`embedding_normalizer.py::_run_batch_store`, the `/normalize` route path) fuse entities via repository methods — `store.normalization.get_merge_map_entry()`, `store.entities.get_by_name()`, `store.entities.get_all_for_normalization()` (`repositories/sqlite_store.py`; `interfaces.py`) — **which take no silo argument.** Each of those functions ALSO has a legacy raw-`sqlite3.Connection` branch; production does NOT use it. So **Tasks 4 & 7 must add silo-aware repository methods and test against the STORE path**, or you get green tests (raw branch) with broken production (store branch). The worker paths (Task 3 `extract_document_entities`, Task 6 `worker/src/normalizer.py`) DO use raw `conn` directly — raw SQL is correct there.
-- **`kind` is materialized on `documents` for the same reason `silo_id` is** — the two consumers (`recompute_cooccurrence` emission gating; the read layer) both work at the document/entity-source level, so a materialized `documents.provenance_kind` gives a simple hot join, exactly parallel to `silo_id`. The **source of truth** stays at the source/flow level (featurizer default + `config_json` override); the document column is the resolved, materialized copy. **Do NOT overload `collections.kind`** (which already means the collection *type*: `git_repo`/`tracker_run`) as the provenance vocabulary — map from it in code instead. See the note in Task 9. *(This interpretation reconciles a tension in the spec between §4.1 "override in config_json" and §10.2 "kind column on the row"; a plan reviewer should confirm.)*
+- **`kind` lives on the silo row, NOT materialized on `documents` (unlike `silo_id`).** `silo_id` is immutable after ingest → materialize it on `documents`. `kind` is **mutable** — a user can re-classify a source later — so materializing it per-doc creates a staleness bug (a changed override wouldn't propagate to existing docs' reads or emission gate). Instead the **source of truth is `provenance_kind` on the silo row** (`watched_sources` + `collections`), and reads/emission resolve it by joining `documents.silo_id → silo_kind` (the unifying view). One edit to the source row propagates immediately, everywhere. This satisfies LOCKED §10.2 (kind on the silo row). **Do NOT overload `collections.kind`** (which already means the collection *type*: `git_repo`/`tracker_run`) — add a distinct `provenance_kind` column and derive its default from the type via the flow-default map. *(This supersedes the §4.1 "override in `config_json`" wording: the override is now a first-class `provenance_kind` column, which is cleaner and directly editable; `config_json` keeps carrying #41's `ext`/`ignore`/`folder_domains`.)*
+- **Stamp-at-registration, edit-to-override (the HuggingFace-pipeline model).** The flow default is applied ONCE, written into `provenance_kind` at source registration/ingest — so a user who does nothing gets the right kind for free. Overriding is editing that one column. Backfill stamps existing silo rows (one row per source, not per doc). A later change to the flow-default *map* does not retro-change already-stamped sources (correct: a source's declared provenance shouldn't silently shift); the user can always edit.
 - **Only one kind is gated by default.** Per spec §4 the emission table reduces to: `neutral_summary` leaf emits (rollup already suppressed by the existing membership gate), `human_vault` emits, `human_reviewed` emits, **`agent_report` suppressed.** So the kind-level emission rule is a single predicate `provenance_kind != 'agent_report'`, AND-combined with the existing membership gate. Keep it expressed so it generalizes to a kind→emits map later.
 
 ## File-structure map
 
-**Modify (schema/ingest):** `orchestrator/src/db.py`, `worker/src/db.py` (silo_id + provenance_kind columns + migrations + backfill + index, both mirrored) · `worker/src/jobs/upsert_document.py` (populate both on create/update) · `orchestrator/src/routes/ingest.py` (populate on the upload/text paths).
-**Create:** `orchestrator/src/pipeline/silo.py` + `worker/src/silo.py` — a tiny shared helper: `resolve_silo_id(source_id, collection_id)`, `resolve_kind(flow_default, override)`, the flow-default map, and the SQL fragment "entity has a source in silo S". (Two copies, mirror-tested like `classifier.py`.)
+**Modify (schema/ingest):** `orchestrator/src/db.py`, `worker/src/db.py` (`documents.silo_id` column + index; `provenance_kind` column on `watched_sources` + `collections`; the `silo_kind` view; migrations; backfills — all mirrored) · `worker/src/jobs/upsert_document.py` (populate `silo_id` on doc create/update; stamp source/collection `provenance_kind` default at silo creation) · `orchestrator/src/routes/ingest.py` + the source/repo/tracker registration paths (stamp `provenance_kind` default; accept an optional `kind=` override).
+**Create:** `orchestrator/src/pipeline/silo.py` + `worker/src/silo.py` — a tiny shared helper: `resolve_silo_id(source_id, collection_id)`, `flow_default_kind(source_type)`, `resolve_kind(flow_default, override)`, and the SQL fragment "entity has a source in silo S". (Two copies, **mirror-tested** — add `test_silo_is_mirrored` alongside the existing `test_classifier_is_mirrored`.)
 **Modify (the 5 scoping paths):** `worker/src/jobs/upsert_document.py::extract_document_entities` (raw conn) · `orchestrator/src/pipeline/normalizer.py::normalize_entity` (**store branch**) · `worker/src/jobs/extract_batch_image.py` (raw conn) · `worker/src/normalizer.py::run_batch_normalization` (raw conn, faiss) · `orchestrator/src/pipeline/embedding_normalizer.py::run_batch_normalization` (**store branch, `_run_batch_store`**).
 **Modify (repository layer — Finding 2):** `orchestrator/src/repositories/sqlite_store.py` + `orchestrator/src/repositories/interfaces.py` — add silo-aware `get_by_name`, `get_merge_map_entry`, `get_all_for_normalization`.
 **Modify (cross-silo proposal):** reuse `orchestrator/src/pipeline/graph_repair.py::propose_correction` (+ a worker-side equivalent insert into `graph_issues`).
@@ -126,7 +127,7 @@ def silo_match(entity_col: str) -> str:
     return (f"EXISTS (SELECT 1 FROM entity_sources es JOIN documents d ON d.id = es.document_id "
             f"WHERE es.entity_id = {entity_col} AND d.silo_id IS ?)")
 ```
-In `upsert_document` INSERT and UPDATE, set `silo_id = resolve_silo_id(source_id, collection_id)`. In `_ingest_document`, pass `silo_id=None` (loose uploads).
+In `upsert_document` INSERT and UPDATE, set `silo_id = resolve_silo_id(source_id, collection_id)`. For the loose-upload path, `_ingest_document` writes via `store.documents.create(...)` (not a raw INSERT) — so add `silo_id` to `DocumentRepository.create` (interfaces + sqlite_store), passing `None` for loose uploads. (Functionally a no-op for loose uploads since it resolves to NULL, but the file map must name the repository method, not "raw INSERT.")
 
 - [ ] **Step 4: Run → pass. Step 5: Commit** — `feat(sync): populate documents.silo_id at ingest + shared silo helper (#50)`.
 
@@ -172,7 +173,7 @@ row = conn.execute(
 
 - [ ] **Step 1: Failing test (store path).** With a `test_store`: create a siloed entity "mercury" (a doc with `silo_id='v1'` + its `entity_sources`); then `normalize_entity(store, "mercury", "Concept", silo=None)` (a loose upload) must create a **NEW** entity, not fuse onto the 'v1' one. Separately, two null-silo mentions of "mercury" still fuse (regression).
 - [ ] **Step 2: Run → fail** — today `store.entities.get_by_name(...)` returns the 'v1' entity regardless of silo.
-- [ ] **Step 3: Implement.** Add an optional `silo` param to `EntityRepository.get_by_name` and `NormalizationRepository.get_merge_map_entry` (interfaces + sqlite_store). When `silo` is passed, AND the existing query with the `silo_match` EXISTS clause (positional `?`, NULL-safe); back-compat (no silo) when omitted. Thread `silo` through `normalize_entity(store_or_conn, name, entity_type, silo=None)` ← `_ingest_document` (loose upload → `None`). Scope BOTH the merge_map short-circuit and `get_by_name`.
+- [ ] **Step 3: Implement.** Add an optional `silo` param to `EntityRepository.get_by_name` and `NormalizationRepository.get_merge_map_entry` (interfaces + sqlite_store). When `silo` is passed, AND the existing query with the `silo_match` EXISTS clause (positional `?`, NULL-safe); back-compat (no silo) when omitted. **Preserve `include_invalid=True`** (the production callers pass it — CLAUDE.md dedup invariant: re-attach to invalidated nodes, don't resurrect duplicates); the silo-aware overload must keep threading it. Thread `silo` through `normalize_entity(store_or_conn, name, entity_type, silo=None)` ← `_ingest_document` (loose upload → `None`). Scope BOTH the merge_map short-circuit and `get_by_name`.
 - [ ] **Step 4: Run → pass. Step 5: Commit** — `feat(silo): scope normalize_entity via silo-aware repository methods (#50)`.
 
 ---
@@ -193,8 +194,8 @@ row = conn.execute(
 - [ ] **Step 2: Run → fail** (today: global merge).
 - [ ] **Step 3: Implement.** **Keep the existing per-`type` `IndexFlatIP` — do NOT partition the index by silo (Finding 3):** a strict `(type, silo)` index means cross-silo pairs never share a group, so their similarity is never computed and the cross-silo proposal below becomes unreachable. Instead, for each high-similarity candidate pair the per-type search surfaces, compute each entity's **silo-set** (`entity_sources → documents.silo_id`, may be multi-valued) and branch:
    - **overlapping/shared silo (incl. both null)** → auto-merge, as today;
-   - **disjoint (or null-vs-non-null)** → do NOT merge; insert a pending `graph_issues` row. The worker **cannot import `graph_repair`** (separate package), so it does its own insert matching the `graph_issues` DDL: `action='merge'`, `target_entity_id`+`target_entity_name`, `target_b_entity_id`+`target_b_name`, rationale=similarity, keyed on **ids**. Any cross-silo pair → `graph_issues`, never `normalization_review_queue`.
-   - **Plural collapse** (the pre-faiss stage) — restrict its global `all_names`/`get_by_name` fuse to same-silo names too.
+   - **disjoint (or null-vs-non-null)** → do NOT merge; insert a pending `graph_issues` row. The worker **cannot import the orchestrator's `pipeline/graph_repair.py`** (`propose_correction`/`apply_merge`/`rollback_merge`), so it does its own insert matching the `graph_issues` DDL: `action='merge'`, `target_entity_id`+`target_entity_name`, `target_b_entity_id`+`target_b_name`, rationale=similarity, keyed on **ids**. ⚠️ **Name collision:** there is a *different* `worker/src/jobs/graph_repair.py` (the advisory judge) — do NOT bolt this insert onto it or confuse it with the orchestrator's correction engine. Any cross-silo pair → `graph_issues`, never `normalization_review_queue`.
+   - **Plural collapse** (the pre-faiss stage) — restrict its global `all_names`/`get_by_name` fuse to same-silo names too. For a **multi-silo** entity the singular-lookup is scoped by the entity's full silo-set (same per-silo-set membership test as the pairwise branch), not one arbitrary silo.
 - [ ] **Step 3b: Add `"graph_issues"` to `_MIRRORED_TABLES`** (`test_schema_mirror.py`) — Task 6 makes the **worker** a writer of `graph_issues` (Finding 4). Confirm both `db.py` `graph_issues` DDLs are identical.
 - [ ] **Step 4: Run → pass. Step 5: Commit** — `feat(silo): silo-aware worker faiss normalization; propose cross-silo to graph_issues (#50)`.
 
@@ -204,7 +205,7 @@ row = conn.execute(
 
 **Files:** Modify `orchestrator/src/repositories/sqlite_store.py::get_all_for_normalization` (silo-aware), `orchestrator/src/pipeline/embedding_normalizer.py::_run_batch_store`. Test: `orchestrator/tests/test_silo_scope_batch_nested.py` — **against the store path** (`test_store` fixture).
 
-- [ ] Same behaviour as Task 6 for this **different** (nested-loop, no faiss) algorithm, but through the repository: `get_all_for_normalization` returns each entity with its silo-set (or the all-pairs loop joins to it); plural collapse + all-pairs comparison auto-merge only same-silo; cross-silo similars → `graph_issues` proposal by id — **reuse `graph_repair.propose_correction` here** (the orchestrator CAN import it). **Do not regress:** `get_all_for_normalization` currently doesn't filter `invalid_at` — preserve that while adding the silo join. Commit — `feat(silo): silo-aware orchestrator batch normalization via store path (#50)`.
+- [ ] Same behaviour as Task 6 for this **different** (nested-loop, no faiss) algorithm, but through the repository: `get_all_for_normalization` returns each entity with its silo-set (or the all-pairs loop joins to it); plural collapse + all-pairs comparison auto-merge only same-silo; cross-silo similars → `graph_issues` proposal by id — **reuse `pipeline/graph_repair.propose_correction` here** (the orchestrator CAN import it). The plural-collapse singular lookup (`_run_batch_store` calls `get_by_name(singular, e.type, include_invalid=True)`) must be scoped by the entity's full **silo-set** for multi-silo entities (same rule as Task 6), and **keep `include_invalid=True`** through the silo-aware overload. **Do not regress:** `get_all_for_normalization` currently doesn't filter `invalid_at` — preserve that while adding the silo join. Commit — `feat(silo): silo-aware orchestrator batch normalization via store path (#50)`.
 
 ---
 
@@ -219,17 +220,20 @@ row = conn.execute(
 
 ## PART B — Provenance `kind` (#79): tag, gate emission, expose
 
-### Task 9: Provenance `kind` — flow default + override + materialize on `documents` + backfill
+### Task 9: Provenance `kind` on the silo row — flow default (stamped at registration) + override + `silo_kind` view + backfill
 
-**Files:** Modify `orchestrator/src/db.py`, `worker/src/db.py` (add `provenance_kind`, migration, backfill, mirror). Extend `orchestrator/src/pipeline/silo.py` + `worker/src/silo.py` (`resolve_kind` + the flow-default map). Modify `worker/src/jobs/upsert_document.py` + `orchestrator/src/routes/ingest.py` (set it at ingest). Test: `orchestrator/tests/test_provenance_kind.py`, `worker/tests/test_kind_populate.py`.
+**Files:** Modify `orchestrator/src/db.py`, `worker/src/db.py` (add `provenance_kind` to `watched_sources` + `collections`; the `silo_kind` view; migrations; backfills; mirror). Extend `orchestrator/src/pipeline/silo.py` + `worker/src/silo.py` (`flow_default_kind` + `resolve_kind`). Modify the source-registration + ingest paths that create `watched_sources`/`collections` rows (stamp the default; accept an optional `kind=` override). Test: `orchestrator/tests/test_provenance_kind.py`, `worker/tests/test_kind_populate.py`.
 
 - [ ] **Step 1: Failing tests.**
-  - `resolve_kind`: `resolve_kind("neutral_summary", None) == "neutral_summary"`; override wins: `resolve_kind("neutral_summary", "agent_report") == "agent_report"`; unknown override rejected (falls back to default or raises — pick and assert).
-  - Schema: `documents` has `provenance_kind`; a vault ingest → `human_vault`; a codesum/tracksum repo ingest → `neutral_summary`; a loose upload → default (`neutral_summary` or `NULL` — decide; recommend `NULL` = "unknown", treated as ungated non-agent so it emits). Assert on the stored `documents.provenance_kind`.
-  - Backfill: existing collections (`kind='git_repo'`/`'tracker_run'`) → `neutral_summary`; existing vault `watched_sources` (`type='vault'`) → `human_vault`; existing repo sources → `neutral_summary`.
+  - `resolve_kind`: `resolve_kind("neutral_summary", None) == "neutral_summary"`; override wins: `resolve_kind("neutral_summary", "agent_report") == "agent_report"`; unknown override ignored → falls back to default (assert this, so a typo can't silently poison a silo).
+  - Schema: `watched_sources` and `collections` both have `provenance_kind`; the `silo_kind` view exists and returns `(silo_id, kind)` for every source/collection.
+  - Stamp-at-registration: registering a vault source stamps `watched_sources.provenance_kind = 'human_vault'`; a repo/tracker ingest stamps `collections.provenance_kind = 'neutral_summary'`; passing `kind='agent_report'` at registration stamps that instead.
+  - Resolution via the view: for a doc with `silo_id` pointing at a `human_vault` source, `SELECT kind FROM silo_kind WHERE silo_id = ?` → `human_vault`; **after UPDATE-ing that source's `provenance_kind` to `agent_report`, the same query returns `agent_report` with NO doc-level change** (proves no staleness — the fix for review B2).
+  - Loose upload (`silo_id IS NULL`) → no `silo_kind` row → resolves to `NULL` (chosen default: "unsourced", treated as non-agent → emits, displayed as unknown).
+  - Backfill: existing collections (`kind='git_repo'`/`'tracker_run'`) → `provenance_kind='neutral_summary'`; existing vault `watched_sources` (`type='vault'`) → `human_vault`; existing repo sources → `neutral_summary`.
 - [ ] **Step 2: Run → fail.**
 - [ ] **Step 3: Implement.**
-  - **Vocabulary + defaults in `silo.py` (both copies)** — the 4 LOCKED kinds and the flow-default map:
+  - **Vocabulary + flow-default map in `silo.py` (both copies):**
     ```python
     KINDS = {"neutral_summary", "human_vault", "agent_report", "human_reviewed"}
 
@@ -241,16 +245,24 @@ row = conn.execute(
         "codesum": "neutral_summary", "tracksum": "neutral_summary",
     }
 
+    def flow_default_kind(source_type):        # the "pipeline expectation"
+        return FLOW_DEFAULT_KIND.get(source_type)  # None if unknown flow
+
     def resolve_kind(flow_default, override=None):
-        """override (from watched_sources.config_json / ingest arg) wins; else flow default."""
-        if override in KINDS:
-            return override
-        return flow_default  # a valid kind, or None for loose uploads
+        """override (a first-class provenance_kind value) wins IF valid; else the flow default."""
+        return override if override in KINDS else flow_default
     ```
-  - **DO NOT overload `collections.kind`** (it holds the collection *type* `git_repo`/`tracker_run`). Derive the flow default from it via `FLOW_DEFAULT_KIND`, and from `watched_sources.type` for watched sources. The **override** lives in `watched_sources.config_json` (per spec §4.1; same place #41 put `ext`/`ignore`) and, for collection-only one-shot ingests, an optional `kind=` arg on the ingest call.
-  - **Materialize** `documents.provenance_kind TEXT` (both db.py, mirrored; idempotent ALTER like Task 1) — resolved at ingest (`upsert_document`, `_ingest_document`) via `resolve_kind(flow_default, override)`, exactly parallel to `silo_id`.
-  - **Backfill** `backfill_provenance_kind(conn)` (both db.py, mirror-tested), called in `init_db` after the ALTER: fill NULLs from each doc's silo owner — `collections.kind`/`watched_sources.type` → `FLOW_DEFAULT_KIND`; loose/directory docs stay `NULL`. Idempotent.
-- [ ] **Step 4: Run → pass; `test_schema_mirror` green.** Commit — `feat(provenance): documents.provenance_kind — flow default + config_json override + backfill (#79)`.
+  - **Schema (both db.py, mirrored; idempotent ALTERs like Task 1):** add `provenance_kind TEXT` to `watched_sources` and to `collections` (distinct from `collections.kind`, which stays the collection *type*). Add the unifying view:
+    ```sql
+    CREATE VIEW IF NOT EXISTS silo_kind AS
+        SELECT id AS silo_id, provenance_kind AS kind FROM watched_sources
+        UNION ALL
+        SELECT id AS silo_id, provenance_kind AS kind FROM collections;
+    ```
+    (`documents.silo_id` equals a `watched_sources.id` OR a `collections.id` by the §5 precedence, so a doc matches exactly one `silo_kind` row; null-silo docs match none.) **Add `"silo_kind"` to the schema-mirror coverage** (a `test_silo_kind_view_is_mirrored`, or extend the mirrored-object list) so the two definitions can't drift.
+  - **Stamp at registration:** where each flow creates its silo row — vault/repo source registration → `watched_sources`; `POST /ingest/repo` + tracker ingest → `collections` — set `provenance_kind = resolve_kind(flow_default_kind(source_type), override)`. The optional `kind=` override arrives from source registration (a form field, later persisted to the column) or the one-shot ingest call. **No `documents.provenance_kind` column** — kind is never materialized per-doc.
+  - **Backfill** `backfill_provenance_kind(conn)` (both db.py, mirror-tested), called in `init_db` after the ALTERs: fill NULL `watched_sources.provenance_kind` from `flow_default_kind(type)`; fill NULL `collections.provenance_kind` from `flow_default_kind(kind)` (the type). One row per source, idempotent. **Existing docs need no change** — they resolve through the view.
+- [ ] **Step 4: Run → pass; `test_schema_mirror` green.** Commit — `feat(provenance): provenance_kind on silo rows + silo_kind view + backfill (#79)`.
 
 ---
 
@@ -260,10 +272,10 @@ row = conn.execute(
 
 - [ ] **Step 1: Failing test.** Two docs in an `agent_report` silo that co-mention entities A,B → after `recompute_cooccurrence`, **no A–B edge** (or its weight excludes the agent_report contribution). The same two docs as a `human_vault` (or `neutral_summary` leaf) silo → the A–B edge **is** present. Critically exercise the **non-`document_collections` path** (a watched *vault* silo with no membership row — spec B6), since that's the case the old `document_collections.emits_cooccurrence` lever could not reach.
 - [ ] **Step 2: Run → fail** (today agent_report docs emit edges).
-- [ ] **Step 3: Implement.** Add a kind predicate to the emission filter, **AND-combined** with the existing membership gate so both suppressors work independently (spec §4):
+- [ ] **Step 3: Implement.** Resolve each doc's kind by joining to the `silo_kind` view (`LEFT JOIN silo_kind sk ON sk.silo_id = documents.silo_id`) and add a kind predicate **AND-combined** with the existing membership gate so both suppressors work independently (spec §4):
   - existing gate: a doc emits iff `COALESCE(MIN(document_collections.emits_cooccurrence), 1) = 1` (rollup docs suppressed).
-  - new gate: `AND COALESCE(documents.provenance_kind, '') != 'agent_report'`.
-  Express it so it generalizes to a kind→emits map (a `CASE` or a small joined lookup) rather than hard-coding one string in three places if it appears more than once. Mirror the change in both `db.py`; the subquery parallels the existing `MIN(document_collections.emits_cooccurrence)` one.
+  - new gate: `AND COALESCE(sk.kind, '') != 'agent_report'` (a null-silo/unknown doc has no `silo_kind` row → `COALESCE` → emits).
+  Because kind is read live through the view, an override change propagates on the next `recompute_cooccurrence` with no per-doc backfill. Express the predicate so it generalizes to a kind→emits map later (a `CASE`/lookup) rather than hard-coding one string if it recurs. Mirror the change in both `db.py`; the `silo_kind` join sits alongside the existing `document_collections` subquery.
 - [ ] **Step 4: Run → pass; `test_schema_mirror` green (both `recompute_cooccurrence` identical).** Commit — `feat(provenance): gate co-occurrence emission for agent_report silos (#79)`.
 
 ---
@@ -275,7 +287,7 @@ row = conn.execute(
 - [ ] **Step 1: Failing tests.**
   - `GET /graph` nodes carry `silo_id` **and** `provenance_kind`; `?silo=<id>` returns only that silo's nodes/edges (`?silo=none` for the null pool); `?kind=<k>` filters by kind.
   - `get_entity` sources annotate silo + kind; `search_knowledge_graph` / `get_neighborhood` / `get_subgraph` (MCP, the #48 read path) include silo + kind on nodes; document reads include the doc's silo + kind.
-- [ ] **Step 2–4: Implement (mind the cached snapshot — Finding 7).** `GET /graph` serves a **materialized snapshot** via `get_or_build` (`routes/graph.py`, `graph_snapshot.py`), not a live query. So: (a) attach node `silo_id` + `provenance_kind` in the **snapshot builder** `graph_v5.build_graph_v5(store, …)` (it reads through the repository layer — add both to the entity/doc rows it already fetches); (b) apply `?silo=`/`?kind=` as a **post-filter over the loaded payload** in the route (snapshot stays whole/cached). Annotate silo+kind in the entity/MCP/document reads. Add a viz filter control (silo + kind) — **verify per CLAUDE.md canvas rules: drive a browser + screenshot + model-judge; Canvas2D can't be DOM-inspected;** use `window.__viz` hooks in the galaxy view.
+- [ ] **Step 2–4: Implement (mind the cached snapshot — Finding 7).** `GET /graph` serves a **materialized snapshot** via `get_or_build` (`routes/graph.py`, `graph_snapshot.py`), not a live query. So: (a) in the **snapshot builder** `graph_v5.build_graph_v5(store, …)`, attach each node's `silo_id` (from `documents`) and resolve its `kind` via the `silo_kind` view join (kind is NOT a doc column). *Note the snapshot is cached — a later kind override won't appear until the snapshot rebuilds; that's acceptable for the viz (the emission gate and live entity/MCP reads pick it up immediately), but if fresher viz kind matters, invalidate the snapshot on source-config change.* (b) apply `?silo=`/`?kind=` as a **post-filter over the loaded payload** in the route (snapshot stays whole/cached). For `get_entity`/`get_document`/`search`/`neighborhood`/`subgraph`, resolve silo + kind through the `silo_kind` join at read time (live, no staleness). Add a viz filter control (silo + kind) — **verify per CLAUDE.md canvas rules: drive a browser + screenshot + model-judge; Canvas2D can't be DOM-inspected;** use `window.__viz` hooks in the galaxy view.
 - [ ] **Step 5: Commit** — `feat(provenance): expose silo + kind in graph/entity/MCP reads + viz filter (#50, #79)`.
 
 ---
@@ -289,7 +301,8 @@ row = conn.execute(
   - an identically-named entity stays **two nodes** across silos (use **freshly-ingested** silos, not the backfilled blend — §5.1);
   - `GET /graph`/viz **filter per silo and per kind**;
   - a deliberate **cross-silo merge via corrections** applies and reverses;
-  - an **`agent_report` silo** (override a vault's kind via `config_json`, or ingest an agent-report source) → its docs **do not** emit co-occurrence edges, and its nodes read back with `kind=agent_report`;
+  - an **`agent_report` silo** (edit a source's `provenance_kind` to `agent_report`, or ingest an agent-report source) → its docs **do not** emit co-occurrence edges, and its nodes read back with `kind=agent_report`;
+  - **override propagation (the B2 fix):** flip a live source's `provenance_kind`, re-run `recompute_cooccurrence` → emission changes accordingly with NO re-ingest; `get_entity` reflects the new kind immediately;
   - `get_entity` / MCP `search_knowledge_graph` return silo + kind.
 - [ ] **Step 3: Docs** — note the silo model + provenance kinds + backfill in `docs/graph-corrections.md` (cross-silo proposals are now a source of merge proposals) and wherever ingestion is documented (the featurizer flow-default table).
 - [ ] **Step 4: PR + close #50 and #79.** Push; open the PR (do NOT merge without human go-ahead). If the diff is too large for comfortable review, split at the Part A / Part B seam into two stacked PRs — otherwise one PR closing both.
@@ -299,8 +312,8 @@ row = conn.execute(
 ## Definition of done
 - All five auto-merge paths + the two leaks are silo-scoped, each with a passing test; a test that only checked the faiss query would NOT be sufficient (spec §8).
 - Cross-silo similars produce `graph_issues` proposals (by id), not merges; approve+rollback round-trips.
-- `documents.silo_id` + `documents.provenance_kind` materialized, indexed/backfilled; `test_schema_mirror` green (both db.py identical).
+- `documents.silo_id` materialized/indexed/backfilled; `provenance_kind` on the silo rows (`watched_sources` + `collections`) with the `silo_kind` view; `test_schema_mirror` green (both db.py identical, view + new columns mirror-covered).
 - Null-silo (loose upload) normalization behaviour unchanged (regression test).
-- `provenance_kind` set at ingest from the flow default, overridable via `config_json`; `agent_report` silos suppress co-occurrence emission (incl. the non-`document_collections` vault path).
+- `provenance_kind` stamped at registration from the flow default, overridable by editing the source's column; changing it **propagates live** (emission + reads) with no re-ingest (B2 fixed); `agent_report` silos suppress co-occurrence emission (incl. the non-`document_collections` vault path).
 - `GET /graph`/viz filter per silo **and** per kind; `get_entity`/search/neighborhood/subgraph/document reads surface silo + kind.
 - Live acceptance walked on two git repos + a vault, covering distinctness, filtering, cross-silo merge round-trip, agent_report emission gating, and read exposure; **#50 and #79 both closeable.**
