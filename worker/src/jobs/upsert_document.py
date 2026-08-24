@@ -17,7 +17,7 @@ import uuid
 from ..db import mark_graph_dirty, recompute_cooccurrence
 from ..classifier import classify_document
 from ..identity_filter import is_identity_noise
-from ..silo import resolve_silo_id
+from ..silo import resolve_silo_id, silo_match
 
 # Used only when no simmered general spec exists yet — keeps a fresh workspace's first
 # vault sync from extracting nothing.
@@ -67,6 +67,9 @@ async def extract_document_entities(conn, relay, settings, *, doc_id, chunks, sp
     chunk_entities: dict[str, list[str]] = {}
     total = new = matched = 0
 
+    silo_row = conn.execute("SELECT silo_id FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    silo = silo_row[0] if silo_row else None
+
     for chunk_id, chunk_text_ in chunks:
         response = await relay.complete(
             model=settings.extraction_model, max_tokens=4096,
@@ -94,11 +97,15 @@ async def extract_document_entities(conn, relay, settings, *, doc_id, chunks, sp
                 continue
 
             is_new = False
-            row = conn.execute("SELECT to_entity_id FROM merge_map WHERE from_name = ?", (name,)).fetchone()
+            row = conn.execute(
+                f"SELECT mm.to_entity_id FROM merge_map mm WHERE mm.from_name = ? "
+                f"AND {silo_match('mm.to_entity_id')}", (name, silo)).fetchone()
             if row:
                 entity_id = row[0]
             else:
-                row = conn.execute("SELECT id FROM entities WHERE canonical_name = ? AND type = ?", (name, etype)).fetchone()
+                row = conn.execute(
+                    f"SELECT e.id FROM entities e WHERE e.canonical_name = ? AND e.type = ? "
+                    f"AND {silo_match('e.id')}", (name, etype, silo)).fetchone()
                 if row:
                     entity_id = row[0]
                 else:
