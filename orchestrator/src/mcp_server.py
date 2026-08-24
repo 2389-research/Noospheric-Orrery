@@ -145,12 +145,19 @@ async def search_knowledge_graph(query: str, top_k: int = 15, include_images: bo
     for e in result["entities"][:10]:
         paths = ",".join(e.get("paths", []))
         hits = e.get("appearances", 0)
-        lines.append(f"  • {e['name']} ({e['type']}) — {e.get('source_count', 0)} docs, score {e['score']:.4f} [{hits} sub-query hits, via {paths}]")
+        # silo_id/kind resolved live by the orchestrator (task 11a): a source
+        # re-classified after ingest shows up here on the next search, no re-ingest.
+        silo = e.get("silo_id") or "no silo"
+        kind = e.get("kind") or "unspecified kind"
+        lines.append(f"  • {e['name']} ({e['type']}) — {e.get('source_count', 0)} docs, score {e['score']:.4f} "
+                     f"[{hits} sub-query hits, via {paths}] [{silo}, {kind}]")
     lines.append("\nRelevant excerpts:")
     for c in result["chunks"][:5]:
         overlap = c.get("entity_overlap", 0)
         matching = c.get("matching_entities", "")
-        lines.append(f"  [{c['document_title']}] (entities:{overlap}): {c['text'][:200]}")
+        silo = c.get("silo_id") or "no silo"
+        kind = c.get("kind") or "unspecified kind"
+        lines.append(f"  [{c['document_title']}] (entities:{overlap}) [{silo}, {kind}]: {c['text'][:200]}")
         if matching:
             lines.append(f"    entities in chunk: {matching}")
     images = result.get("images") or []

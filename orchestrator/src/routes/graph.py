@@ -33,6 +33,12 @@ def _filter_by_silo_kind(payload: dict, *, silo: str | None, kind: str | None) -
     got excluded; a domain-cooccurrence edge's endpoints are domain PATHS, never
     entity/collection ids, so it is untouched by this filter even though domain
     nodes aren't in the render set to begin with.
+
+    A node's `silo_id` here is its DOMINANT silo (see `graph_reads._pick_dominant`) —
+    a node built from sources in more than one silo (rare: pre-#50 data, or a
+    deliberate cross-silo merge) collapses to its heaviest one, so `?silo=<a
+    non-dominant silo it still has sources in>` will not surface it. `get_entity`
+    is unaffected: it lists every source's own silo individually.
     """
     def matches(node: dict) -> bool:
         if silo is not None:

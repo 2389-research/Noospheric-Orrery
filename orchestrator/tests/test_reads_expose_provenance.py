@@ -10,6 +10,7 @@ re-ingest and no per-row write anywhere near the document or entity itself. That
 what the `_reflects_updated_kind_with_no_reingest` tests pin.
 """
 
+import numpy as np
 import pytest
 
 import src.mcp_server as mcp_server
@@ -151,3 +152,101 @@ async def test_mcp_get_neighborhood_surfaces_silo_and_kind(monkeypatch):
     out = await mcp_server.get_neighborhood("Widget")
     assert "ws1" in out and "agent_report" in out
     assert "no silo" in out  # the None-silo node is surfaced too, not silently dropped
+
+
+# ── search_knowledge_graph (REST /search + the MCP tool) ──────────────────────
+#
+# The plan calls this out by name three times (Task 11, Task 12 acceptance, Definition
+# of Done) — it's the primary agent read where provenance matters most.
+
+def _seed_search_hit(store, silo="ws6", kind="agent_report"):
+    """One document (silo'd), one chunk on it, one entity sourced from that chunk.
+
+    The entity name is queried verbatim so `search_entities_exact` gives a guaranteed,
+    deterministic hit (score 1.0) regardless of what the embedding model makes of it —
+    and because that entity has a `chunk_id`, `boost_chunks_via_entities` pulls its
+    chunk into `boosted_chunks`, giving a deterministic CHUNK hit too, with no
+    dependence on semantic ranking for either channel. A stored embedding keeps
+    `build_indexes` from calling the model for this entity; the query string itself
+    still goes through the real (locally cached) sentence-transformer via `embed_text`,
+    same as every other real `/search` call in this suite (see test_image_routes.py).
+    """
+    c = store.conn
+    c.execute("INSERT INTO watched_sources (id, type, uri, provenance_kind) VALUES (?, 'repo', '/tmp/x', ?)",
+              (silo, kind))
+    c.execute("INSERT INTO documents (id, title, silo_id) VALUES ('d1', 'Doc One', ?)", (silo,))
+    c.execute("INSERT INTO chunks (id, document_id, chunk_index, text) VALUES "
+              "('c1', 'd1', 0, 'Some text about the provenance widget.')")
+    vec = np.zeros(384, dtype=np.float32)
+    vec[0] = 1.0
+    c.execute("INSERT INTO entities (id, canonical_name, type, embedding) VALUES (?, ?, 'Concept', ?)",
+              ("e1", "provenance widget", vec.tobytes()))
+    c.execute("INSERT INTO entity_sources (entity_id, document_id, chunk_id) VALUES ('e1', 'd1', 'c1')")
+    c.commit()
+
+
+@pytest.fixture(autouse=True)
+def _force_fresh_search_index():
+    """The FAISS index is process-global (`pipeline._indexes_ready`), so without this
+    a search test can silently reuse an index another test built against a DIFFERENT
+    (already-closed) database — same trap `test_search_invalid_at.py` guards against.
+    Forcing a rebuild before and restoring after keeps this file's search tests
+    independent of run order."""
+    from src.pipeline.search import pipeline as search_pipeline
+    before = search_pipeline._indexes_ready
+    search_pipeline._indexes_ready = False
+    yield
+    search_pipeline._indexes_ready = before
+
+
+def test_search_entity_and_chunk_hits_carry_silo_and_kind(test_client, test_store):
+    _seed_search_hit(test_store)
+    body = test_client.get("/search", params={"q": "provenance widget", "expand": "false"}).json()
+
+    assert body["entities"], "the exact-match channel must have surfaced e1"
+    entity_hit = next(e for e in body["entities"] if e["id"] == "e1")
+    assert entity_hit["silo_id"] == "ws6"
+    assert entity_hit["kind"] == "agent_report"
+
+    assert body["chunks"], "entity-boost must have surfaced c1 via e1's chunk_id"
+    chunk_hit = next(c for c in body["chunks"] if c["document_id"] == "d1")
+    assert chunk_hit["silo_id"] == "ws6"
+    assert chunk_hit["kind"] == "agent_report"
+
+
+def test_search_reflects_updated_kind_with_no_reingest(test_client, test_store):
+    _seed_search_hit(test_store, silo="ws7", kind="neutral_summary")
+    before = test_client.get("/search", params={"q": "provenance widget", "expand": "false"}).json()
+    before_entity = next(e for e in before["entities"] if e["id"] == "e1")
+    assert before_entity["kind"] == "neutral_summary"
+
+    test_store.conn.execute(
+        "UPDATE watched_sources SET provenance_kind = 'agent_report' WHERE id = 'ws7'")
+    test_store.conn.commit()
+
+    from src.pipeline.search import pipeline as search_pipeline
+    search_pipeline._indexes_ready = False   # force a fresh search, not a cached FAISS build
+
+    after = test_client.get("/search", params={"q": "provenance widget", "expand": "false"}).json()
+    after_entity = next(e for e in after["entities"] if e["id"] == "e1")
+    assert after_entity["kind"] == "agent_report"
+    assert after_entity["silo_id"] == "ws7"   # untouched — only the kind moved
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_knowledge_graph_surfaces_silo_and_kind(monkeypatch):
+    async def fake(path, method="GET", body=None):
+        return {
+            "query": "widget", "total_entities": 1, "total_chunks": 1,
+            "sub_queries_used": [],
+            "entities": [{"id": "e1", "name": "Widget", "type": "Concept",
+                          "source_count": 2, "score": 1.0, "appearances": 1,
+                          "paths": ["exact"], "silo_id": "ws1", "kind": "agent_report"}],
+            "chunks": [{"document_id": "d1", "document_title": "Doc One", "text": "...",
+                        "entity_overlap": 1, "matching_entities": "Widget",
+                        "silo_id": "ws1", "kind": "agent_report"}],
+        }
+
+    monkeypatch.setattr(mcp_server, "call_api", fake)
+    out = await mcp_server.search_knowledge_graph("widget")
+    assert "ws1" in out and "agent_report" in out

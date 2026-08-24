@@ -47,7 +47,7 @@ from .graph_snapshot import (
     assign_domain_colors,
     _collection_positions,
 )
-from ..repositories.graph_reads import entity_silos, silo_kinds_of
+from ..repositories.graph_reads import entity_silos, collection_silos, silo_kinds_of
 
 # Bump on ANY change a cached payload could not survive — new/renamed layers, and
 # renamed VALUES in the vocabulary (node type, edge scope, container_type). 5.1.0
@@ -169,6 +169,13 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
     collection_rows = conn.execute(
         "SELECT id, name, path, document_count FROM collections"
     ).fetchall()
+    # Dominant silo + live-resolved kind (task 11a), one batch pass rather than a
+    # query per collection — same shape as entity_silo_info above, and the same
+    # dominant-pick (`_pick_dominant`) tie-break everywhere: favor a NAMED silo over
+    # the null pool, then break lexicographically. In practice uniform: every
+    # document in a collection resolves to the SAME silo_id via `resolve_silo_id`'s
+    # precedence, so this only matters for a collection predating that precedence.
+    collection_silo_info = collection_silos(conn)
     collection_nodes = []
     for r in collection_rows:
         dom_row = conn.execute(
@@ -180,24 +187,12 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
             (r["id"],),
         ).fetchone()
         dom = dom_row["domain_path"] if dom_row else None
-        # Dominant silo + live-resolved kind (task 11a). In practice uniform: every
-        # document in a collection resolves to the SAME silo_id via
-        # `resolve_silo_id`'s precedence, so this is one row unless the collection
-        # predates that precedence being enforced.
-        sil_row = conn.execute(
-            """SELECT d.silo_id, sk.kind, COUNT(*) c
-               FROM document_collections dc
-               JOIN documents d ON d.id = dc.document_id AND d.invalid_at IS NULL
-               LEFT JOIN silo_kind sk ON sk.silo_id = d.silo_id
-               WHERE dc.collection_id = ?
-               GROUP BY d.silo_id ORDER BY c DESC, d.silo_id LIMIT 1""",
-            (r["id"],),
-        ).fetchone()
+        csinfo = collection_silo_info.get(r["id"], {})
         collection_nodes.append({
             "id": r["id"], "type": "collection", "label": r["name"], "path": r["path"],
             "degree": r["document_count"],
-            "silo_id": sil_row["silo_id"] if sil_row else None,
-            "kind": sil_row["kind"] if sil_row else None,
+            "silo_id": csinfo.get("silo_id"),
+            "kind": csinfo.get("kind"),
             "memberships": ([{"container_type": "domain", "id": dom, "weight": 1.0}]
                             if dom else []),
         })

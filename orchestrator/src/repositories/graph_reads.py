@@ -228,6 +228,12 @@ def domain_neighbours(conn, domain_path, *, limit=10) -> list[dict]:
 # among its sources; the rare one spanning several (pre-#50 data, or a deliberate
 # cross-silo merge) is represented by its heaviest. Ties favor a NAMED silo over the
 # null pool, then break lexicographically, so the pick is deterministic.
+#
+# Consequence for `?silo=` filtering (routes/graph.py): a multi-silo node's graph
+# node collapses to its DOMINANT silo, so `GET /graph?silo=<its non-dominant silo>`
+# will not surface it, even though that silo genuinely contributed sources to it.
+# `get_entity` is unaffected — it lists every source's own silo/kind individually,
+# not a single collapsed pick.
 
 def _pick_dominant(rows, id_key: str) -> dict[str, dict]:
     best: dict[str, tuple] = {}
