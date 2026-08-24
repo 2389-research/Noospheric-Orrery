@@ -47,6 +47,7 @@ from .graph_snapshot import (
     assign_domain_colors,
     _collection_positions,
 )
+from ..repositories.graph_reads import entity_silos, silo_kinds_of
 
 # Bump on ANY change a cached payload could not survive — new/renamed layers, and
 # renamed VALUES in the vocabulary (node type, edge scope, container_type). 5.1.0
@@ -137,6 +138,11 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
         ORDER BY source_count DESC, e.id ASC
     """).fetchall()
 
+    # entity_id -> dominant {silo_id, kind}, live-resolved via the silo_kind view
+    # (task 11a). One whole-graph pass here, not per-entity — the same shape as the
+    # domain/collection weight queries above.
+    entity_silo_info = entity_silos(conn)
+
     node_index: dict[str, dict] = {}
     render_entities: list[dict] = []
     unplaceable = 0
@@ -150,8 +156,10 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
                        for k, w in dw.items()]
         memberships += [{"container_type": "collection", "id": k, "weight": w}
                         for k, w in collection_weights.get(e["id"], {}).items()]
+        sinfo = entity_silo_info.get(e["id"], {})
         node = {"id": e["id"], "type": "entity", "subtype": e["type"],
                 "label": e["canonical_name"], "degree": e["source_count"],
+                "silo_id": sinfo.get("silo_id"), "kind": sinfo.get("kind"),
                 "memberships": memberships}
         node_index[e["id"]] = node
         if len(render_entities) < max_render_nodes:
@@ -172,9 +180,24 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
             (r["id"],),
         ).fetchone()
         dom = dom_row["domain_path"] if dom_row else None
+        # Dominant silo + live-resolved kind (task 11a). In practice uniform: every
+        # document in a collection resolves to the SAME silo_id via
+        # `resolve_silo_id`'s precedence, so this is one row unless the collection
+        # predates that precedence being enforced.
+        sil_row = conn.execute(
+            """SELECT d.silo_id, sk.kind, COUNT(*) c
+               FROM document_collections dc
+               JOIN documents d ON d.id = dc.document_id AND d.invalid_at IS NULL
+               LEFT JOIN silo_kind sk ON sk.silo_id = d.silo_id
+               WHERE dc.collection_id = ?
+               GROUP BY d.silo_id ORDER BY c DESC, d.silo_id LIMIT 1""",
+            (r["id"],),
+        ).fetchone()
         collection_nodes.append({
             "id": r["id"], "type": "collection", "label": r["name"], "path": r["path"],
             "degree": r["document_count"],
+            "silo_id": sil_row["silo_id"] if sil_row else None,
+            "kind": sil_row["kind"] if sil_row else None,
             "memberships": ([{"container_type": "domain", "id": dom, "weight": 1.0}]
                             if dom else []),
         })
@@ -186,13 +209,18 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
     collection_positions = _collection_positions(store, collection_boxes, domain_positions)
 
     total_documents = conn.execute("SELECT COUNT(*) FROM documents WHERE invalid_at IS NULL").fetchone()[0]
+    recent_docs = store.documents.get_recent(limit=50)
+    # kind is resolved live via the silo_kind view — `silo_id` itself is already a
+    # documents column, so this is a plain batch lookup, not a per-doc aggregate.
+    doc_kinds = silo_kinds_of(conn, [d.silo_id for d in recent_docs])
     document_nodes = [
         {"id": d.id, "type": "document", "subtype": getattr(d, "content_type", "text"),
          "label": d.title,
+         "silo_id": d.silo_id, "kind": doc_kinds.get(d.silo_id),
          "memberships": [{"container_type": "domain", "id": p, "weight": 1.0}
                          for p in d.domains],
          "primary_domain": d.domains[0] if d.domains else None}
-        for d in store.documents.get_recent(limit=50)
+        for d in recent_docs
     ]
 
     # ── edges: derived co-occurrence, then the ASSERTED collection edges ──────

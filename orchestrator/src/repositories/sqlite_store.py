@@ -57,25 +57,33 @@ class SQLiteDocumentRepository(DocumentRepository):
             status=row["status"], created_at=row["created_at"],
             content_type=row["content_type"] or "text",
             thumbnail_path=row["thumbnail_path"] if "thumbnail_path" in row.keys() else None,
+            silo_id=row["silo_id"] if "silo_id" in row.keys() else None,
         )
 
     def get_titles(self, ids):
-        """Map doc_id -> {title, content_type} for the given ids. Lets a caller
-        label a set of documents (e.g. an entity's source docs) without joining
+        """Map doc_id -> {title, content_type, silo_id, kind} for the given ids. Lets a
+        caller label a set of documents (e.g. an entity's source docs) without joining
         against the paginated `list()` — which only returns the first page, so
         callers were falling back to showing raw doc-id hashes. Batched to stay
-        under SQLite's bound-parameter limit (an entity can cite thousands)."""
+        under SQLite's bound-parameter limit (an entity can cite thousands).
+
+        `kind` is resolved LIVE via the `silo_kind` view join on every call — never
+        cached alongside the title — so a source re-classified after ingest shows up
+        on the very next read (task 11a)."""
         out = {}
         ids = list(dict.fromkeys(ids))  # de-dupe, preserve order
         for i in range(0, len(ids), 900):
             batch = ids[i:i + 900]
             placeholders = ",".join("?" * len(batch))
             rows = self._conn.execute(
-                f"SELECT id, title, content_type FROM documents WHERE id IN ({placeholders}) AND invalid_at IS NULL",
+                f"SELECT d.id, d.title, d.content_type, d.silo_id, sk.kind FROM documents d "
+                f"LEFT JOIN silo_kind sk ON sk.silo_id = d.silo_id "
+                f"WHERE d.id IN ({placeholders}) AND d.invalid_at IS NULL",
                 batch,
             ).fetchall()
             for r in rows:
-                out[r["id"]] = {"title": r["title"], "content_type": r["content_type"] or "text"}
+                out[r["id"]] = {"title": r["title"], "content_type": r["content_type"] or "text",
+                                 "silo_id": r["silo_id"], "kind": r["kind"]}
         return out
 
     def list(self, limit=50, offset=0):
@@ -128,14 +136,15 @@ class SQLiteDocumentRepository(DocumentRepository):
 
     def get_recent(self, limit=50):
         rows = self._conn.execute(
-            "SELECT d.id, d.title, d.content_type, GROUP_CONCAT(dd.domain_path) as domains "
+            "SELECT d.id, d.title, d.content_type, d.silo_id, GROUP_CONCAT(dd.domain_path) as domains "
             "FROM documents d LEFT JOIN document_domains dd ON d.id = dd.document_id "
             "WHERE d.invalid_at IS NULL "
             "GROUP BY d.id ORDER BY d.created_at DESC LIMIT ?", (limit,)
         ).fetchall()
         result = []
         for r in rows:
-            doc = Document(id=r["id"], title=r["title"], content_type=r["content_type"] or "text")
+            doc = Document(id=r["id"], title=r["title"], content_type=r["content_type"] or "text",
+                           silo_id=r["silo_id"])
             doc.domains = r["domains"].split(",") if r["domains"] else []
             result.append(doc)
         return result

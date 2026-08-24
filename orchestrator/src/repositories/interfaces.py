@@ -30,6 +30,11 @@ class Document:
     entity_count: int = 0
     content_type: str = "text"
     thumbnail_path: str | None = None
+    # documents.silo_id (task 11a exposure) — the resolved silo this document was
+    # ingested into (source_id > collection_id > None; see pipeline/silo.py). `kind`
+    # is NOT a field here: it's a property of the SILO, resolved live via the
+    # `silo_kind` view at read time, never copied onto the document.
+    silo_id: str | None = None
 
 
 @dataclass
