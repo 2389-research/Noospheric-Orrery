@@ -19,7 +19,7 @@ from .interfaces import (
     _UNSET,
 )
 from ..db import get_connection, init_db
-from ..pipeline.silo import silo_match
+from ..pipeline.silo import silo_match, flow_default_kind, resolve_kind
 
 
 def _safe_json(value):
@@ -939,11 +939,16 @@ class SQLiteCollectionRepository:
     def __init__(self, conn):
         self._conn = conn
 
-    def create(self, id, name, path, root_path, parent_path=None, kind="git_repo"):
+    def create(self, id, name, path, root_path, parent_path=None, kind="git_repo",
+               provenance_kind=None):
+        """`provenance_kind` is an optional override; the flow default is derived from
+        `kind` (spec: per-source silos + provenance, task 9) and used whenever the
+        override is absent or not a recognized KINDS value."""
+        stamped_kind = resolve_kind(flow_default_kind(kind), provenance_kind)
         self._conn.execute(
-            "INSERT INTO collections (id, name, path, root_path, parent_path, kind) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (id, name, path, root_path, parent_path, kind),
+            "INSERT INTO collections (id, name, path, root_path, parent_path, kind, provenance_kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (id, name, path, root_path, parent_path, kind, stamped_kind),
         )
         self._conn.commit()
         return id

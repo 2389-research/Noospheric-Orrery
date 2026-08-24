@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..dependencies import get_auth_store, AuthStore
+from ..pipeline.silo import flow_default_kind, resolve_kind
 
 router = APIRouter()
 
@@ -39,6 +40,7 @@ class WatchedSourceCreate(BaseModel):
     noosphere: str | None = None
     cadence_hours: float = 24
     config_json: dict | None = None
+    provenance_kind: str | None = None  # override; falls back to the flow default for `type`
 
 
 class WatchedSourcePatch(BaseModel):
@@ -73,11 +75,12 @@ def _enqueue_scan(store, source_id: str) -> dict:
 def create_watched_source(body: WatchedSourceCreate, auth: AuthStore = Depends(get_auth_store)):
     store = auth.store
     source_id = str(uuid.uuid4())
+    kind = resolve_kind(flow_default_kind(body.type), body.provenance_kind)
     store.conn.execute(
-        "INSERT INTO watched_sources (id, type, uri, noosphere, cadence_hours, config_json) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO watched_sources (id, type, uri, noosphere, cadence_hours, config_json, "
+        "provenance_kind) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (source_id, body.type, body.uri, body.noosphere, body.cadence_hours,
-         json.dumps(body.config_json) if body.config_json is not None else None),
+         json.dumps(body.config_json) if body.config_json is not None else None, kind),
     )
     store.conn.commit()
     row = store.conn.execute("SELECT * FROM watched_sources WHERE id = ?", (source_id,)).fetchone()

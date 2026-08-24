@@ -4,6 +4,8 @@ import time
 import uuid
 from pathlib import Path
 
+from .silo import FLOW_DEFAULT_KIND
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY,
@@ -264,7 +266,8 @@ CREATE TABLE IF NOT EXISTS collections (
     kind TEXT DEFAULT 'git_repo',
     pos_x REAL,
     pos_y REAL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    provenance_kind TEXT          -- neutral_summary|human_vault|agent_report|human_reviewed (task 9); NOT the collection TYPE (that's `kind` above)
 );
 
 -- Membership + where the document sits in its collection's tree.
@@ -312,8 +315,25 @@ CREATE TABLE IF NOT EXISTS watched_sources (
     last_scanned_at TIMESTAMP,
     last_status TEXT,             -- 'ok' | 'error' | 'running'
     last_error TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    provenance_kind TEXT          -- neutral_summary|human_vault|agent_report|human_reviewed (task 9)
 );
+"""
+
+# Unifies the two silo tables so a consumer resolves a document's provenance kind with
+# one join: documents.silo_id -> silo_kind.silo_id. Relies on the invariant that both
+# watched_sources.id and collections.id are str(uuid.uuid4()) — disjoint id spaces — so
+# a given silo_id matches AT MOST ONE row of this view (spec: per-source silos +
+# provenance, task 9).
+#
+# NOT part of SCHEMA above: SCHEMA is executed via executescript() before the guarded
+# provenance_kind ALTERs run (see init_db), so on a pre-existing DB the column would not
+# exist yet at that point. Created explicitly in init_db AFTER those ALTERs instead.
+SILO_KIND_VIEW = """
+CREATE VIEW IF NOT EXISTS silo_kind AS
+    SELECT id AS silo_id, provenance_kind AS kind FROM watched_sources
+    UNION ALL
+    SELECT id AS silo_id, provenance_kind AS kind FROM collections;
 """
 
 # repos/* -> collections/*. Applied BEFORE the schema script (see migrate_to_collections).
@@ -700,6 +720,31 @@ def init_db(db_path: str) -> None:
 
     _migrate_collection_columns(conn)
 
+    # Provenance kind lives on the SILO rows (watched_sources / collections), not on
+    # documents — see silo_kind view below. These guarded ALTERs MUST run before that
+    # view is created and before backfill_provenance_kind runs: both reference the
+    # column directly, and on a pre-existing DB (where the CREATE TABLE above was a
+    # no-op) it would not exist yet otherwise.
+    ws_cols = {r[1] for r in conn.execute("PRAGMA table_info(watched_sources)").fetchall()}
+    if "provenance_kind" not in ws_cols:
+        try:
+            conn.execute("ALTER TABLE watched_sources ADD COLUMN provenance_kind TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+    coll_cols_pk = {r[1] for r in conn.execute("PRAGMA table_info(collections)").fetchall()}
+    if "provenance_kind" not in coll_cols_pk:
+        try:
+            conn.execute("ALTER TABLE collections ADD COLUMN provenance_kind TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
+    conn.executescript(SILO_KIND_VIEW)
+    conn.commit()
+    # Backfill provenance_kind on any pre-existing silo rows left NULL by the ALTERs
+    # above. Idempotent — only ever fills NULLs — so safe to run on every boot.
+    backfill_provenance_kind(conn)
+
     # entity_sources has no primary key, so without this the graph build's
     # per-entity source_count and the trade-route self-joins scan the whole table
     # — tens of seconds on a mid-size graph.
@@ -864,5 +909,20 @@ def backfill_silo_ids(conn) -> int:
                         WHERE dc.document_id = documents.id LIMIT 1)
                      WHERE silo_id IS NULL AND source_id IS NULL
                        AND EXISTS (SELECT 1 FROM document_collections dc2 WHERE dc2.document_id = documents.id)""")
+    conn.commit()
+    return conn.total_changes
+
+
+def backfill_provenance_kind(conn) -> int:
+    """Fill NULL provenance_kind on existing silo rows (watched_sources, collections)
+    from the flow-default map keyed by source type. Built from FLOW_DEFAULT_KIND itself
+    (one CASE per table) rather than hand-duplicated SQL, so the two stay in sync.
+    Pure and idempotent — only ever fills NULLs — so it is safe to call on every
+    init_db (spec: per-source silos + provenance, task 9)."""
+    case = " ".join(f"WHEN '{t}' THEN '{k}'" for t, k in FLOW_DEFAULT_KIND.items())
+    conn.execute(f"""UPDATE watched_sources SET provenance_kind = (CASE type {case} END)
+                     WHERE provenance_kind IS NULL""")
+    conn.execute(f"""UPDATE collections SET provenance_kind = (CASE kind {case} END)
+                     WHERE provenance_kind IS NULL""")
     conn.commit()
     return conn.total_changes

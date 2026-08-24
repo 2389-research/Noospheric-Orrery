@@ -462,7 +462,8 @@ async def ingest_repo(request: RepoIngestRequest, auth: AuthStore = Depends(get_
         # domain with the vocabulary the extraction actually produces.
         collection_id = str(uuid.uuid4())
         try:
-            store.collections.create(collection_id, request.name, request.name, request.path)
+            store.collections.create(collection_id, request.name, request.name, request.path,
+                                      provenance_kind=request.provenance_kind)
         except sqlite3.IntegrityError:
             # The get_by_path check above is not a lock, so two requests for the same
             # name can both pass it. The UNIQUE constraint is what actually decides;

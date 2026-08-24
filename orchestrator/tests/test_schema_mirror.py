@@ -225,3 +225,39 @@ def test_backfill_silo_ids_is_mirrored():
     assert orch is not None, "backfill_silo_ids missing from orchestrator/src/db.py"
     assert worker is not None, "backfill_silo_ids missing from worker/src/db.py"
     assert orch == worker
+
+
+def _view_ddl(source: str, name: str) -> str | None:
+    # `\s+` (not a literal space) between AS and the SELECT — the view is authored
+    # multi-line in db.py, so a literal space would never match the newline.
+    m = re.search(rf"CREATE VIEW IF NOT EXISTS {name} AS\s+(.*?);", source, re.S)
+    if not m:
+        return None
+    return re.sub(r"\s+", " ", m.group(1)).strip()
+
+
+def test_silo_kind_view_is_mirrored():
+    """silo_kind (spec: per-source silos + provenance, task 9) unifies watched_sources
+    and collections so a document's provenance kind resolves via one join on
+    documents.silo_id. It's a VIEW, not a TABLE, so it isn't in _MIRRORED_TABLES (whose
+    `_table_ddl` regex only matches `CREATE TABLE ...` and would find nothing here) —
+    same cross-service hazard as the mirrored tables above, checked with a view-aware
+    regex instead."""
+    orch = _view_ddl(_ORCH.read_text(), "silo_kind")
+    worker = _view_ddl(_WORKER.read_text(), "silo_kind")
+    assert orch is not None, "silo_kind view missing from orchestrator/src/db.py"
+    assert worker is not None, "silo_kind view missing from worker/src/db.py"
+    assert orch == worker, (
+        "the `silo_kind` view differs between the two db.py files. Both processes open "
+        "the same databases, so whichever opens a workspace first decides its shape.")
+
+
+def test_backfill_provenance_kind_is_mirrored():
+    """backfill_provenance_kind (spec: per-source silos + provenance, task 9) is the
+    pure derivation both services rely on to have already run — same cross-service
+    hazard as backfill_silo_ids. Compare the function source byte-for-byte."""
+    orch = _fn_source(_ORCH, "backfill_provenance_kind")
+    worker = _fn_source(_WORKER, "backfill_provenance_kind")
+    assert orch is not None, "backfill_provenance_kind missing from orchestrator/src/db.py"
+    assert worker is not None, "backfill_provenance_kind missing from worker/src/db.py"
+    assert orch == worker

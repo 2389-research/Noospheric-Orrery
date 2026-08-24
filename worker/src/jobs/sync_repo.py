@@ -21,6 +21,7 @@ import uuid
 from orrery_codesum import summarize_repo_incremental, make_summarize_fn
 
 from ..classifier import classify_document
+from ..silo import flow_default_kind, resolve_kind
 from .upsert_document import upsert_document
 from .scan_source import apply_deletions
 
@@ -97,9 +98,15 @@ def _resolve_collection(conn, source_id: str, root_path: str, source_config: dic
     if conn.execute("SELECT 1 FROM collections WHERE path = ?", (coll_path,)).fetchone():
         coll_path = f"{base}-{source_id[:8]}"
     collection_id = str(uuid.uuid4())
+    # Documents from this source carry `source_id`, so their silo resolves through
+    # watched_sources.provenance_kind (source_id wins over collection_id — see
+    # silo.resolve_silo_id). Stamped here too for consistency and for any reader that
+    # looks at the collection directly.
+    stamped_kind = resolve_kind(flow_default_kind("git_repo"), source_config.get("provenance_kind"))
     conn.execute(
-        "INSERT INTO collections (id, name, path, root_path, kind) VALUES (?, ?, ?, ?, 'git_repo')",
-        (collection_id, base, coll_path, root_path))
+        "INSERT INTO collections (id, name, path, root_path, kind, provenance_kind) "
+        "VALUES (?, ?, ?, ?, 'git_repo', ?)",
+        (collection_id, base, coll_path, root_path, stamped_kind))
     source_config["_collection_id"] = collection_id
     conn.execute("UPDATE watched_sources SET config_json = ? WHERE id = ?",
                  (json.dumps(source_config), source_id))
