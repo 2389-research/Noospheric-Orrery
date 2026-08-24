@@ -282,7 +282,15 @@ def _run_batch_store(store, results):
 
 
 def _run_batch_conn(conn, results):
-    """Batch normalization using raw SQL (legacy)."""
+    """Batch normalization using raw SQL (legacy).
+
+    ⚠️ DEPRECATED / silo-UNAWARE: unlike the store path (`_run_batch_store`), this
+    branch does NO silo scoping — its plural-collapse and all-pairs merges ignore
+    silos and never file cross-silo proposals to graph_issues, so it will
+    auto-merge same-name entities ACROSS silos (defeating #50). No production
+    caller reaches it (the /normalize route always passes a store); it survives
+    only for legacy/raw-conn callers. Do not route new code through it.
+    """
     entities = conn.execute("SELECT id, canonical_name, type FROM entities ORDER BY canonical_name").fetchall()
     results["total_entities_before"] = len(entities)
 
