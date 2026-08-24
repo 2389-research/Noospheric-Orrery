@@ -12,6 +12,8 @@ import sqlite3
 import numpy as np
 from collections import defaultdict
 
+from .silo import silo_match
+
 # Lazy-load the model (heavy import)
 _model = None
 
@@ -186,20 +188,42 @@ def run_batch_normalization(conn: sqlite3.Connection) -> dict:
             continue
         singular = collapse_plural(name, all_names)
         if singular:
-            target = conn.execute(
-                "SELECT id FROM entities WHERE canonical_name = ? AND type = ? AND invalid_at IS NULL",
-                (singular, etype)
-            ).fetchone()
+            # An unscoped lookup returns an ARBITRARY row when the singular
+            # exists as more than one distinct entity across silos (#50) —
+            # silos let the same name exist as multiple rows, and there's no
+            # ORDER BY / unique constraint on canonical_name. Filtering that
+            # one candidate against the plural's silo-set (the old approach)
+            # is order-dependent and can silently skip a valid same-silo
+            # collapse. Instead, loop over eid's OWN silo-set and do a
+            # silo-scoped lookup per silo — the first silo-overlapping
+            # candidate wins, since a candidate sourced in silo `s` (where `s`
+            # is one of eid's own silos) is guaranteed to overlap eid by
+            # construction.
+            plural_silos = _entity_silo_set(conn, eid)
+            target = None
+            if plural_silos:
+                for s in plural_silos:
+                    row = conn.execute(
+                        "SELECT e.id FROM entities e WHERE e.canonical_name = ? AND e.type = ? "
+                        f"AND e.invalid_at IS NULL AND {silo_match('e.id')}",
+                        (singular, etype, s)
+                    ).fetchone()
+                    if row and row[0] != eid:
+                        target = row
+                        break
+            else:
+                # Wildcard: eid carries no silo information at all (pre-silo
+                # callers / sourceless test fixtures) — same carve-out as
+                # _silos_overlap's empty-set case.
+                target = conn.execute(
+                    "SELECT id FROM entities WHERE canonical_name = ? AND type = ? AND invalid_at IS NULL",
+                    (singular, etype)
+                ).fetchone()
             if target and target[0] != eid:
-                # Silo-scope the fuse: a plural only collapses into a singular that
-                # shares at least one silo with it (same overlap rule as Tier 2).
-                # An entity's silo-set is used in full, not one arbitrary silo, so a
-                # multi-silo entity (post-merge) is handled correctly.
-                if _silos_overlap(_entity_silo_set(conn, eid), _entity_silo_set(conn, target[0])):
-                    _merge_entities(conn, from_id=eid, from_name=name,
-                                   to_id=target[0], to_name=singular, method="plural", similarity=1.0)
-                    results["plural_merges"] += 1
-                    new_ids.discard(eid)
+                _merge_entities(conn, from_id=eid, from_name=name,
+                               to_id=target[0], to_name=singular, method="plural", similarity=1.0)
+                results["plural_merges"] += 1
+                new_ids.discard(eid)
 
     # Re-fetch (plural merges deleted some) and recompute the new set.
     entities = conn.execute(

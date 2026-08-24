@@ -100,3 +100,26 @@ def test_same_silo_plural_pair_still_collapses(test_store):
 
     assert res["plural_merges"] == 1
     assert test_store.entities.count() == 1
+
+
+def test_plural_collapses_onto_same_silo_singular_despite_cross_silo_homonym_inserted_first(test_store):
+    """#50 regression: the singular name exists as TWO distinct rows — one in a
+    silo that does NOT overlap the plural (inserted FIRST, so an unscoped
+    first-row lookup would pick it), one in the plural's OWN silo (inserted
+    second). The plural must still collapse onto the same-silo singular;
+    insertion order must not matter."""
+    _make_entity(test_store, "doc-b", "b", "agent", "B")   # cross-silo homonym, inserted FIRST
+    _make_entity(test_store, "doc-a", "a", "agent", "A")   # same-silo singular
+    _make_entity(test_store, "doc-p", "p", "agents", "A")  # plural, silo A
+
+    mapping = {"agent": VEC["base"], "agents": VEC["base"]}
+    with patch.object(norm, "embed_entities", _embedder(mapping)):
+        res = norm.run_batch_normalization(test_store)
+
+    assert res["plural_merges"] == 1
+    remaining = {r[0] for r in test_store.conn.execute(
+        "SELECT id FROM entities WHERE invalid_at IS NULL"
+    ).fetchall()}
+    assert "a" in remaining, "agents@A must have collapsed onto agent@A"
+    assert "p" not in remaining, "the plural must have been merged away"
+    assert "b" in remaining, "agent@B (different silo) must stay distinct"

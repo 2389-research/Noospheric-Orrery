@@ -174,24 +174,35 @@ def _run_batch_store(store, results):
 
     # Tier 1: Plural collapse
     all_names = {e.canonical_name for e in entities}
-    by_id = {e.id: e for e in entities}
     for e in entities:
         singular = collapse_plural(e.canonical_name, all_names)
         if singular:
-            # get_by_name is unscoped here (no `silo=`) because the entity's silo
-            # membership is a SET (multi-silo post-merge entities are real, see
-            # Entity.silo_ids), not the single value get_by_name's `silo` param
-            # takes — so the candidate is looked up by name/type first, then
-            # gated in Python against the entity's FULL silo-set below, same
-            # overlap rule as Tier 2 and worker/src/normalizer.py's Task 6.
-            target = store.entities.get_by_name(singular, e.type, include_invalid=True)
+            # get_by_name with an unscoped lookup returns an ARBITRARY row when
+            # the singular exists as more than one distinct entity across silos
+            # (#50) — silos let the same name exist as multiple rows, and there's
+            # no ORDER BY / unique constraint on canonical_name. Filtering that
+            # one candidate in Python (the old approach) is order-dependent and
+            # can silently skip a valid same-silo collapse. Instead, loop over
+            # e's OWN silo-set and do a silo-scoped lookup per silo — the first
+            # silo-overlapping candidate wins, since a candidate sourced in
+            # silo `s` (where `s` is one of e's own silos) is guaranteed to
+            # overlap e by construction.
+            target = None
+            if e.silo_ids:
+                for s in e.silo_ids:
+                    cand = store.entities.get_by_name(singular, e.type, silo=s, include_invalid=True)
+                    if cand:
+                        target = cand
+                        break
+            else:
+                # Wildcard: e carries no silo information at all (pre-silo
+                # callers / sourceless test fixtures) — same carve-out as
+                # _silos_overlap's empty-set case.
+                target = store.entities.get_by_name(singular, e.type, include_invalid=True)
             if target and target.id != e.id:
-                target_entity = by_id.get(target.id)
-                target_silos = target_entity.silo_ids if target_entity else None
-                if _silos_overlap(e.silo_ids, target_silos):
-                    _merge_entities_store(store, from_id=e.id, from_name=e.canonical_name,
-                                          to_id=target.id, to_name=singular, method="plural", similarity=1.0)
-                    results["plural_merges"] += 1
+                _merge_entities_store(store, from_id=e.id, from_name=e.canonical_name,
+                                      to_id=target.id, to_name=singular, method="plural", similarity=1.0)
+                results["plural_merges"] += 1
 
     # Re-fetch after merges
     entities = store.entities.get_all_for_normalization()
