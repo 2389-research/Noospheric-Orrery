@@ -45,7 +45,14 @@ _MIRRORED_TABLES = ["graph_snapshot", "domain_edges", "collections",
                     # The worker writes jobs.progress (extraction counters) and the
                     # orchestrator serves it to the extraction UI — same cross-service
                     # hazard: a one-sided column edit would be invisible until runtime.
-                    "jobs"]
+                    "jobs",
+                    # Silo-aware batch normalization (#50): the worker's faiss stage now
+                    # WRITES cross-silo merge proposals here directly (it cannot import
+                    # the orchestrator's graph_repair module), and the orchestrator both
+                    # writes proposals via propose_correction() and serves them to the
+                    # CorrectionsPanel — a one-sided column edit breaks either writer or
+                    # the reader silently.
+                    "graph_issues"]
 
 # Indexes on that surface. Table DDL alone is not enough: an index dropped from one
 # file costs nothing structurally and everything in latency, so it is exactly the kind
