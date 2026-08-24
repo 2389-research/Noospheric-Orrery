@@ -37,10 +37,10 @@ class SQLiteDocumentRepository(DocumentRepository):
     def count(self):
         return self._conn.execute("SELECT COUNT(*) FROM documents WHERE invalid_at IS NULL").fetchone()[0]
 
-    def create(self, id, title, content, content_hash, source_path=None, content_type="text"):
+    def create(self, id, title, content, content_hash, source_path=None, content_type="text", silo_id=None):
         self._conn.execute(
-            "INSERT INTO documents (id, title, content, content_hash, source_path, status, content_type) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-            (id, title, content, content_hash, source_path, content_type),
+            "INSERT INTO documents (id, title, content, content_hash, source_path, status, content_type, silo_id) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+            (id, title, content, content_hash, source_path, content_type, silo_id),
         )
         self._conn.commit()
         return id

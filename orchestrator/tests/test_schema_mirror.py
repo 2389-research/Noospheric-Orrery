@@ -173,6 +173,23 @@ def test_the_mirror_check_can_actually_fail():
     assert _index_ddl(_ORCH.read_text(), "idx_document_collections_collection") is not None
 
 
+# ── silo.py ──────────────────────────────────────────────────────────────────────
+# Both processes resolve a document's silo the same way (source_id > collection_id >
+# None) and share the SQL fragment that scopes normalization to a silo. Kept
+# byte-identical below the ABOUTME header for the same reason as classifier.py.
+_ORCH_SILO = _ROOT / "orchestrator" / "src" / "pipeline" / "silo.py"
+_WORKER_SILO = _ROOT / "worker" / "src" / "silo.py"
+
+
+def test_silo_is_mirrored():
+    orch, worker = _below_header(_ORCH_SILO), _below_header(_WORKER_SILO)
+    assert orch == worker, (
+        "orchestrator/src/pipeline/silo.py and worker/src/silo.py have diverged "
+        "below their ABOUTME headers. Both resolve silo_id and scope normalization "
+        "the same way, so a one-sided edit means a document's silo depends on which "
+        "process ingested it.")
+
+
 def _fn_source(path, name):
     """Extract a top-level function's source text (def line through the last indented
     line before the next top-level statement or EOF)."""

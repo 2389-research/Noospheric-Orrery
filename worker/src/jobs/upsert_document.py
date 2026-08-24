@@ -17,6 +17,7 @@ import uuid
 from ..db import mark_graph_dirty, recompute_cooccurrence
 from ..classifier import classify_document
 from ..identity_filter import is_identity_noise
+from ..silo import resolve_silo_id
 
 # Used only when no simmered general spec exists yet — keeps a fresh workspace's first
 # vault sync from extracting nothing.
@@ -234,20 +235,23 @@ async def upsert_document(conn, relay, settings, *, source_path, title, content,
         conn.execute("DELETE FROM chunks WHERE document_id = ?", (doc_id,))
         conn.execute("DELETE FROM document_domains WHERE document_id = ?", (doc_id,))
         conn.execute("DELETE FROM document_collections WHERE document_id = ?", (doc_id,))
+        effective_source_id = ex_source or source_id
+        silo_id = resolve_silo_id(effective_source_id, collection_id)
         conn.execute(
             "UPDATE documents SET title = ?, content = ?, content_hash = ?, content_type = ?, "
             "metadata = ?, modified_at = CURRENT_TIMESTAMP, source_id = COALESCE(source_id, ?), "
-            "status = 'pending' WHERE id = ?",
-            (title, content, chash, content_type, meta_json, source_id, doc_id))
+            "silo_id = ?, status = 'pending' WHERE id = ?",
+            (title, content, chash, content_type, meta_json, source_id, silo_id, doc_id))
         action = "updated"
     else:
         doc_id = str(uuid.uuid4())
         old_entities = []
         old_domain_paths = []
+        silo_id = resolve_silo_id(source_id, collection_id)
         conn.execute(
             "INSERT INTO documents (id, title, content, content_hash, source_path, source_id, "
-            "content_type, metadata, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
-            (doc_id, title, content, chash, source_path, source_id, content_type, meta_json))
+            "content_type, metadata, status, silo_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+            (doc_id, title, content, chash, source_path, source_id, content_type, meta_json, silo_id))
         action = "created"
 
     # Collection membership (repo hierarchy). The emits_cooccurrence flag lands HERE, so

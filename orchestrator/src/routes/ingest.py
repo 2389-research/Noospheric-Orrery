@@ -76,8 +76,8 @@ async def _ingest_document(store, title: str, content: str, source_path: str | N
     doc_id = str(uuid.uuid4())
     title = _unique_title(store, title)
 
-    # 1. Store document
-    store.documents.create(doc_id, title, content, content_hash, source_path)
+    # 1. Store document (loose upload: no source, no collection -> null silo)
+    store.documents.create(doc_id, title, content, content_hash, source_path, silo_id=None)
 
     # 1b. Chunk and store
     chunks = chunk_document(content, chunk_size=settings.chunk_size)

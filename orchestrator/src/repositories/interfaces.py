@@ -158,7 +158,8 @@ class DocumentRepository(ABC):
 
     @abstractmethod
     def create(self, id: str, title: str, content: str, content_hash: str,
-               source_path: str | None = None) -> str: ...
+               source_path: str | None = None, content_type: str = "text",
+               silo_id: str | None = None) -> str: ...
 
     @abstractmethod
     def get(self, doc_id: str) -> Document | None: ...
