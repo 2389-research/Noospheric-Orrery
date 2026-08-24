@@ -88,8 +88,6 @@ class RepoIngestRequest(BaseModel):
     """
     path: str
     name: str
-    provenance_kind: str | None = None  # override; falls back to the flow default for
-                                         # a git_repo collection if absent/invalid
 
 
 class TrackerRunsIngestRequest(BaseModel):

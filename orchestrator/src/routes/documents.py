@@ -10,7 +10,6 @@ from ..pipeline.file_extractor import (
     TEXT_EXTENSIONS, PDF_EXTENSIONS, DOCX_EXTENSIONS, NOTEBOOK_EXTENSIONS,
 )
 from .image_files import MEDIA_TYPES, serve_image
-from ..repositories.graph_reads import silo_kinds_of
 
 logger = logging.getLogger(__name__)
 
@@ -43,16 +42,12 @@ def get_document(document_id: str, auth: AuthStore = Depends(get_auth_store)):
     # For code documents: a resolvable GitHub ref so an agent can fetch the actual
     # source (the graph holds the summary, not the code). None for non-code docs.
     git_ref = store.collections.get_source_ref(document_id)
-    # kind resolved LIVE via the silo_kind view — a source re-classified after ingest
-    # shows up on the very next read, with no per-doc copy to go stale (task 11a).
-    kind = silo_kinds_of(store.conn, [doc.silo_id]).get(doc.silo_id)
     store.close()
     return {
         "id": doc.id, "title": doc.title, "source_path": doc.source_path,
         "content": doc.content, "status": doc.status, "created_at": doc.created_at,
         "content_type": doc.content_type,
         "git_ref": git_ref,
-        "silo_id": doc.silo_id, "kind": kind,
         "domains": [{"path": d.domain_path, "is_primary": d.is_primary, "confidence": d.confidence} for d in domains],
         "entities": [{"id": e.id, "canonical_name": e.canonical_name, "type": e.type} for e in entities],
     }

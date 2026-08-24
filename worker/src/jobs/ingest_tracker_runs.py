@@ -15,7 +15,6 @@ from orrery_tracksum import distill_reader, gather_spec, make_summarize_fn, summ
 from ..classifier import classify_document
 from ..config import get_settings
 from ..db import get_connection, mark_graph_dirty
-from ..silo import flow_default_kind, resolve_kind
 
 # Ground-truth chain order for the spec-degradation ladder. In production a chain
 # is INFERRED (spec-embedding similarity + temporal order + outcome); here we know
@@ -311,10 +310,6 @@ async def run_ingest_tracker_runs(job: dict, db_path: str) -> None:
                     f"omitted={missing or '[]'}. Every loaded run must appear exactly "
                     "once, or the trajectory would be silently incomplete.")
 
-        # Every run in this corpus is a `tracker_run` collection, so the flow default
-        # (and any explicit override in the job config) is the same for all of them —
-        # resolve once rather than per iteration.
-        run_kind = resolve_kind(flow_default_kind("tracker_run"), config.get("provenance_kind"))
         collection_ids: dict[str, str] = {}
         for run in runs:
             label = run["run_label"]
@@ -326,9 +321,9 @@ async def run_ingest_tracker_runs(job: dict, db_path: str) -> None:
                 run.get("source_path"), os.path.join(runs_dir, label),
             ) or os.path.join(runs_dir, label)
             conn.execute(
-                "INSERT INTO collections (id, name, path, root_path, document_count, kind, "
-                "provenance_kind) VALUES (?, ?, ?, ?, 0, 'tracker_run', ?)",
-                (collection_id, label, label, root_path, run_kind),
+                "INSERT INTO collections (id, name, path, root_path, document_count, kind) "
+                "VALUES (?, ?, ?, ?, 0, 'tracker_run')",
+                (collection_id, label, label, root_path),
             )
             dom = run_domain[label]
             for title, content, source_path, role, parent_path in _run_docs(run, runs_dir):

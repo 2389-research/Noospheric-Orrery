@@ -12,8 +12,6 @@ import sqlite3
 import numpy as np
 from collections import defaultdict
 
-from .graph_repair import propose_correction
-
 
 def embed_entities(names: list[str]) -> np.ndarray:
     """Embed a list of entity names. Returns (N, dim) array.
@@ -72,44 +70,6 @@ AUTO_MERGE_THRESHOLD = 0.85
 REVIEW_THRESHOLD = 0.70
 
 
-def _silos_overlap(a: frozenset | None, b: frozenset | None) -> bool:
-    """Mirrors worker/src/normalizer.py::_silos_overlap exactly (#50, Task 6):
-    None is an ordinary silo id, so "both contain None" overlaps and null-vs-non-null
-    is disjoint via plain set intersection. An EMPTY silo-set (no sourced docs at all,
-    including a not-yet-computed None here treated the same way) is a wildcard that
-    overlaps with anything — there's nothing to gate on when one side carries no silo
-    information whatsoever.
-    """
-    a = a or frozenset()
-    b = b or frozenset()
-    if not a or not b:
-        return True
-    return bool(a & b)
-
-
-def _propose_cross_silo_merge(conn, a_id, a_name, b_id, b_name, similarity, method):
-    """File a pending merge proposal to graph_issues via graph_repair.propose_correction
-    (the orchestrator, unlike the worker, can import it). Deduped against any existing
-    proposal for the same pair so repeated /normalize runs don't spam the queue."""
-    existing = conn.execute(
-        "SELECT id FROM graph_issues WHERE action = 'merge' AND "
-        "((target_entity_id = ? AND target_b_entity_id = ?) OR "
-        " (target_entity_id = ? AND target_b_entity_id = ?))",
-        (a_id, b_id, b_id, a_id)
-    ).fetchone()
-    if existing:
-        return
-    propose_correction(
-        conn,
-        action="merge",
-        entity=a_id,
-        target_b=b_id,
-        rationale=f"cross-silo candidate: {method} similarity {similarity:.3f} — not auto-merged "
-                  f"because the two entities have no silo in common",
-        proposer="orchestrator.embedding_normalizer",
-    )
-
-
 def _is_store(obj):
     """Check if obj is a DataStore (has repository attributes)."""
     return hasattr(obj, 'entities') and hasattr(obj, 'normalization')
@@ -153,8 +113,7 @@ def run_batch_normalization(store_or_conn) -> dict:
     """
     results = {
         "plural_merges": 0, "embedding_merges": 0,
-        "queued_for_review": 0, "cross_silo_proposed": 0,
-        "total_entities_before": 0, "total_entities_after": 0,
+        "queued_for_review": 0, "total_entities_before": 0, "total_entities_after": 0,
     }
 
     if _is_store(store_or_conn):
@@ -177,28 +136,7 @@ def _run_batch_store(store, results):
     for e in entities:
         singular = collapse_plural(e.canonical_name, all_names)
         if singular:
-            # get_by_name with an unscoped lookup returns an ARBITRARY row when
-            # the singular exists as more than one distinct entity across silos
-            # (#50) — silos let the same name exist as multiple rows, and there's
-            # no ORDER BY / unique constraint on canonical_name. Filtering that
-            # one candidate in Python (the old approach) is order-dependent and
-            # can silently skip a valid same-silo collapse. Instead, loop over
-            # e's OWN silo-set and do a silo-scoped lookup per silo — the first
-            # silo-overlapping candidate wins, since a candidate sourced in
-            # silo `s` (where `s` is one of e's own silos) is guaranteed to
-            # overlap e by construction.
-            target = None
-            if e.silo_ids:
-                for s in e.silo_ids:
-                    cand = store.entities.get_by_name(singular, e.type, silo=s, include_invalid=True)
-                    if cand:
-                        target = cand
-                        break
-            else:
-                # Wildcard: e carries no silo information at all (pre-silo
-                # callers / sourceless test fixtures) — same carve-out as
-                # _silos_overlap's empty-set case.
-                target = store.entities.get_by_name(singular, e.type, include_invalid=True)
+            target = store.entities.get_by_name(singular, e.type, include_invalid=True)
             if target and target.id != e.id:
                 _merge_entities_store(store, from_id=e.id, from_name=e.canonical_name,
                                       to_id=target.id, to_name=singular, method="plural", similarity=1.0)
@@ -213,7 +151,6 @@ def _run_batch_store(store, results):
     names = [e.canonical_name for e in entities]
     ids = [e.id for e in entities]
     types = [e.type for e in entities]
-    silos = [e.silo_ids for e in entities]
 
     # Tier 2: Embedding similarity
     embeddings = embed_entities(names)
@@ -245,19 +182,6 @@ def _run_batch_store(store, results):
                 sim = cosine_similarity(embeddings[i], embeddings[j])
 
                 if sim >= AUTO_MERGE_THRESHOLD:
-                    # A high-similarity pair only auto-merges if the two entities
-                    # share a silo. Cross-silo (disjoint silo-sets, including
-                    # null-vs-non-null) is a real near-duplicate but not ours to
-                    # merge unilaterally — propose it to the human-gated
-                    # graph_issues queue instead and leave both entities distinct.
-                    if not _silos_overlap(silos[i], silos[j]):
-                        _propose_cross_silo_merge(
-                            store.conn, ids[i], names[i], ids[j], names[j],
-                            similarity=sim, method="embedding",
-                        )
-                        results["cross_silo_proposed"] += 1
-                        continue
-
                     count_i = store.entity_sources.get_source_count(ids[i])
                     count_j = store.entity_sources.get_source_count(ids[j])
                     if count_i >= count_j:
