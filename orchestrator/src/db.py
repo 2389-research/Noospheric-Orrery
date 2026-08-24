@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS documents (
     status TEXT DEFAULT 'pending',
     modified_at TIMESTAMP,
     invalid_at TIMESTAMP,
-    source_id TEXT
+    source_id TEXT,
+    silo_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash);
 
@@ -649,6 +650,14 @@ def init_db(db_path: str) -> None:
                 conn.execute("ALTER TABLE documents ADD COLUMN invalid_at TIMESTAMP")
             if "source_id" not in cols:
                 conn.execute("ALTER TABLE documents ADD COLUMN source_id TEXT")
+            # Per-source silo: a document's normalization scope (source_id, else the
+            # collection it belongs to, else NULL) — see backfill_silo_ids below.
+            if "silo_id" not in cols:
+                try:
+                    conn.execute("ALTER TABLE documents ADD COLUMN silo_id TEXT")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" not in str(e).lower():
+                        raise
             # Extraction progress: live mid-run counters on the job (issue #51).
             job_cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
             if "progress" not in job_cols:
@@ -734,10 +743,16 @@ def init_db(db_path: str) -> None:
             # Sync identity lookups join documents on source_path.
             conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_source_path "
                          "ON documents(source_path)")
+            # Per-source silos: normalization scoping filters/joins on silo_id.
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_silo "
+                         "ON documents(silo_id)")
             # Seed the single snapshot row (dirty, empty) so a writer can flip the bit
             # with a plain UPDATE before the first build has ever run.
             conn.execute("INSERT OR IGNORE INTO graph_snapshot (id, dirty) VALUES ('current', 1)")
             conn.commit()
+            # Backfill silo_id on any pre-existing rows left NULL by the ALTER above.
+            # Idempotent — only ever fills NULLs — so safe to run on every boot.
+            backfill_silo_ids(conn)
         finally:
             conn.close()
         _initialized.add(db_path)
@@ -877,3 +892,19 @@ def recompute_cooccurrence(conn, affected_entity_ids):
             "VALUES (?, ?, ?, 'co_occurs', ?, NULL)",
             (str(uuid.uuid4()), a, b, w),
         )
+
+
+def backfill_silo_ids(conn) -> int:
+    """Derive documents.silo_id for any row left NULL: source_id wins, else the
+    collection the document belongs to (if any), else NULL. Pure and idempotent —
+    only ever fills NULLs — so it is safe to call on every init_db (spec: per-source
+    silos + provenance, task 1)."""
+    conn.execute("UPDATE documents SET silo_id = source_id "
+                 "WHERE silo_id IS NULL AND source_id IS NOT NULL")
+    conn.execute("""UPDATE documents SET silo_id = (
+                        SELECT dc.collection_id FROM document_collections dc
+                        WHERE dc.document_id = documents.id LIMIT 1)
+                     WHERE silo_id IS NULL AND source_id IS NULL
+                       AND EXISTS (SELECT 1 FROM document_collections dc2 WHERE dc2.document_id = documents.id)""")
+    conn.commit()
+    return conn.total_changes

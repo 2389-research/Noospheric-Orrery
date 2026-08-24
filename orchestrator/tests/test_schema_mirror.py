@@ -58,7 +58,10 @@ _MIRRORED_INDEXES = ["idx_document_collections_collection",
                      # full-scans a table the other keeps indexed.
                      "idx_relationships_pair", "idx_relationships_to",
                      # Sync identity lookups join documents on source_path.
-                     "idx_documents_source_path"]
+                     "idx_documents_source_path",
+                     # Per-source silos (spec: silos + provenance, task 1) — normalization
+                     # scoping will filter/join on this from both services.
+                     "idx_documents_silo"]
 
 _ALLOWED_DIVERGENCE: dict[str, str] = {
     # name -> why it is allowed to differ. Empty: nothing diverges today.
@@ -186,4 +189,15 @@ def test_recompute_cooccurrence_is_mirrored():
     worker = _fn_source(_WORKER, "recompute_cooccurrence")
     assert orch is not None, "recompute_cooccurrence missing from orchestrator/src/db.py"
     assert worker is not None, "recompute_cooccurrence missing from worker/src/db.py"
+    assert orch == worker
+
+
+def test_backfill_silo_ids_is_mirrored():
+    """backfill_silo_ids (spec: per-source silos + provenance, task 1) is the pure
+    derivation both services rely on to have already run — same cross-service hazard
+    as recompute_cooccurrence. Compare the function source byte-for-byte."""
+    orch = _fn_source(_ORCH, "backfill_silo_ids")
+    worker = _fn_source(_WORKER, "backfill_silo_ids")
+    assert orch is not None, "backfill_silo_ids missing from orchestrator/src/db.py"
+    assert worker is not None, "backfill_silo_ids missing from worker/src/db.py"
     assert orch == worker
