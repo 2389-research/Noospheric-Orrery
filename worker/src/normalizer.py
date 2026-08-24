@@ -12,6 +12,8 @@ import sqlite3
 import numpy as np
 from collections import defaultdict
 
+from .silo import silo_match
+
 # Lazy-load the model (heavy import)
 _model = None
 
@@ -65,6 +67,69 @@ REVIEW_THRESHOLD = 0.70        # Between 0.70-0.85: queue for LLM review
 # Below 0.70: definitely different
 
 
+def _entity_silo_set(conn: sqlite3.Connection, entity_id: str) -> set:
+    """All distinct silo ids an entity is sourced in (may include None, may be empty).
+
+    A post-merge entity can carry sources from more than one silo — that's a real,
+    already-merged multi-silo entity, not a bug — so this is a set, not a scalar.
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT d.silo_id FROM entity_sources es JOIN documents d ON d.id = es.document_id "
+        "WHERE es.entity_id = ?",
+        (entity_id,)
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
+def _silos_overlap(a: set, b: set) -> bool:
+    """Two silo-sets overlap if they share any silo id. None is treated as an ordinary
+    value here, so "both contain NULL" falls straight out of set intersection — no
+    special-casing needed. Disjoint (including null-vs-non-null) means no overlap.
+
+    An EMPTY set (no entity_sources row joins to a real document at all — distinct
+    from a document that exists but has silo_id IS NULL) means the entity carries no
+    silo information whatsoever. Treat that as a wildcard rather than "disjoint from
+    everything": pre-silo callers/tests never wire up entity_sources -> documents,
+    and there's nothing to gate on when one or both sides have no source at all.
+    """
+    if not a or not b:
+        return True
+    return bool(a & b)
+
+
+def _propose_cross_silo_merge(
+    conn: sqlite3.Connection,
+    a_id: str, a_name: str,
+    b_id: str, b_name: str,
+    similarity: float, method: str,
+) -> None:
+    """Direct SQL insert into graph_issues — the worker cannot import the
+    orchestrator's graph_repair module (see task notes), so this mirrors its
+    propose_correction() column-for-column rather than reusing it. A pending 'merge'
+    proposal for a human to approve/reject via the existing corrections flow.
+    Keyed on entity ids (not names); deduped against any prior proposal for the
+    same pair so repeated runs don't spam the queue.
+    """
+    existing = conn.execute(
+        "SELECT id FROM graph_issues WHERE action = 'merge' AND "
+        "((target_entity_id = ? AND target_b_entity_id = ?) OR "
+        " (target_entity_id = ? AND target_b_entity_id = ?))",
+        (a_id, b_id, b_id, a_id)
+    ).fetchone()
+    if existing:
+        return
+    conn.execute(
+        "INSERT INTO graph_issues "
+        "(id, action, target_entity_id, target_entity_name, target_b_entity_id, target_b_name, "
+        "rationale, proposer, status) "
+        "VALUES (?, 'merge', ?, ?, ?, ?, ?, ?, 'pending')",
+        (str(uuid.uuid4()), a_id, a_name, b_id, b_name,
+         f"cross-silo candidate: {method} similarity {similarity:.3f} — not auto-merged "
+         f"because the two entities have no silo in common",
+         "worker.normalizer")
+    )
+
+
 def _load_stored_embeddings(conn: sqlite3.Connection) -> dict[str, np.ndarray]:
     """Load persisted per-entity vectors from entity_embeddings.
 
@@ -97,6 +162,7 @@ def run_batch_normalization(conn: sqlite3.Connection) -> dict:
         "plural_merges": 0,
         "embedding_merges": 0,
         "queued_for_review": 0,
+        "cross_silo_proposed": 0,
         "total_entities_before": 0,
         "total_entities_after": 0,
     }
@@ -122,10 +188,37 @@ def run_batch_normalization(conn: sqlite3.Connection) -> dict:
             continue
         singular = collapse_plural(name, all_names)
         if singular:
-            target = conn.execute(
-                "SELECT id FROM entities WHERE canonical_name = ? AND type = ? AND invalid_at IS NULL",
-                (singular, etype)
-            ).fetchone()
+            # An unscoped lookup returns an ARBITRARY row when the singular
+            # exists as more than one distinct entity across silos (#50) —
+            # silos let the same name exist as multiple rows, and there's no
+            # ORDER BY / unique constraint on canonical_name. Filtering that
+            # one candidate against the plural's silo-set (the old approach)
+            # is order-dependent and can silently skip a valid same-silo
+            # collapse. Instead, loop over eid's OWN silo-set and do a
+            # silo-scoped lookup per silo — the first silo-overlapping
+            # candidate wins, since a candidate sourced in silo `s` (where `s`
+            # is one of eid's own silos) is guaranteed to overlap eid by
+            # construction.
+            plural_silos = _entity_silo_set(conn, eid)
+            target = None
+            if plural_silos:
+                for s in plural_silos:
+                    row = conn.execute(
+                        "SELECT e.id FROM entities e WHERE e.canonical_name = ? AND e.type = ? "
+                        f"AND e.invalid_at IS NULL AND {silo_match('e.id')}",
+                        (singular, etype, s)
+                    ).fetchone()
+                    if row and row[0] != eid:
+                        target = row
+                        break
+            else:
+                # Wildcard: eid carries no silo information at all (pre-silo
+                # callers / sourceless test fixtures) — same carve-out as
+                # _silos_overlap's empty-set case.
+                target = conn.execute(
+                    "SELECT id FROM entities WHERE canonical_name = ? AND type = ? AND invalid_at IS NULL",
+                    (singular, etype)
+                ).fetchone()
             if target and target[0] != eid:
                 _merge_entities(conn, from_id=eid, from_name=name,
                                to_id=target[0], to_name=singular, method="plural", similarity=1.0)
@@ -214,6 +307,18 @@ def run_batch_normalization(conn: sqlite3.Connection) -> dict:
                 seen_pairs.add(pair)
 
                 if sim >= AUTO_MERGE_THRESHOLD:
+                    # A high-similarity pair only auto-merges if the two entities
+                    # share a silo. Cross-silo (disjoint silo-sets, including
+                    # null-vs-non-null) is a REAL near-duplicate but not ours to
+                    # merge unilaterally — propose it to the human-gated
+                    # graph_issues queue instead and leave both entities distinct.
+                    if not _silos_overlap(_entity_silo_set(conn, qid), _entity_silo_set(conn, tid)):
+                        _propose_cross_silo_merge(
+                            conn, qid, names_t[qi], tid, names_t[j],
+                            similarity=sim, method="embedding",
+                        )
+                        results["cross_silo_proposed"] += 1
+                        continue
                     # Keep the one with more sources (= more common).
                     count_q = conn.execute(
                         "SELECT COUNT(*) FROM entity_sources WHERE entity_id = ?", (qid,)

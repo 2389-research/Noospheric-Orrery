@@ -10,6 +10,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+# Sentinel distinguishing "silo not supplied" (back-compat, unscoped) from
+# `silo=None` (a REAL value: the null-silo pool). Never use None as the default.
+_UNSET = object()
+
+
 # ── Data classes ──────────────────────────────────────────
 
 @dataclass
@@ -25,6 +30,11 @@ class Document:
     entity_count: int = 0
     content_type: str = "text"
     thumbnail_path: str | None = None
+    # documents.silo_id (task 11a exposure) — the resolved silo this document was
+    # ingested into (source_id > collection_id > None; see pipeline/silo.py). `kind`
+    # is NOT a field here: it's a property of the SILO, resolved live via the
+    # `silo_kind` view at read time, never copied onto the document.
+    silo_id: str | None = None
 
 
 @dataclass
@@ -58,6 +68,11 @@ class Entity:
     source_count: int = 0
     embedding: bytes | None = None
     created_at: str | None = None
+    # DISTINCT documents.silo_id over the entity's sources. Only populated by
+    # get_all_for_normalization() (batch normalization's silo-scoping, #50);
+    # None elsewhere means "not computed", not "no silo info" — do not treat
+    # a None here as the empty-set wildcard used by the silo-overlap check.
+    silo_ids: frozenset | None = None
 
 
 @dataclass
@@ -158,7 +173,8 @@ class DocumentRepository(ABC):
 
     @abstractmethod
     def create(self, id: str, title: str, content: str, content_hash: str,
-               source_path: str | None = None) -> str: ...
+               source_path: str | None = None, content_type: str = "text",
+               silo_id: str | None = None) -> str: ...
 
     @abstractmethod
     def get(self, doc_id: str) -> Document | None: ...
@@ -249,7 +265,8 @@ class EntityRepository(ABC):
     def get(self, entity_id: str, include_invalid: bool = False) -> Entity | None: ...
 
     @abstractmethod
-    def get_by_name(self, name: str, type: str, include_invalid: bool = False) -> Entity | None: ...
+    def get_by_name(self, name: str, type: str, include_invalid: bool = False,
+                     silo: object = _UNSET) -> Entity | None: ...
 
     @abstractmethod
     def list(self, limit: int = 50, offset: int = 0,
@@ -264,7 +281,11 @@ class EntityRepository(ABC):
     def update_embedding(self, entity_id: str, embedding: bytes) -> None: ...
 
     @abstractmethod
-    def get_all_for_normalization(self) -> list[Entity]: ...
+    def get_all_for_normalization(self) -> list[Entity]:
+        """Every entity (invalidated ones included — batch normalization must be able
+        to re-attach to them, same as get()/get_by_name() with include_invalid=True),
+        each with its silo_ids populated (see Entity.silo_ids)."""
+        ...
 
     @abstractmethod
     def get_for_document(self, doc_id: str) -> list[Entity]: ...
@@ -382,7 +403,7 @@ class NormalizationRepository(ABC):
     def get_merge_summary(self) -> dict: ...
 
     @abstractmethod
-    def get_merge_map_entry(self, name: str) -> str | None: ...
+    def get_merge_map_entry(self, name: str, silo: object = _UNSET) -> str | None: ...
 
     @abstractmethod
     def create_merge_map_entry(self, from_name: str, to_entity_id: str) -> None: ...

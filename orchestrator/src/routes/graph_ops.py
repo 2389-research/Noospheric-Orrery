@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from ..dependencies import get_auth_store, AuthStore
 from ..broadcast import broadcast_search
 from ..repositories.graph_reads import (_chunks, domain_neighbours, entities_in_domain,
-                                         entity_by_name)
+                                         entity_by_name, entity_silos)
 
 router = APIRouter(prefix="/graph")
 
@@ -170,10 +170,21 @@ async def get_neighborhood(
             if r["entity_id"] in visited:
                 visited[r["entity_id"]]["source_count"] = r["cnt"]
 
+    # Silo + kind, resolved LIVE via the silo_kind view join (task 11a) — every node
+    # here is an entity, so this is the same dominant-silo pick the snapshot builder
+    # uses, just scoped to this neighborhood instead of the whole graph.
+    silo_info = entity_silos(conn, list(visited.keys()))
+    for nid, node in visited.items():
+        sinfo = silo_info.get(nid, {})
+        node["silo_id"] = sinfo.get("silo_id")
+        node["kind"] = sinfo.get("kind")
+
     store.close()
 
+    seed_sinfo = silo_info.get(seed_id, {})
     result = {
-        "seed": {"id": seed_id, "name": entity.canonical_name, "type": entity.type},
+        "seed": {"id": seed_id, "name": entity.canonical_name, "type": entity.type,
+                 "silo_id": seed_sinfo.get("silo_id"), "kind": seed_sinfo.get("kind")},
         "depth": depth,
         "nodes": list(visited.values()),
         "edges": edges,
@@ -427,6 +438,18 @@ async def get_subgraph(
 
     # Filter edges to only those between nodes in our set
     final_edges = [e for e in edges if e["source"] in all_nodes and e["target"] in all_nodes]
+
+    # Silo + kind, resolved LIVE via the silo_kind view join (task 11a), for every
+    # node in the subgraph — seeds included.
+    silo_info = entity_silos(conn, list(all_nodes.keys()))
+    for nid, node in all_nodes.items():
+        sinfo = silo_info.get(nid, {})
+        node["silo_id"] = sinfo.get("silo_id")
+        node["kind"] = sinfo.get("kind")
+    for nid, seed in seeds.items():
+        sinfo = silo_info.get(nid, {})
+        seed["silo_id"] = sinfo.get("silo_id")
+        seed["kind"] = sinfo.get("kind")
 
     store.close()
 

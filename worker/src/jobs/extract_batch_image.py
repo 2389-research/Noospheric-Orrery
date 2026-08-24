@@ -8,6 +8,7 @@ from pathlib import Path
 from orrery_relay import Relay
 from ..db import get_connection
 from ..config import get_settings
+from ..silo import silo_match
 
 
 async def run_extract_batch_image(job: dict, db_path: str) -> None:
@@ -106,6 +107,9 @@ async def run_extract_batch_image(job: dict, db_path: str) -> None:
         # Clear previous extraction sources for this doc (general spec gets replaced by simmered)
         conn.execute("DELETE FROM entity_sources WHERE document_id = ?", (doc_id,))
 
+        silo_row = conn.execute("SELECT silo_id FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        silo = silo_row[0] if silo_row else None
+
         # Store entities
         for entity in result.get("entities", []):
             name = entity.get("name", "").lower().strip()
@@ -114,7 +118,9 @@ async def run_extract_batch_image(job: dict, db_path: str) -> None:
                 continue
 
             is_new = False
-            row = conn.execute("SELECT id FROM entities WHERE canonical_name = ? AND type = ?", (name, etype)).fetchone()
+            row = conn.execute(
+                f"SELECT e.id FROM entities e WHERE e.canonical_name = ? AND e.type = ? "
+                f"AND {silo_match('e.id')}", (name, etype, silo)).fetchone()
             if row:
                 entity_id = row["id"]
             else:

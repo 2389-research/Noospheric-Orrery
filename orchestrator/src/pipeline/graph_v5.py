@@ -47,6 +47,7 @@ from .graph_snapshot import (
     assign_domain_colors,
     _collection_positions,
 )
+from ..repositories.graph_reads import entity_silos, collection_silos, silo_kinds_of
 
 # Bump on ANY change a cached payload could not survive — new/renamed layers, and
 # renamed VALUES in the vocabulary (node type, edge scope, container_type). 5.1.0
@@ -137,6 +138,11 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
         ORDER BY source_count DESC, e.id ASC
     """).fetchall()
 
+    # entity_id -> dominant {silo_id, kind}, live-resolved via the silo_kind view
+    # (task 11a). One whole-graph pass here, not per-entity — the same shape as the
+    # domain/collection weight queries above.
+    entity_silo_info = entity_silos(conn)
+
     node_index: dict[str, dict] = {}
     render_entities: list[dict] = []
     unplaceable = 0
@@ -150,8 +156,10 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
                        for k, w in dw.items()]
         memberships += [{"container_type": "collection", "id": k, "weight": w}
                         for k, w in collection_weights.get(e["id"], {}).items()]
+        sinfo = entity_silo_info.get(e["id"], {})
         node = {"id": e["id"], "type": "entity", "subtype": e["type"],
                 "label": e["canonical_name"], "degree": e["source_count"],
+                "silo_id": sinfo.get("silo_id"), "kind": sinfo.get("kind"),
                 "memberships": memberships}
         node_index[e["id"]] = node
         if len(render_entities) < max_render_nodes:
@@ -161,6 +169,13 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
     collection_rows = conn.execute(
         "SELECT id, name, path, document_count FROM collections"
     ).fetchall()
+    # Dominant silo + live-resolved kind (task 11a), one batch pass rather than a
+    # query per collection — same shape as entity_silo_info above, and the same
+    # dominant-pick (`_pick_dominant`) tie-break everywhere: favor a NAMED silo over
+    # the null pool, then break lexicographically. In practice uniform: every
+    # document in a collection resolves to the SAME silo_id via `resolve_silo_id`'s
+    # precedence, so this only matters for a collection predating that precedence.
+    collection_silo_info = collection_silos(conn)
     collection_nodes = []
     for r in collection_rows:
         dom_row = conn.execute(
@@ -172,9 +187,12 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
             (r["id"],),
         ).fetchone()
         dom = dom_row["domain_path"] if dom_row else None
+        csinfo = collection_silo_info.get(r["id"], {})
         collection_nodes.append({
             "id": r["id"], "type": "collection", "label": r["name"], "path": r["path"],
             "degree": r["document_count"],
+            "silo_id": csinfo.get("silo_id"),
+            "kind": csinfo.get("kind"),
             "memberships": ([{"container_type": "domain", "id": dom, "weight": 1.0}]
                             if dom else []),
         })
@@ -186,13 +204,18 @@ def build_graph_v5(store, *, max_render_nodes: int = DEFAULT_MAX_RENDER_NODES) -
     collection_positions = _collection_positions(store, collection_boxes, domain_positions)
 
     total_documents = conn.execute("SELECT COUNT(*) FROM documents WHERE invalid_at IS NULL").fetchone()[0]
+    recent_docs = store.documents.get_recent(limit=50)
+    # kind is resolved live via the silo_kind view — `silo_id` itself is already a
+    # documents column, so this is a plain batch lookup, not a per-doc aggregate.
+    doc_kinds = silo_kinds_of(conn, [d.silo_id for d in recent_docs])
     document_nodes = [
         {"id": d.id, "type": "document", "subtype": getattr(d, "content_type", "text"),
          "label": d.title,
+         "silo_id": d.silo_id, "kind": doc_kinds.get(d.silo_id),
          "memberships": [{"container_type": "domain", "id": p, "weight": 1.0}
                          for p in d.domains],
          "primary_domain": d.domains[0] if d.domains else None}
-        for d in store.documents.get_recent(limit=50)
+        for d in recent_docs
     ]
 
     # ── edges: derived co-occurrence, then the ASSERTED collection edges ──────
