@@ -279,7 +279,7 @@ async def _ingest_image(store, title: str, file_bytes: bytes, image_path: str) -
         relay=relay, chunks=chunks, spec=spec_content, model=settings.extraction_model,
     )
     for entity in entities:
-        entity_id = normalize_entity(store, entity["name"], entity["type"])
+        entity_id = normalize_entity(store, entity["name"], entity["type"], silo=None)
         store.entity_sources.create(
             entity_id=entity_id, document_id=doc_id,
             chunk_id=chunk_id, extraction_pass="general",

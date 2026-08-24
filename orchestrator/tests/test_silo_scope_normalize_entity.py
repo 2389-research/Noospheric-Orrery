@@ -62,3 +62,31 @@ def test_unscoped_call_keeps_back_compat_behavior(test_store):
     matched_id = normalize_entity(test_store, "venus", "Concept")
 
     assert matched_id == siloed_id
+
+
+def test_loose_image_upload_does_not_fuse_onto_siloed_entity(test_store):
+    """Same leak as the loose-text-upload case, but for _ingest_image's call
+    shape: a loose (null-silo) image upload extracting 'mercury'/Concept must
+    NOT fuse onto an entity that only exists within silo 'v1'. _ingest_image
+    creates its document with silo_id defaulting to None (see
+    routes/ingest.py), so this exercises normalize_entity(..., silo=None)
+    exactly as that route now calls it."""
+    siloed_id = _make_siloed_entity(test_store, "v1")
+
+    loose_image_id = normalize_entity(test_store, "mercury", "Concept", silo=None)
+
+    assert loose_image_id != siloed_id
+    entity = test_store.entities.get(loose_image_id)
+    assert entity is not None
+    assert entity.canonical_name == "mercury"
+
+
+def test_ingest_image_call_site_passes_silo_none():
+    """Guard against the exact regression the reviewer caught: _ingest_image's
+    normalize_entity() call must pass silo=None (loose image uploads are the
+    null-silo pool), not run unscoped."""
+    import inspect
+    from src.routes import ingest
+
+    source = inspect.getsource(ingest._ingest_image)
+    assert 'normalize_entity(store, entity["name"], entity["type"], silo=None)' in source
