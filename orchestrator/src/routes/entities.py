@@ -56,6 +56,9 @@ def get_entity(entity_id: str, auth: AuthStore = Depends(get_auth_store)):
     # directly. Previously the panel joined against the paginated /documents list
     # (default limit 50), so any source doc past the first page showed a raw
     # doc-id hash instead of its title.
+    # get_titles resolves silo_id + kind LIVE (via the silo_kind view join, on this
+    # call) — so a source re-classified after ingest shows up on the very next read
+    # (task 11a), not just after a snapshot rebuild.
     titles = store.documents.get_titles([s.document_id for s in sources])
     store.close()
     return {
@@ -65,7 +68,9 @@ def get_entity(entity_id: str, auth: AuthStore = Depends(get_auth_store)):
                       "extraction_pass": s.extraction_pass, "spec_version": s.spec_version,
                       "job_id": s.job_id,
                       "title": titles.get(s.document_id, {}).get("title"),
-                      "content_type": titles.get(s.document_id, {}).get("content_type", "text")}
+                      "content_type": titles.get(s.document_id, {}).get("content_type", "text"),
+                      "silo_id": titles.get(s.document_id, {}).get("silo_id"),
+                      "kind": titles.get(s.document_id, {}).get("kind")}
                      for s in sources],
         "merge_history": merge_history,
     }

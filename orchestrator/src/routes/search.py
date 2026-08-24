@@ -7,6 +7,7 @@ from orrery_relay import Relay
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
 from ..broadcast import broadcast_search
+from ..repositories.graph_reads import entity_silos
 
 router = APIRouter()
 
@@ -26,6 +27,26 @@ async def search_query(q: str, top_k: int = 20, expand: bool = True, include_ima
     result = await search_knowledge_graph(
         store.conn, q, expand=expand, relay=relay, top_k=top_k,
     )
+
+    # Silo + kind, resolved LIVE via the silo_kind view join (task 11a) — batched
+    # over just the ids already in this result set, not a query per hit. This is
+    # the primary agent read (search_knowledge_graph, MCP #48), so provenance has to
+    # ride along here even though search itself sits outside repositories/graph_reads'
+    # usual callers.
+    entity_ids = [e["id"] for e in result.entities]
+    ent_silo_info = entity_silos(store.conn, entity_ids) if entity_ids else {}
+    for e in result.entities:
+        sinfo = ent_silo_info.get(e["id"], {})
+        e["silo_id"] = sinfo.get("silo_id")
+        e["kind"] = sinfo.get("kind")
+
+    doc_ids = [c["document_id"] for c in result.chunks]
+    doc_meta = store.documents.get_titles(doc_ids) if doc_ids else {}
+    for c in result.chunks:
+        meta = doc_meta.get(c["document_id"], {})
+        c["silo_id"] = meta.get("silo_id")
+        c["kind"] = meta.get("kind")
+
     response = {
         "query": result.query,
         "entities": result.entities,

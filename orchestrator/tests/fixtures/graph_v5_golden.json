@@ -1,739 +1,799 @@
 {
-  "edges": [
-    {
-      "scope": "domain",
-      "source": "alpha",
-      "target": "alpha/beta/deep",
-      "type": "cooccurrence",
-      "weight": 21
-    }
-  ],
-  "layout": {
-    "frame": {
-      "bounds": [
-        0,
-        0,
-        1,
-        1
-      ],
-      "space": "unit_square"
-    },
-    "generator": {
-      "entity_positions": "client_derived",
-      "name": "umap-domain-anchors"
-    },
-    "hierarchies": [
-      {
-        "default": true,
-        "levels": [
-          "domain",
-          "collection",
-          "entity"
-        ],
-        "name": "cosmic"
-      }
+ "edges": [
+  {
+   "scope": "domain",
+   "source": "alpha",
+   "target": "alpha/beta/deep",
+   "type": "cooccurrence",
+   "weight": 21
+  }
+ ],
+ "layout": {
+  "frame": {
+   "bounds": [
+    0,
+    0,
+    1,
+    1
+   ],
+   "space": "unit_square"
+  },
+  "generator": {
+   "entity_positions": "client_derived",
+   "name": "umap-domain-anchors"
+  },
+  "hierarchies": [
+   {
+    "default": true,
+    "levels": [
+     "domain",
+     "collection",
+     "entity"
     ],
-    "palette": {
-      "alpha": "#e45757",
-      "alpha/beta/deep": "#66d5d5"
-    }
-  },
-  "meta": {
-    "activity": {
-      "simmering_domains": []
-    },
-    "counts": {
-      "nodes_included": 18,
-      "nodes_total": 18
-    },
-    "counts_by_type": {
-      "collection": {
-        "included": 1,
-        "total": 1
-      },
-      "document": {
-        "included": 5,
-        "total": 5
-      },
-      "domain": {
-        "included": 2,
-        "total": 2
-      },
-      "entity": {
-        "included": 12,
-        "total": 12
-      }
-    },
-    "edge_availability": {
-      "inline": [
-        "cooccurrence@domain",
-        "cooccurrence@collection",
-        "uses",
-        "chain_next"
-      ],
-      "on_demand": [
-        {
-          "endpoint": "/entities/{id}/cooccurrences",
-          "type": "cooccurrence@entity"
-        }
-      ]
-    },
-    "pruning": {
-      "excluded": [
-        {
-          "count": 1,
-          "reason": "no_domain_membership"
-        }
-      ],
-      "max_render_nodes": 3000,
-      "policy": "top_n_by_degree"
-    },
-    "schema_version": "5.1.0"
-  },
-  "node_index": {
-    "e0": {
-      "degree": 1,
-      "id": "e0",
-      "label": "entity 0",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 1.0
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    "e1": {
-      "degree": 2,
-      "id": "e1",
-      "label": "entity 1",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.5
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.5
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    "e10": {
-      "degree": 3,
-      "id": "e10",
-      "label": "entity 10",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.667
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.333
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    "e11": {
-      "degree": 4,
-      "id": "e11",
-      "label": "entity 11",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.5
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.5
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    "e2": {
-      "degree": 3,
-      "id": "e2",
-      "label": "entity 2",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.667
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.333
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    "e3": {
-      "degree": 4,
-      "id": "e3",
-      "label": "entity 3",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.5
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.5
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    "e4": {
-      "degree": 1,
-      "id": "e4",
-      "label": "entity 4",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 1.0
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    "e5": {
-      "degree": 2,
-      "id": "e5",
-      "label": "entity 5",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.5
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.5
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    "e6": {
-      "degree": 3,
-      "id": "e6",
-      "label": "entity 6",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.667
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.333
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    "e7": {
-      "degree": 4,
-      "id": "e7",
-      "label": "entity 7",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.5
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.5
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    "e8": {
-      "degree": 1,
-      "id": "e8",
-      "label": "entity 8",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 1.0
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    "e9": {
-      "degree": 2,
-      "id": "e9",
-      "label": "entity 9",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.5
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.5
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    }
-  },
-  "nodes": [
-    {
-      "degree": 4,
-      "id": "r1",
-      "label": "repo-one",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 1.0
-        }
-      ],
-      "path": "repo-one",
-      "type": "collection"
-    },
-    {
-      "id": "d0",
-      "label": "doc 0",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 1.0
-        }
-      ],
-      "primary_domain": "alpha",
-      "subtype": "image",
-      "type": "document"
-    },
-    {
-      "id": "d1",
-      "label": "doc 1",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 1.0
-        }
-      ],
-      "primary_domain": "alpha/beta/deep",
-      "subtype": "text",
-      "type": "document"
-    },
-    {
-      "id": "d2",
-      "label": "doc 2",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 1.0
-        }
-      ],
-      "primary_domain": "alpha",
-      "subtype": "text",
-      "type": "document"
-    },
-    {
-      "id": "d3",
-      "label": "doc 3",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 1.0
-        }
-      ],
-      "primary_domain": "alpha/beta/deep",
-      "subtype": "text",
-      "type": "document"
-    },
-    {
-      "id": "orphan0",
-      "label": "orphan",
-      "memberships": [],
-      "primary_domain": null,
-      "subtype": "text",
-      "type": "document"
-    },
-    {
-      "degree": 4,
-      "id": "e11",
-      "label": "entity 11",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.5
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.5
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    {
-      "degree": 4,
-      "id": "e3",
-      "label": "entity 3",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.5
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.5
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    {
-      "degree": 4,
-      "id": "e7",
-      "label": "entity 7",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.5
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.5
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    {
-      "degree": 3,
-      "id": "e10",
-      "label": "entity 10",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.667
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.333
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    {
-      "degree": 3,
-      "id": "e2",
-      "label": "entity 2",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.667
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.333
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    {
-      "degree": 3,
-      "id": "e6",
-      "label": "entity 6",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.667
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.333
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    {
-      "degree": 2,
-      "id": "e1",
-      "label": "entity 1",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.5
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.5
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    {
-      "degree": 2,
-      "id": "e5",
-      "label": "entity 5",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.5
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.5
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    {
-      "degree": 2,
-      "id": "e9",
-      "label": "entity 9",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 0.5
-        },
-        {
-          "container_type": "domain",
-          "id": "alpha/beta/deep",
-          "weight": 0.5
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    {
-      "degree": 1,
-      "id": "e0",
-      "label": "entity 0",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 1.0
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    {
-      "degree": 1,
-      "id": "e4",
-      "label": "entity 4",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 1.0
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    },
-    {
-      "degree": 1,
-      "id": "e8",
-      "label": "entity 8",
-      "memberships": [
-        {
-          "container_type": "domain",
-          "id": "alpha",
-          "weight": 1.0
-        },
-        {
-          "container_type": "collection",
-          "id": "r1",
-          "weight": 1.0
-        }
-      ],
-      "subtype": "Concept",
-      "type": "entity"
-    }
+    "name": "cosmic"
+   }
   ],
-  "taxonomy": [
+  "palette": {
+   "alpha": "#e45757",
+   "alpha/beta/deep": "#66d5d5"
+  }
+ },
+ "meta": {
+  "activity": {
+   "simmering_domains": []
+  },
+  "counts": {
+   "nodes_included": 18,
+   "nodes_total": 18
+  },
+  "counts_by_type": {
+   "collection": {
+    "included": 1,
+    "total": 1
+   },
+   "document": {
+    "included": 5,
+    "total": 5
+   },
+   "domain": {
+    "included": 2,
+    "total": 2
+   },
+   "entity": {
+    "included": 12,
+    "total": 12
+   }
+  },
+  "edge_availability": {
+   "inline": [
+    "cooccurrence@domain",
+    "cooccurrence@collection",
+    "uses",
+    "chain_next"
+   ],
+   "on_demand": [
     {
-      "document_count": 2,
-      "id": null,
-      "is_subdomain": false,
-      "parent_path": null,
-      "path": "alpha",
-      "spec_version": null
+     "endpoint": "/entities/{id}/cooccurrences",
+     "type": "cooccurrence@entity"
+    }
+   ]
+  },
+  "pruning": {
+   "excluded": [
+    {
+     "count": 1,
+     "reason": "no_domain_membership"
+    }
+   ],
+   "max_render_nodes": 3000,
+   "policy": "top_n_by_degree"
+  },
+  "schema_version": "5.1.0"
+ },
+ "node_index": {
+  "e0": {
+   "degree": 1,
+   "id": "e0",
+   "kind": null,
+   "label": "entity 0",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 1.0
     },
     {
-      "document_count": 2,
-      "id": null,
-      "is_subdomain": true,
-      "parent_path": null,
-      "path": "alpha/beta/deep",
-      "spec_version": null
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
     }
-  ]
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  "e1": {
+   "degree": 2,
+   "id": "e1",
+   "kind": null,
+   "label": "entity 1",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.5
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.5
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  "e10": {
+   "degree": 3,
+   "id": "e10",
+   "kind": null,
+   "label": "entity 10",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.667
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.333
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  "e11": {
+   "degree": 4,
+   "id": "e11",
+   "kind": null,
+   "label": "entity 11",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.5
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.5
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  "e2": {
+   "degree": 3,
+   "id": "e2",
+   "kind": null,
+   "label": "entity 2",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.667
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.333
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  "e3": {
+   "degree": 4,
+   "id": "e3",
+   "kind": null,
+   "label": "entity 3",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.5
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.5
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  "e4": {
+   "degree": 1,
+   "id": "e4",
+   "kind": null,
+   "label": "entity 4",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 1.0
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  "e5": {
+   "degree": 2,
+   "id": "e5",
+   "kind": null,
+   "label": "entity 5",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.5
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.5
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  "e6": {
+   "degree": 3,
+   "id": "e6",
+   "kind": null,
+   "label": "entity 6",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.667
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.333
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  "e7": {
+   "degree": 4,
+   "id": "e7",
+   "kind": null,
+   "label": "entity 7",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.5
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.5
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  "e8": {
+   "degree": 1,
+   "id": "e8",
+   "kind": null,
+   "label": "entity 8",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 1.0
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  "e9": {
+   "degree": 2,
+   "id": "e9",
+   "kind": null,
+   "label": "entity 9",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.5
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.5
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  }
+ },
+ "nodes": [
+  {
+   "degree": 4,
+   "id": "r1",
+   "kind": null,
+   "label": "repo-one",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 1.0
+    }
+   ],
+   "path": "repo-one",
+   "silo_id": null,
+   "type": "collection"
+  },
+  {
+   "id": "d0",
+   "kind": null,
+   "label": "doc 0",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 1.0
+    }
+   ],
+   "primary_domain": "alpha",
+   "silo_id": null,
+   "subtype": "image",
+   "type": "document"
+  },
+  {
+   "id": "d1",
+   "kind": null,
+   "label": "doc 1",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 1.0
+    }
+   ],
+   "primary_domain": "alpha/beta/deep",
+   "silo_id": null,
+   "subtype": "text",
+   "type": "document"
+  },
+  {
+   "id": "d2",
+   "kind": null,
+   "label": "doc 2",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 1.0
+    }
+   ],
+   "primary_domain": "alpha",
+   "silo_id": null,
+   "subtype": "text",
+   "type": "document"
+  },
+  {
+   "id": "d3",
+   "kind": null,
+   "label": "doc 3",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 1.0
+    }
+   ],
+   "primary_domain": "alpha/beta/deep",
+   "silo_id": null,
+   "subtype": "text",
+   "type": "document"
+  },
+  {
+   "id": "orphan0",
+   "kind": null,
+   "label": "orphan",
+   "memberships": [],
+   "primary_domain": null,
+   "silo_id": null,
+   "subtype": "text",
+   "type": "document"
+  },
+  {
+   "degree": 4,
+   "id": "e11",
+   "kind": null,
+   "label": "entity 11",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.5
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.5
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  {
+   "degree": 4,
+   "id": "e3",
+   "kind": null,
+   "label": "entity 3",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.5
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.5
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  {
+   "degree": 4,
+   "id": "e7",
+   "kind": null,
+   "label": "entity 7",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.5
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.5
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  {
+   "degree": 3,
+   "id": "e10",
+   "kind": null,
+   "label": "entity 10",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.667
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.333
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  {
+   "degree": 3,
+   "id": "e2",
+   "kind": null,
+   "label": "entity 2",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.667
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.333
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  {
+   "degree": 3,
+   "id": "e6",
+   "kind": null,
+   "label": "entity 6",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.667
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.333
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  {
+   "degree": 2,
+   "id": "e1",
+   "kind": null,
+   "label": "entity 1",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.5
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.5
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  {
+   "degree": 2,
+   "id": "e5",
+   "kind": null,
+   "label": "entity 5",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.5
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.5
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  {
+   "degree": 2,
+   "id": "e9",
+   "kind": null,
+   "label": "entity 9",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 0.5
+    },
+    {
+     "container_type": "domain",
+     "id": "alpha/beta/deep",
+     "weight": 0.5
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  {
+   "degree": 1,
+   "id": "e0",
+   "kind": null,
+   "label": "entity 0",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 1.0
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  {
+   "degree": 1,
+   "id": "e4",
+   "kind": null,
+   "label": "entity 4",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 1.0
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  },
+  {
+   "degree": 1,
+   "id": "e8",
+   "kind": null,
+   "label": "entity 8",
+   "memberships": [
+    {
+     "container_type": "domain",
+     "id": "alpha",
+     "weight": 1.0
+    },
+    {
+     "container_type": "collection",
+     "id": "r1",
+     "weight": 1.0
+    }
+   ],
+   "silo_id": null,
+   "subtype": "Concept",
+   "type": "entity"
+  }
+ ],
+ "taxonomy": [
+  {
+   "document_count": 2,
+   "id": null,
+   "is_subdomain": false,
+   "parent_path": null,
+   "path": "alpha",
+   "spec_version": null
+  },
+  {
+   "document_count": 2,
+   "id": null,
+   "is_subdomain": true,
+   "parent_path": null,
+   "path": "alpha/beta/deep",
+   "spec_version": null
+  }
+ ]
 }
