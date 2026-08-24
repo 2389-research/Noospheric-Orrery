@@ -904,6 +904,14 @@ def recompute_cooccurrence(conn, affected_entity_ids):
     #    The emits_cooccurrence gate is honoured on BOTH endpoints: a summary document
     #    mentions everything under it, so ignoring the flag reinstates exactly the
     #    hub-node noise the column was added to remove (see get_collection_routes).
+    #    A second, independent gate suppresses by the document's SILO KIND (task 10):
+    #    an agent_report silo's docs are opinion, not observation, and must not reshape
+    #    shared edge weights. Since the join is on s1.chunk_id = s2.chunk_id (same chunk
+    #    => same document), d1.id == d2.id, so checking d1's kind alone suffices; a
+    #    correlated subquery on silo_kind avoids a join against a nonexistent alias and
+    #    any row-multiplication risk. COALESCE(..., '') means a null/unknown silo emits
+    #    by default. (One kind is excluded today; this generalizes to a kind->emits map
+    #    if more kinds need gating later.)
     rows = conn.execute(
         f"""
         SELECT s1.entity_id AS a, s2.entity_id AS b, COUNT(DISTINCT s1.chunk_id) AS w
@@ -919,6 +927,7 @@ def recompute_cooccurrence(conn, affected_entity_ids):
                         WHERE document_id = s1.document_id), 1) = 1
           AND COALESCE((SELECT MIN(emits_cooccurrence) FROM document_collections
                         WHERE document_id = s2.document_id), 1) = 1
+          AND COALESCE((SELECT kind FROM silo_kind WHERE silo_id = d1.silo_id), '') != 'agent_report'
           AND (s1.entity_id IN ({ph}) OR s2.entity_id IN ({ph}))
         GROUP BY a, b
         """,
