@@ -31,7 +31,13 @@ def normalize_entity(store_or_conn, name: str, entity_type: str, silo=_UNSET) ->
         store.entities.create(entity_id, clean_name, entity_type)
         return entity_id
     else:
-        # Legacy: raw connection
+        # Legacy: raw connection.
+        # ⚠️ DEPRECATED / silo-UNAWARE: this branch ignores `silo` entirely — no
+        # per-silo scoping of merge_map or the canonical lookup, and no cross-silo
+        # proposal. It will auto-merge same-name entities ACROSS silos, defeating
+        # #50. No production caller reaches it (every one passes a store, which
+        # hits the silo-aware branch above); it survives only for legacy/raw-conn
+        # callers and tests. Do not route new code through it — pass a store.
         conn = store_or_conn
         row = conn.execute("SELECT to_entity_id FROM merge_map WHERE from_name = ?", (clean_name,)).fetchone()
         if row:

@@ -37,9 +37,11 @@ def _silo_set(conn: sqlite3.Connection, entity_id: str) -> set:
 
 def _seed_cross_silo_dupes(store):
     """Entity X sourced only in silo 'A', entity Y (same name/type) sourced
-    only in silo 'B' -- a cross-silo near-dupe pair, each with one
-    co-occurrence neighbor so the merge has real edges to recompute and
-    restore."""
+    only in silo 'B' -- a cross-silo near-dupe pair. Each has a private
+    co-occurrence neighbor (na in A, nb in B), PLUS a shared neighbor (ns)
+    that co-occurs with BOTH across both silos -- so the recomputed survivor
+    edges exercise weight *combining* (ns) as well as non-inflation (na/nb),
+    and the round trip has real edges to restore."""
     conn = store._conn
 
     # Silo A: document + chunk + entity X ('stripe') + neighbor 'na'
@@ -60,21 +62,27 @@ def _seed_cross_silo_dupes(store):
     ey = store.entities.create("ey", "stripe", "Organization")
     na = store.entities.create("na", "patrick collison", "Person")
     nb = store.entities.create("nb", "john collison", "Person")
+    ns = store.entities.create("ns", "san francisco", "Place")  # shared: in BOTH silos
 
     store.entity_sources.create(entity_id=ex, document_id="doc-a", chunk_id="c-a1")
     store.entity_sources.create(entity_id=na, document_id="doc-a", chunk_id="c-a1")
     store.entity_sources.create(entity_id=ey, document_id="doc-b", chunk_id="c-b1")
     store.entity_sources.create(entity_id=nb, document_id="doc-b", chunk_id="c-b1")
+    # ns co-occurs with X in silo A's chunk AND with Y in silo B's chunk.
+    store.entity_sources.create(entity_id=ns, document_id="doc-a", chunk_id="c-a1")
+    store.entity_sources.create(entity_id=ns, document_id="doc-b", chunk_id="c-b1")
 
     store.relationships.upsert_cooccurrence("r-ex-na", ex, na, 1, source_chunk="c-a1")
     store.relationships.upsert_cooccurrence("r-ey-nb", ey, nb, 1, source_chunk="c-b1")
+    store.relationships.upsert_cooccurrence("r-ex-ns", ex, ns, 1, source_chunk="c-a1")
+    store.relationships.upsert_cooccurrence("r-ey-ns", ey, ns, 1, source_chunk="c-b1")
 
-    return ex, ey, na, nb
+    return ex, ey, na, nb, ns
 
 
 def test_cross_silo_merge_proposal_approves_and_rolls_back_cleanly(test_store):
     conn = test_store._conn
-    ex, ey, na, nb = _seed_cross_silo_dupes(test_store)
+    ex, ey, na, nb, ns = _seed_cross_silo_dupes(test_store)
 
     # Sanity: pre-merge, each entity participates in exactly its own silo.
     assert _silo_set(conn, ex) == {"A"}
@@ -140,7 +148,24 @@ def test_cross_silo_merge_proposal_approves_and_rolls_back_cleanly(test_store):
             (survivor, survivor, survivor),
         ).fetchall()
     }
-    assert neighbor_ids == {na, nb}
+    assert neighbor_ids == {na, nb, ns}
+
+    # Weights COMBINE, they don't double-count (the #30 / graph-corrections
+    # invariant that apply_merge's recompute exists to preserve). Recompute
+    # weight = COUNT(DISTINCT shared chunk); the survivor now sources {c-a1, c-b1}:
+    #   - na shares only c-a1 -> 1 (single-silo neighbor NOT inflated by the merge)
+    #   - nb shares only c-b1 -> 1
+    #   - ns shares BOTH      -> 2 (combined across silos; a shared chunk counted once)
+    weights = {
+        r[0]: r[1] for r in conn.execute(
+            """SELECT CASE WHEN from_entity = ? THEN to_entity ELSE from_entity END, weight
+               FROM relationships
+               WHERE (from_entity = ? OR to_entity = ?) AND type = 'co_occurs'
+                 AND invalid_at IS NULL""",
+            (survivor, survivor, survivor),
+        ).fetchall()
+    }
+    assert weights == {na: 1, nb: 1, ns: 2}
 
     # No active edge still references the loser directly.
     assert conn.execute(
