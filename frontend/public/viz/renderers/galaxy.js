@@ -251,8 +251,7 @@ export function drawNeighborhoodLines(ctx, state, camera) {
       }
       for (const rid of Object.keys(node.collectionWeights || {})) {
         const repo = state.collections.get(rid);
-        // Skip a filtered-out repo (task 11b) — no line to an invisible node.
-        if (repo && state.matchesFilter(repo)) line(node.x, node.y, repo.x, repo.y, 'rgba(224,160,48,0.35)', 0.8);
+        if (repo) line(node.x, node.y, repo.x, repo.y, 'rgba(224,160,48,0.35)', 0.8);
       }
     }
   } else if (node.kind === 'domain') {
@@ -268,21 +267,20 @@ export function drawNeighborhoodLines(ctx, state, camera) {
     const sortedW = ents.map(wOf).sort((a, b) => b - a);
     const cutoff = sortedW.length ? sortedW[Math.max(0, Math.ceil(sortedW.length * 0.2) - 1)] : 0;
     for (const e of ents) {
-      if (!state.matchesFilter(e)) continue;   // silo/kind filter (task 11b)
       const a = wOf(e) >= cutoff ? 0.22 : 0.06;    // top 20% brighter, tail lighter
       line(node.x, node.y, e.x, e.y, rgba(100, 160, 220, a), 0.4);
     }
     for (const [, r] of state.collections) {
-      if (r.domainPath === node.path && state.matchesFilter(r)) line(node.x, node.y, r.x, r.y, 'rgba(224,160,48,0.3)', 0.8);
+      if (r.domainPath === node.path) line(node.x, node.y, r.x, r.y, 'rgba(224,160,48,0.3)', 0.8);
     }
   } else if (node.kind === 'collection') {
     // Its entities (gold, subtle) + connected repos + its domain.
     for (const e of (state.collectionEntities.get(node.collectionId) || [])) {
-      if (state.matchesFilter(e)) line(node.x, node.y, e.x, e.y, 'rgba(224,160,48,0.18)', 0.5);
+      line(node.x, node.y, e.x, e.y, 'rgba(224,160,48,0.18)', 0.5);
     }
     for (const rid of _connectedRepoIds(state, node.collectionId)) {
       const r = state.collections.get(rid);
-      if (r && state.matchesFilter(r)) line(node.x, node.y, r.x, r.y, 'rgba(224,160,48,0.35)', 0.9);
+      if (r) line(node.x, node.y, r.x, r.y, 'rgba(224,160,48,0.35)', 0.9);
     }
     if (node.domainPath) {
       const d = state.domains.get(node.domainPath);
@@ -491,10 +489,6 @@ export function drawEntityStars(ctx, state, camera, W, H, neighborhood) {
 
   for (const [, e] of state.entities) {
     if (e.birthScale < 0.1) continue;
-    // Silo/kind filter (task 11b) — hide non-matching entities outright rather
-    // than dim them, ahead of neighborhood/LOD so a filtered-out node never
-    // draws even when it's a hover/select neighbor.
-    if (!state.matchesFilter(e)) continue;
 
     const inNeighborhood = (hasNeighborhood && neighborhood.has(e.id)) || (hasAttract && anbrs.has(e.id));
 
@@ -603,7 +597,6 @@ export function drawCollections(ctx, state, camera, W, H) {
 
   // repo→domain tethers (faint)
   for (const [, repo] of state.collections) {
-    if (!state.matchesFilter(repo)) continue;   // silo/kind filter (task 11b)
     const dom = repo.domainPath ? state.domains.get(repo.domainPath) : null;
     if (!dom) continue;
     ctx.strokeStyle = rgba(224, 160, 48, 0.12 * fade);
@@ -620,9 +613,6 @@ export function drawCollections(ctx, state, camera, W, H) {
   const drawRepoEdge = (a, b, w, dashed) => {
     const ra = get(a), rb = get(b);
     if (!ra || !rb) return;
-    // Silo/kind filter (task 11b) — an edge is only drawn when BOTH endpoints
-    // are visible, so a filtered-out repo never anchors a stray line.
-    if (!state.matchesFilter(ra) || !state.matchesFilter(rb)) return;
     // Dim + soft, matching the domain trade-route aesthetic (faint, thin, long dash).
     ctx.strokeStyle = rgba(224, 160, 48, (0.08 + Math.min(w / 20, 0.08)) * fade);
     ctx.lineWidth = 0.8;
@@ -648,7 +638,6 @@ export function drawCollections(ctx, state, camera, W, H) {
   for (const [, repo] of state.collections) {
     const bs = repo.birthScale || 0;
     if (bs < 0.05) continue;
-    if (!state.matchesFilter(repo)) continue;   // silo/kind filter (task 11b)
     const R = repo.radius * bs;
     // Viewport cull — generous margin covers the outer cloud (~R*2.4), spikes,
     // and the label (which can extend well past the radius) so nothing pops out
