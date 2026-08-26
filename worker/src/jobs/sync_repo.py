@@ -24,6 +24,7 @@ from ..classifier import classify_document
 from ..silo import flow_default_kind, resolve_kind
 from .upsert_document import upsert_document
 from .scan_source import apply_deletions
+from .ingest_repo import _git_coordinates
 
 _UNCLASSIFIED = "unclassified/needs-review"
 _ROLE = {"file": "leaf", "module": "group", "repo": "root"}
@@ -36,8 +37,14 @@ def _git_changed_files(root_path: str, base_sha: str) -> tuple[set | None, set]:
     try:
         # --relative makes git emit paths relative to root_path, matching codesum's
         # relpaths, even when root_path is a subdirectory of the git repo.
+        # `-c safe.directory=<root_path>` or the call fails in Docker: the checkout
+        # arrives on a mount owned by the host user while this process runs as another
+        # uid, and git refuses a repo it sees as someone else's ("dubious ownership").
+        # Scoped to this directory, not the global `*` (repo-local config is executable
+        # surface). Same reasoning as ingest_repo._git_coordinates.
         out = subprocess.run(
-            ["git", "-C", root_path, "diff", "--name-status", "--relative", f"{base_sha}..HEAD"],
+            ["git", "-c", f"safe.directory={root_path}", "-C", root_path,
+             "diff", "--name-status", "--relative", f"{base_sha}..HEAD"],
             capture_output=True, text=True, timeout=30)
     except Exception:  # noqa: BLE001
         return None, set()
@@ -74,7 +81,10 @@ def _git_head_sha(root_path: str) -> str | None:
     """Current HEAD sha, or None if `root_path` is not a resolvable git checkout.
     Used to short-circuit a scan when the working tree hasn't moved since last sync."""
     try:
-        out = subprocess.run(["git", "-C", root_path, "rev-parse", "HEAD"],
+        # `-c safe.directory=<root_path>` — see the note in _git_changed_files: without
+        # it every git call fails on a mounted checkout owned by a different uid.
+        out = subprocess.run(["git", "-c", f"safe.directory={root_path}", "-C", root_path,
+                              "rev-parse", "HEAD"],
                              capture_output=True, text=True, timeout=10)
     except Exception:  # noqa: BLE001 — git missing / not a repo -> no short-circuit
         return None
@@ -146,9 +156,21 @@ async def sync_repo(conn, relay, settings, ws, source_config, source_id) -> dict
     # successful sync, nothing changed — skip codesum entirely (zero model calls). The
     # commit_sha doubles as the git provenance ref, so storing it here keeps that fresh.
     head_sha = _git_head_sha(root_path)
-    stored = conn.execute("SELECT commit_sha FROM collections WHERE id = ?", (collection_id,)).fetchone()
+    stored = conn.execute(
+        "SELECT commit_sha, remote_url FROM collections WHERE id = ?", (collection_id,)).fetchone()
     stored_sha = stored["commit_sha"] if stored else None
+    stored_remote = stored["remote_url"] if stored else None
     if head_sha and stored_sha and head_sha == stored_sha:
+        # Nothing to re-summarize (zero model calls), but backfill git provenance for
+        # collections synced BEFORE remote_url was captured: the short-circuit is the only
+        # path a static-HEAD repo ever takes, so a missing remote_url would otherwise never
+        # be filled (defeating the fetchable-ref lookup in sqlite_store). One-shot, cheap,
+        # and model-call-free — once populated this branch is skipped.
+        if stored_remote is None:
+            remote_url, commit_sha = _git_coordinates(root_path)
+            if commit_sha and remote_url:
+                conn.execute("UPDATE collections SET commit_sha = ?, remote_url = ? WHERE id = ?",
+                             (commit_sha, remote_url, collection_id))
         return {"actions": {"created": 0, "updated": 0, "skipped": 0, "conflict": 0},
                 "deleted": 0, "unchanged": True}
 
@@ -193,9 +215,17 @@ async def sync_repo(conn, relay, settings, ws, source_config, source_id) -> dict
 
     deleted = apply_deletions(conn, source_id, seen_paths)
 
-    # Record the synced commit so the next scan can short-circuit (and so the graph's
-    # git ref points at the code these summaries actually describe).
-    if head_sha:
+    # Record provenance so the graph can hand an agent a resolvable ref back to the exact
+    # code these summaries describe — the whole point of the code-as-index model. Reuses
+    # the one-shot ingest path's helper (clean-tree + toplevel==root + scoped
+    # safe.directory), which returns BOTH remote_url and commit_sha, all-or-nothing.
+    remote_url, commit_sha = _git_coordinates(root_path)
+    if commit_sha:
+        conn.execute("UPDATE collections SET commit_sha = ?, remote_url = ? WHERE id = ?",
+                     (commit_sha, remote_url, collection_id))
+    elif head_sha:
+        # No full provenance (dirty tree / no origin / nested checkout), but HEAD is still
+        # valid for the next scan's short-circuit comparison.
         conn.execute("UPDATE collections SET commit_sha = ? WHERE id = ?", (head_sha, collection_id))
 
     return {"actions": actions, "deleted": deleted}
