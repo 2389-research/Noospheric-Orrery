@@ -156,9 +156,21 @@ async def sync_repo(conn, relay, settings, ws, source_config, source_id) -> dict
     # successful sync, nothing changed — skip codesum entirely (zero model calls). The
     # commit_sha doubles as the git provenance ref, so storing it here keeps that fresh.
     head_sha = _git_head_sha(root_path)
-    stored = conn.execute("SELECT commit_sha FROM collections WHERE id = ?", (collection_id,)).fetchone()
+    stored = conn.execute(
+        "SELECT commit_sha, remote_url FROM collections WHERE id = ?", (collection_id,)).fetchone()
     stored_sha = stored["commit_sha"] if stored else None
+    stored_remote = stored["remote_url"] if stored else None
     if head_sha and stored_sha and head_sha == stored_sha:
+        # Nothing to re-summarize (zero model calls), but backfill git provenance for
+        # collections synced BEFORE remote_url was captured: the short-circuit is the only
+        # path a static-HEAD repo ever takes, so a missing remote_url would otherwise never
+        # be filled (defeating the fetchable-ref lookup in sqlite_store). One-shot, cheap,
+        # and model-call-free — once populated this branch is skipped.
+        if stored_remote is None:
+            remote_url, commit_sha = _git_coordinates(root_path)
+            if commit_sha and remote_url:
+                conn.execute("UPDATE collections SET commit_sha = ?, remote_url = ? WHERE id = ?",
+                             (commit_sha, remote_url, collection_id))
         return {"actions": {"created": 0, "updated": 0, "skipped": 0, "conflict": 0},
                 "deleted": 0, "unchanged": True}
 
