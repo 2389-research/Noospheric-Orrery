@@ -156,6 +156,142 @@ def test_flow_a_creates_agent_report_doc_and_enqueues_extract(tmp_path, monkeypa
         conn.close()
 
 
+# ── Flow B (active-work extraction) ───────────────────────────────────────────
+
+_QID = "qry_" + "a" * 32
+
+
+def _make_ccvault_db_tags(path, entity_tag="ent-auth", query_id=_QID):
+    """One graph-using session whose raw_json carries the #93 tags in a tool_result."""
+    c = sqlite3.connect(path)
+    c.executescript("""
+        CREATE TABLE projects (id INTEGER PRIMARY KEY, path TEXT);
+        CREATE TABLE sessions (id TEXT PRIMARY KEY, project_id INTEGER, started_at TEXT,
+                               turn_count INTEGER, source TEXT);
+        CREATE TABLE turns (id TEXT PRIMARY KEY, session_id TEXT, parent_id TEXT, type TEXT,
+                            timestamp TEXT, content TEXT, raw_json BLOB);
+        CREATE TABLE tool_uses (id INTEGER PRIMARY KEY, turn_id TEXT, session_id TEXT,
+                                tool_name TEXT, timestamp TEXT);
+    """)
+    c.execute("INSERT INTO projects (id, path) VALUES (1, '/home/u/proj-auth')")
+    c.execute("INSERT INTO sessions VALUES ('sess-g', 1, '2026-09-01 10:00:00', 3, 'claude-code')")
+    tu = {"message": {"role": "assistant", "content": [
+        {"type": "text", "text": "Let me look up Auth."},
+        {"type": "tool_use", "id": "tu1", "name": "mcp__noospheric-orrery__get_entity",
+         "input": {"name": "Auth"}}]}}
+    tr = {"message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "tu1",
+         "content": f"Auth (Concept) [entity:{entity_tag}] [query:{query_id}]\nSources: 1 mention"}]}}
+    syn = {"message": {"role": "assistant", "content": [
+        {"type": "text", "text": "Auth relies on token checks in auth.py."}]}}
+    c.execute("INSERT INTO turns VALUES ('g1','sess-g',NULL,'assistant','2026-09-01 10:00:01','Let me look up Auth.', ?)", (json.dumps(tu),))
+    c.execute("INSERT INTO turns VALUES ('g2','sess-g','g1','user','2026-09-01 10:00:02','[tool result]', ?)", (json.dumps(tr),))
+    c.execute("INSERT INTO turns VALUES ('g3','sess-g','g2','assistant','2026-09-01 10:00:03','Auth relies on token checks in auth.py.', ?)", (json.dumps(syn),))
+    c.execute("INSERT INTO tool_uses VALUES (1,'g1','sess-g','mcp__noospheric-orrery__get_entity','2026-09-01 10:00:01')")
+    c.commit()
+    c.close()
+
+
+def _seed_entity(db_path, eid="ent-auth", name="Auth"):
+    conn = get_connection(db_path)
+    conn.execute("INSERT INTO entities (id, canonical_name, type) VALUES (?, ?, 'Concept')", (eid, name))
+    conn.commit()
+    conn.close()
+
+
+def test_reader_graph_work_parses_tags_and_synthesis(tmp_path):
+    arcp = str(tmp_path / "ccvault.db")
+    _make_ccvault_db_tags(arcp)
+    conn = ccvault_reader.open_archive(arcp)
+    try:
+        w = ccvault_reader.graph_work(conn, "sess-g")
+        assert w["query_ids"] == [_QID]
+        assert w["entity_ids"] == {"ent-auth"}
+        assert ("get_entity", {"name": "Auth"}) in w["tool_calls"]
+        assert "token checks" in w["synthesis"]
+    finally:
+        conn.close()
+
+
+def test_flow_b_creates_active_work_doc_linked_to_entity(tmp_path, monkeypatch, test_db):
+    _stub(monkeypatch)
+    arcp = str(tmp_path / "ccvault.db")
+    _make_ccvault_db_tags(arcp)
+    cid = str(uuid.uuid4())
+    _seed_collection(test_db, cid)
+    _seed_entity(test_db, "ent-auth", "Auth")   # the entity resolves in this clone
+
+    asyncio.run(mod.run_ingest_ccvault(_job(arcp, cid, test_db), test_db))
+
+    conn = get_connection(test_db)
+    try:
+        aw = conn.execute(
+            "SELECT id, status, silo_id FROM documents WHERE content_type = 'active_work'").fetchall()
+        assert len(aw) == 1
+        doc = aw[0]
+        assert doc["status"] == "extracted" and doc["silo_id"] == cid
+        # anchored to the entity by a chunk-less entity_sources row (the direct link)
+        link = conn.execute(
+            "SELECT chunk_id, extraction_pass FROM entity_sources WHERE entity_id = 'ent-auth' "
+            "AND document_id = ?", (doc["id"],)).fetchone()
+        assert link is not None and link["chunk_id"] is None and link["extraction_pass"] == "ccvault_flowb"
+        # NO chunk for an active_work doc (entity-channel recall only)
+        assert conn.execute("SELECT COUNT(*) FROM chunks WHERE document_id = ?", (doc["id"],)).fetchone()[0] == 0
+        # the query_id ledger points at the doc
+        pr = conn.execute("SELECT document_id FROM ccvault_processed WHERE query_id = ?", (_QID,)).fetchone()
+        assert pr is not None and pr[0] == doc["id"]
+        # retrieval loop: the entity now lists this active-work doc among its sources
+        got = conn.execute(
+            "SELECT d.id FROM entity_sources es JOIN documents d ON d.id = es.document_id "
+            "WHERE es.entity_id = 'ent-auth' AND d.invalid_at IS NULL AND d.content_type = 'active_work'"
+        ).fetchone()
+        assert got and got[0] == doc["id"]
+    finally:
+        conn.close()
+
+
+def test_flow_b_unanchored_when_entity_absent(tmp_path, monkeypatch, test_db):
+    """Graph-work seen but no tagged entity resolves in this workspace → no active_work doc,
+    but the query_id is still recorded (document_id NULL) so re-ingest won't reprocess it."""
+    _stub(monkeypatch)
+    arcp = str(tmp_path / "ccvault.db")
+    _make_ccvault_db_tags(arcp)
+    cid = str(uuid.uuid4())
+    _seed_collection(test_db, cid)
+    # NOTE: no _seed_entity — ent-auth does not exist here
+
+    asyncio.run(mod.run_ingest_ccvault(_job(arcp, cid, test_db), test_db))
+
+    conn = get_connection(test_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM documents WHERE content_type='active_work'").fetchone()[0] == 0
+        pr = conn.execute("SELECT document_id FROM ccvault_processed WHERE query_id = ?", (_QID,)).fetchone()
+        assert pr is not None and pr[0] is None   # seen, unanchored
+    finally:
+        conn.close()
+
+
+def test_flow_b_reingest_is_noop(tmp_path, monkeypatch, test_db):
+    _stub(monkeypatch)
+    arcp = str(tmp_path / "ccvault.db")
+    _make_ccvault_db_tags(arcp)
+    cid = str(uuid.uuid4())
+    _seed_collection(test_db, cid)
+    _seed_entity(test_db, "ent-auth", "Auth")
+
+    asyncio.run(mod.run_ingest_ccvault(_job(arcp, cid, test_db), test_db))
+    job2 = _job(arcp, cid, test_db)
+    asyncio.run(mod.run_ingest_ccvault(job2, test_db))
+
+    conn = get_connection(test_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM documents WHERE content_type='active_work'").fetchone()[0] == 1
+        res = json.loads(conn.execute("SELECT result FROM jobs WHERE id = ?", (job2["id"],)).fetchone()[0])
+        assert res["active_work_docs"] == 0   # second pass: query_id already processed
+    finally:
+        conn.close()
+
+
 def test_flow_a_reingest_is_noop(tmp_path, monkeypatch, test_db):
     _stub(monkeypatch)
     arcp = str(tmp_path / "ccvault.db")
