@@ -60,8 +60,11 @@ mcp = FastMCP("noospheric-orrery")
 # Read tools emit stable ids alongside the human prose so a Claude Code / Codex
 # session's use of the graph can later be correlated to the exact nodes it touched
 # (session logs persist tool_result content verbatim; ccvault archives it). The tag
-# format MIRRORS the existing `[image:{document_id}]` convention so one grep recovers
-# them all: `[query:qry_…]` on each response header, `[entity:…]` / `[doc:…]` on lines.
+# format MIRRORS the existing `[image:{document_id}]` convention. Recovery is by RESERVED
+# PREFIX only: read ids from `[query:...]`, `[entity:...]`, `[doc:...]` and `[image:...]`
+# (images keep their own prefix), and ignore other bracketed text — document titles are
+# printed in `[...]` and are free-form, so match the prefixes, not any `[...]`. One
+# alternation `\[(query|entity|doc|image):([^\]]+)\]` recovers them all.
 # query_id is minted here (MCP-side) — sufficient to prove the round-trip and, later,
 # handed to the orchestrator as X-Query-Id for a two-sided server-side query log.
 
@@ -77,8 +80,13 @@ def _eid(entity: dict) -> str:
 
 
 def _did(obj: dict) -> str:
-    """Parseable document-id tag; empty string when absent."""
-    v = obj.get("document_id")
+    """Parseable document-id tag; empty string when absent (never raises).
+
+    Accepts either `document_id` (search chunks) or `id` (document/reader payloads,
+    shared-context docs, domain-overview docs) so every doc-bearing shape can use this
+    one helper. Only ever called on document/chunk dicts, where a bare `id` IS the doc id
+    (never on an entity dict, whose `id` is the entity id — those use `_eid`)."""
+    v = obj.get("document_id") or obj.get("id")
     return f" [doc:{v}]" if v else ""
 
 # Session-level workspace selection.
@@ -176,8 +184,11 @@ async def search_knowledge_graph(query: str, top_k: int = 15, include_images: bo
     if "detail" in result and "query" not in result:
         return f"Search error: {result['detail']}"
     lines = [f"Search: \"{result['query']}\" — {result['total_entities']} entities, {result['total_chunks']} chunks [query:{qid}]"]
-    if result.get("sub_queries_used"):
-        lines.append(f"Sub-queries: {', '.join(result['sub_queries_used'])}")
+    subs = result.get("sub_queries_used") or []
+    # With expand=false the pipeline reports the original query as its own sole sub-query;
+    # don't echo it back as a "Sub-queries" line — only show genuine expansion.
+    if subs and subs != [result.get("query")]:
+        lines.append(f"Sub-queries: {', '.join(subs)}")
     lines.append("\nTop entities:")
     for e in result["entities"][:10]:
         paths = ",".join(e.get("paths", []))
@@ -305,7 +316,7 @@ async def get_document(title: str) -> str:
     doc = reader["document"]
     content_type = doc.get("content_type") or match.get("content_type") or "text"
     qid = _new_query_id()
-    lines = [f"Document: {doc['title']} ({content_type}) [doc:{doc['id']}] [query:{qid}]"]
+    lines = [f"Document: {doc['title']} ({content_type}){_did(doc)} [query:{qid}]"]
     if content_type == "image":
         lines.append(f"Image URL: /images/{doc['id']}")
     lines.append(f"Entities: {len(reader['entities'])} | Mentions: {reader['total_mentions']}")
@@ -394,7 +405,7 @@ async def get_shared_context(entity_a: str, entity_b: str) -> str:
     if result["shared_documents"]:
         lines.append("\n  Shared documents:")
         for doc in result["shared_documents"][:8]:
-            lines.append(f"    • {doc['title']}")
+            lines.append(f"    • {doc['title']}{_did(doc)}")
     if result["shared_neighbors"]:
         lines.append("\n  Shared neighbors (entities connected to both):")
         for n in result["shared_neighbors"][:8]:
@@ -473,7 +484,7 @@ async def explore_domain(domain_path: str) -> str:
     # Documents
     lines.append(f"\n  Documents ({len(result['documents'])}):")
     for doc in result["documents"]:
-        lines.append(f"    • {doc['title']} ({doc['content_type']})")
+        lines.append(f"    • {doc['title']} ({doc['content_type']}){_did(doc)}")
     # Entity type distribution
     if result["entity_type_distribution"]:
         lines.append("\n  Entity types:")
