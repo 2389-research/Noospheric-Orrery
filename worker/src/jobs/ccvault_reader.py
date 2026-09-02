@@ -1,0 +1,80 @@
+# ABOUTME: Read a staged ccvault session archive (its SQLite) — the neutral capture layer.
+# ABOUTME: Orrery does ALL interpretation here; ccvault is never mutated. See docs/ccvault-ingestion.md.
+
+import os
+import sqlite3
+
+# The MCP tags emitted by #93 live inside tool_result content; the tool NAME is the
+# detect signal for graph-work (Flow B). Kept here so reader + job agree on the prefix.
+ORRERY_MCP_PREFIX = "mcp__noospheric-orrery__"
+
+
+def resolve_db_path(path: str) -> str:
+    """Accept either a ccvault.db file or a directory that contains one (staged the way
+    repos stage under /data/repos)."""
+    if os.path.isdir(path):
+        cand = os.path.join(path, "ccvault.db")
+        if not os.path.exists(cand):
+            raise FileNotFoundError(f"no ccvault.db under {path}")
+        return cand
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
+    return path
+
+
+def open_archive(path: str) -> sqlite3.Connection:
+    """Open the archive READ-ONLY — we consume ccvault's output, never write to it."""
+    db = resolve_db_path(path)
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def list_sessions(conn: sqlite3.Connection, source: str = "claude-code") -> list[dict]:
+    """Sessions in the archive, oldest first. `source=''` takes all tools; the default
+    limits to Claude Code (Codex has a different tool-call shape — deferred)."""
+    rows = conn.execute(
+        "SELECT s.id AS session_id, p.path AS project_path, s.started_at, "
+        "       s.turn_count, s.source "
+        "FROM sessions s LEFT JOIN projects p ON p.id = s.project_id "
+        "WHERE (? = '' OR s.source = ?) "
+        "ORDER BY s.started_at, s.id",
+        (source, source),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def session_tool_names(conn: sqlite3.Connection, session_id: str) -> set[str]:
+    rows = conn.execute(
+        "SELECT DISTINCT tool_name FROM tool_uses WHERE session_id = ?", (session_id,)
+    ).fetchall()
+    return {r[0] for r in rows if r[0]}
+
+
+def uses_orrery_graph(conn: sqlite3.Connection, session_id: str) -> bool:
+    """True if the session called any orrery MCP tool — the Flow B detect gate."""
+    return any(t.startswith(ORRERY_MCP_PREFIX) for t in session_tool_names(conn, session_id))
+
+
+def session_transcript(conn: sqlite3.Connection, session_id: str, max_chars: int = 24000) -> str:
+    """A compact, readable transcript for summarization.
+
+    Built from the FTS `content` column (ccvault's human-readable extract). Tool blobs are
+    truncated there — fine for a session-level summary, which wants the gist of the work,
+    not full tool payloads (those live in raw_json, used by Flow B). Ordered chronologically
+    and capped head+tail so both the setup and the outcome of a long session survive.
+    """
+    rows = conn.execute(
+        "SELECT type, content FROM turns "
+        "WHERE session_id = ? AND type IN ('user','assistant') "
+        "  AND content IS NOT NULL AND content != '' "
+        "ORDER BY timestamp, id",
+        (session_id,),
+    ).fetchall()
+    parts = [f"[{r['type']}] {r['content'].strip()}" for r in rows if (r["content"] or "").strip()]
+    full = "\n\n".join(parts)
+    if len(full) <= max_chars:
+        return full
+    head = full[: max_chars * 2 // 3]
+    tail = full[-(max_chars // 3):]
+    return f"{head}\n\n…[{len(full) - max_chars} chars elided]…\n\n{tail}"

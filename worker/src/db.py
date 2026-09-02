@@ -318,6 +318,20 @@ CREATE TABLE IF NOT EXISTS watched_sources (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     provenance_kind TEXT          -- neutral_summary|human_vault|agent_report|human_reviewed (task 9)
 );
+-- ccvault ingestion ledgers (docs/ccvault-ingestion.md). Per-workspace dedup so re-ingesting
+-- the same archive is a no-op. ccvault_sessions_seen = Flow A watermark (session summarized here?);
+-- ccvault_processed = Flow B watermark (one row per query_id, so a segment citing several is
+-- deduped per call). document_id points at the agent_report doc the work produced.
+CREATE TABLE IF NOT EXISTS ccvault_sessions_seen (
+    session_id  TEXT PRIMARY KEY,
+    ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS ccvault_processed (
+    query_id    TEXT PRIMARY KEY,
+    session_id  TEXT NOT NULL,
+    document_id TEXT,
+    ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 # Unifies the two silo tables so a consumer resolves a document's provenance kind with
