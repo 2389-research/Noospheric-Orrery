@@ -292,6 +292,99 @@ def test_flow_b_reingest_is_noop(tmp_path, monkeypatch, test_db):
         conn.close()
 
 
+# ── review fixes: robustness ───────────────────────────────────────────────────
+
+class _EmptyRelay:
+    async def complete(self, model, max_tokens, messages):
+        return _Resp("")   # local models can return empty .text without raising
+
+    @classmethod
+    def from_settings(cls, settings, **kw):
+        return cls()
+
+
+def test_missing_primary_domain_falls_back_without_crashing(tmp_path, monkeypatch, test_db):
+    """A local model can classify to {} (no primary_domain). Must not KeyError the job or
+    write a null-path domain — fall back to the unclassified domain like ingest_repo."""
+    async def classify_empty(relay, title, excerpt, existing_taxonomy, model):
+        return {}   # no primary_domain
+    monkeypatch.setattr(mod, "classify_document", classify_empty)
+    monkeypatch.setattr(mod, "Relay", _FakeRelay)
+    arcp = str(tmp_path / "ccvault.db")
+    _make_ccvault_db(arcp)
+    cid = str(uuid.uuid4())
+    _seed_collection(test_db, cid)
+
+    asyncio.run(mod.run_ingest_ccvault(_job(arcp, cid, test_db), test_db))  # must not raise
+
+    conn = get_connection(test_db)
+    try:
+        dom = conn.execute(
+            "SELECT dd.domain_path FROM document_domains dd JOIN documents d ON d.id = dd.document_id "
+            "WHERE d.content_type = 'session_intent'").fetchone()
+        assert dom is not None and dom[0] == mod._UNCLASSIFIED_DOMAIN
+        # no null/empty-path domain node created
+        assert conn.execute("SELECT COUNT(*) FROM domains WHERE path IS NULL OR path = ''").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_empty_model_output_does_not_watermark_so_it_retries(tmp_path, monkeypatch, test_db):
+    """A transient empty summary must NOT watermark the session — else the summary is lost
+    forever. (An empty-INPUT session, by contrast, is still watermarked.)"""
+    monkeypatch.setattr(mod, "Relay", _EmptyRelay)
+    async def fake_classify(relay, title, excerpt, existing_taxonomy, model):
+        return {"primary_domain": "x"}
+    monkeypatch.setattr(mod, "classify_document", fake_classify)
+    arcp = str(tmp_path / "ccvault.db")
+    _make_ccvault_db(arcp)   # sess-1 has content (→ empty model output), sess-2 empty input
+    cid = str(uuid.uuid4())
+    _seed_collection(test_db, cid)
+
+    asyncio.run(mod.run_ingest_ccvault(_job(arcp, cid, test_db), test_db))
+
+    conn = get_connection(test_db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0, "no doc from empty output"
+        seen = {r[0] for r in conn.execute("SELECT session_id FROM ccvault_sessions_seen")}
+        assert "sess-1" not in seen, "empty MODEL output must retry (not watermarked)"
+        assert "sess-2" in seen, "empty INPUT session is still watermarked"
+    finally:
+        conn.close()
+
+
+def test_reader_handles_bytes_rawjson_and_list_toolresult(tmp_path):
+    """Real ccvault stores raw_json as a BLOB (bytes) and Claude Code tool_result content can
+    be a list of text blocks — graph_work must parse tags from both."""
+    p = str(tmp_path / "ccvault.db")
+    c = sqlite3.connect(p)
+    c.executescript("""
+        CREATE TABLE projects(id INTEGER PRIMARY KEY, path TEXT);
+        CREATE TABLE sessions(id TEXT PRIMARY KEY, project_id INTEGER, started_at TEXT, turn_count INTEGER, source TEXT);
+        CREATE TABLE turns(id TEXT PRIMARY KEY, session_id TEXT, parent_id TEXT, type TEXT, timestamp TEXT, content TEXT, raw_json BLOB);
+        CREATE TABLE tool_uses(id INTEGER PRIMARY KEY, turn_id TEXT, session_id TEXT, tool_name TEXT, timestamp TEXT);
+    """)
+    c.execute("INSERT INTO sessions VALUES ('s', 1, '2026-09-01', 2, 'claude-code')")
+    tu = {"message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "x", "name": "mcp__noospheric-orrery__get_entity", "input": {"name": "A"}}]}}
+    # tool_result content as a LIST of text blocks, raw_json stored as BYTES
+    tr = {"message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "x",
+         "content": [{"type": "text", "text": "A (Concept) [entity:ent-x] [query:qry_" + "b" * 32 + "]"}]}]}}
+    c.execute("INSERT INTO turns VALUES ('a','s',NULL,'assistant','t1','', ?)", (json.dumps(tu).encode("utf-8"),))
+    c.execute("INSERT INTO turns VALUES ('b','s','a','user','t2','', ?)", (json.dumps(tr).encode("utf-8"),))
+    c.execute("INSERT INTO tool_uses VALUES (1,'a','s','mcp__noospheric-orrery__get_entity','t1')")
+    c.commit(); c.close()
+
+    conn = ccvault_reader.open_archive(p)
+    try:
+        w = ccvault_reader.graph_work(conn, "s")
+        assert w["entity_ids"] == {"ent-x"}
+        assert w["query_ids"] == ["qry_" + "b" * 32]
+    finally:
+        conn.close()
+
+
 def test_flow_a_reingest_is_noop(tmp_path, monkeypatch, test_db):
     _stub(monkeypatch)
     arcp = str(tmp_path / "ccvault.db")

@@ -19,6 +19,9 @@ from .ccvault_reader import (open_archive, list_sessions, session_transcript,
 # they're linked by entity-id directly — so they carry a terminal status from the start.
 SESSION_CONTENT_TYPE = "session_intent"
 ACTIVE_WORK_CONTENT_TYPE = "active_work"
+# Same fallback ingest_repo uses: a local model can return a payload with no usable
+# primary_domain, and we must not crash the whole archive or write a null-path domain.
+_UNCLASSIFIED_DOMAIN = "unclassified/needs-review"
 
 _SUMMARY_INSTRUCTIONS = (
     "You are summarizing an AI coding-agent session for a knowledge graph. Write a NEUTRAL, "
@@ -144,39 +147,52 @@ async def run_ingest_ccvault(job: dict, db_path: str) -> None:
             if sid in seen:
                 skipped_seen += 1
             else:
-                summary = ""
                 transcript = session_transcript(arc, sid)
-                if transcript.strip():
+                if not transcript.strip():
+                    # Genuinely empty session (no user/assistant text) — nothing to summarize.
+                    # Watermark so we don't keep re-reading it.
+                    conn.execute("INSERT OR IGNORE INTO ccvault_sessions_seen (session_id) VALUES (?)", (sid,))
+                    conn.commit()
+                    seen.add(sid)
+                else:
                     summary = await _summarize_session(relay, model, meta, transcript)
-                if summary:
-                    title = _session_title(meta)
-                    cls = await classify_document(relay=relay, title=title, excerpt=summary[:4000],
-                                                  existing_taxonomy=taxonomy, model=model)
-                    dom = cls["primary_domain"]
-                    if dom not in taxonomy:
-                        taxonomy.append(dom)
-                    doc_id = str(uuid.uuid4())
-                    ch = hashlib.sha256(summary.encode()).hexdigest()
-                    conn.execute(
-                        "INSERT INTO documents (id, title, content, content_hash, source_path, "
-                        "content_type, status, silo_id) VALUES (?, ?, ?, ?, ?, ?, 'classified', ?)",
-                        (doc_id, title, summary, ch, f"ccvault:{sid}", SESSION_CONTENT_TYPE, collection_id))
-                    conn.execute(
-                        "INSERT INTO chunks (id, document_id, chunk_index, text, offset, length) "
-                        "VALUES (?, ?, 0, ?, 0, ?)", (str(uuid.uuid4()), doc_id, summary, len(summary)))
-                    conn.execute(
-                        "INSERT INTO document_collections (document_id, collection_id, parent_path, "
-                        "role, emits_cooccurrence) VALUES (?, ?, NULL, 'leaf', 1)", (doc_id, collection_id))
-                    conn.execute("UPDATE collections SET document_count = document_count + 1 WHERE id = ?",
-                                 (collection_id,))
-                    _upsert_domain(conn, dom)
-                    conn.execute("INSERT INTO document_domains (document_id, domain_path, is_primary, "
-                                 "confidence) VALUES (?, ?, 1, 1.0)", (doc_id, dom))
-                    conn.execute("UPDATE domains SET document_count = document_count + 1 WHERE path = ?", (dom,))
-                    summarized += 1
-                conn.execute("INSERT OR IGNORE INTO ccvault_sessions_seen (session_id) VALUES (?)", (sid,))
-                conn.commit()
-                seen.add(sid)
+                    if not summary:
+                        # Transient EMPTY MODEL OUTPUT (local models can return empty .text
+                        # without raising). Do NOT watermark — let it retry on the next pass
+                        # rather than permanently dropping the summary.
+                        print(f"[ingest_ccvault] session {sid[:8]}: empty summary, will retry", flush=True)
+                    else:
+                        title = _session_title(meta)
+                        cls = await classify_document(relay=relay, title=title, excerpt=summary[:4000],
+                                                      existing_taxonomy=taxonomy, model=model)
+                        dom = cls.get("primary_domain") or _UNCLASSIFIED_DOMAIN
+                        if dom not in taxonomy:
+                            taxonomy.append(dom)
+                        doc_id = str(uuid.uuid4())
+                        ch = hashlib.sha256(summary.encode()).hexdigest()
+                        conn.execute(
+                            "INSERT INTO documents (id, title, content, content_hash, source_path, "
+                            "content_type, status, silo_id) VALUES (?, ?, ?, ?, ?, ?, 'classified', ?)",
+                            (doc_id, title, summary, ch, f"ccvault:{sid}", SESSION_CONTENT_TYPE, collection_id))
+                        conn.execute(
+                            "INSERT INTO chunks (id, document_id, chunk_index, text, offset, length) "
+                            "VALUES (?, ?, 0, ?, 0, ?)", (str(uuid.uuid4()), doc_id, summary, len(summary)))
+                        # emits_cooccurrence=0: an agent_report doc is not neutral co-occurrence
+                        # evidence. The silo gate already excludes it; this is defense-in-depth.
+                        conn.execute(
+                            "INSERT INTO document_collections (document_id, collection_id, parent_path, "
+                            "role, emits_cooccurrence) VALUES (?, ?, NULL, 'leaf', 0)", (doc_id, collection_id))
+                        conn.execute("UPDATE collections SET document_count = document_count + 1 WHERE id = ?",
+                                     (collection_id,))
+                        _upsert_domain(conn, dom)
+                        conn.execute("INSERT INTO document_domains (document_id, domain_path, is_primary, "
+                                     "confidence) VALUES (?, ?, 1, 1.0)", (doc_id, dom))
+                        conn.execute("UPDATE domains SET document_count = document_count + 1 WHERE path = ?", (dom,))
+                        # Watermark in the SAME transaction as the doc (all-or-nothing).
+                        conn.execute("INSERT OR IGNORE INTO ccvault_sessions_seen (session_id) VALUES (?)", (sid,))
+                        conn.commit()
+                        seen.add(sid)
+                        summarized += 1
 
             # ── Flow B: active-work extraction (independent watermark) ────────
             if not uses_orrery_graph(arc, sid):
@@ -189,35 +205,39 @@ async def run_ingest_ccvault(job: dict, db_path: str) -> None:
             if resolved:
                 names = _entity_names(conn, resolved)
                 summary = await _summarize_active_work(relay, model, meta, work, list(names.values()))
-                if summary:
-                    title = f"Active work — session {sid[:8]}"
-                    cls = await classify_document(relay=relay, title=title, excerpt=summary[:4000],
-                                                  existing_taxonomy=taxonomy, model=model)
-                    dom = cls["primary_domain"]
-                    if dom not in taxonomy:
-                        taxonomy.append(dom)
-                    doc_id = str(uuid.uuid4())
-                    ch = hashlib.sha256(summary.encode()).hexdigest()
-                    # Terminal status + NO chunk: an active_work doc is anchored by entity-id,
-                    # not extracted, so it is never picked up by extract_batch and recalled only
-                    # through the entity channel (get_entity lists it among the entity's sources).
-                    conn.execute(
-                        "INSERT INTO documents (id, title, content, content_hash, source_path, "
-                        "content_type, status, silo_id) VALUES (?, ?, ?, ?, ?, ?, 'extracted', ?)",
-                        (doc_id, title, summary, ch, f"ccvault-work:{sid}", ACTIVE_WORK_CONTENT_TYPE, collection_id))
-                    conn.execute(
-                        "INSERT INTO document_collections (document_id, collection_id, parent_path, "
-                        "role, emits_cooccurrence) VALUES (?, ?, NULL, 'leaf', 0)", (doc_id, collection_id))
-                    conn.execute("UPDATE collections SET document_count = document_count + 1 WHERE id = ?",
-                                 (collection_id,))
-                    _upsert_domain(conn, dom)
-                    conn.execute("INSERT INTO document_domains (document_id, domain_path, is_primary, "
-                                 "confidence) VALUES (?, ?, 1, 1.0)", (doc_id, dom))
-                    conn.execute("UPDATE domains SET document_count = document_count + 1 WHERE path = ?", (dom,))
-                    for eid in resolved:  # already a de-duplicated set of resolvable ids
-                        conn.execute("INSERT INTO entity_sources (entity_id, document_id, extraction_pass) "
-                                     "VALUES (?, ?, 'ccvault_flowb')", (eid, doc_id))
-                    flow_b_docs += 1
+                if not summary:
+                    # Resolvable entities but transient EMPTY MODEL OUTPUT — do NOT record the
+                    # query_ids as processed; retry next pass rather than losing the capture.
+                    print(f"[ingest_ccvault] session {sid[:8]}: empty active-work summary, will retry", flush=True)
+                    continue
+                title = f"Active work — session {sid[:8]}"
+                cls = await classify_document(relay=relay, title=title, excerpt=summary[:4000],
+                                              existing_taxonomy=taxonomy, model=model)
+                dom = cls.get("primary_domain") or _UNCLASSIFIED_DOMAIN
+                if dom not in taxonomy:
+                    taxonomy.append(dom)
+                doc_id = str(uuid.uuid4())
+                ch = hashlib.sha256(summary.encode()).hexdigest()
+                # Terminal status + NO chunk: an active_work doc is anchored by entity-id,
+                # not extracted, so it is never picked up by extract_batch and recalled only
+                # through the entity channel (get_entity lists it among the entity's sources).
+                conn.execute(
+                    "INSERT INTO documents (id, title, content, content_hash, source_path, "
+                    "content_type, status, silo_id) VALUES (?, ?, ?, ?, ?, ?, 'extracted', ?)",
+                    (doc_id, title, summary, ch, f"ccvault-work:{sid}", ACTIVE_WORK_CONTENT_TYPE, collection_id))
+                conn.execute(
+                    "INSERT INTO document_collections (document_id, collection_id, parent_path, "
+                    "role, emits_cooccurrence) VALUES (?, ?, NULL, 'leaf', 0)", (doc_id, collection_id))
+                conn.execute("UPDATE collections SET document_count = document_count + 1 WHERE id = ?",
+                             (collection_id,))
+                _upsert_domain(conn, dom)
+                conn.execute("INSERT INTO document_domains (document_id, domain_path, is_primary, "
+                             "confidence) VALUES (?, ?, 1, 1.0)", (doc_id, dom))
+                conn.execute("UPDATE domains SET document_count = document_count + 1 WHERE path = ?", (dom,))
+                for eid in resolved:  # already a de-duplicated set of resolvable ids
+                    conn.execute("INSERT INTO entity_sources (entity_id, document_id, extraction_pass) "
+                                 "VALUES (?, ?, 'ccvault_flowb')", (eid, doc_id))
+                flow_b_docs += 1
             if doc_id is None:
                 flow_b_unanchored += 1  # graph-work seen but nothing resolved to anchor it
             # Mark every query_id in the segment (INSERT OR IGNORE — one row per id),
@@ -228,9 +248,20 @@ async def run_ingest_ccvault(job: dict, db_path: str) -> None:
                 processed.add(q)
             conn.commit()
 
-        if summarized:
-            # Phase 2: extract entities over the new session-summary docs only. Flow B docs
-            # are deliberately excluded (different content_type; already linked).
+        # Phase 2: extract entities over session-summary docs. Gate on the DB, not the
+        # in-memory counter: if a prior run committed session docs per-session but died
+        # before this enqueue, those docs are durably 'classified' with no extraction job,
+        # and a re-ingest (all sessions watermarked → summarized==0) would never repair
+        # them. Enqueue whenever any session_intent doc is still 'classified'; a redundant
+        # extract_batch is a harmless no-op (nothing left in scope). Flow B docs are excluded
+        # (different content_type, already linked). Skip if one is already pending.
+        stranded = conn.execute(
+            "SELECT 1 FROM documents WHERE content_type = ? AND status = 'classified' LIMIT 1",
+            (SESSION_CONTENT_TYPE,)).fetchone()
+        pending = conn.execute(
+            "SELECT 1 FROM jobs WHERE type = 'extract_batch' AND status IN ('queued','running') LIMIT 1"
+        ).fetchone()
+        if stranded and not pending:
             conn.execute(
                 "INSERT INTO jobs (id, type, target, status, config) VALUES (?, 'extract_batch', ?, 'queued', ?)",
                 (str(uuid.uuid4()), collection_id, json.dumps({"spec_id": spec_id, "scope": SESSION_CONTENT_TYPE})))
