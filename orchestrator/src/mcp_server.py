@@ -13,7 +13,7 @@ Tools — Session:
 - select_noosphere(name_or_id) — set active workspace for subsequent calls
 
 Tools — Search & Read:
-- search_knowledge_graph(query, top_k, include_images) — semantic search over entities and chunks (optionally cross-modal image hits)
+- search_knowledge_graph(query, top_k, include_images, expand) — semantic search over entities and chunks (optionally cross-modal image hits; expand=True adds LLM query enrichment)
 - search_images(query, top_k) — SigLIP cross-modal image search
 - get_entity(name) — look up entity details, sources, co-occurrences
 - get_document(title) — read a document with entity highlights (notes content_type for image docs)
@@ -162,14 +162,17 @@ async def select_noosphere(name_or_id: str) -> str:
 # ── Search & Read ───────────────────────────────────────────────────────────
 
 @mcp.tool()
-async def search_knowledge_graph(query: str, top_k: int = 15, include_images: bool = False) -> str:
+async def search_knowledge_graph(query: str, top_k: int = 15, include_images: bool = False, expand: bool = False) -> str:
     """Search the knowledge graph for entities and document chunks matching a query.
     Returns ranked entities with types and relevant document excerpts.
     Set include_images=True to also surface visually-matching image documents via SigLIP cross-modal search.
+    Set expand=True to LLM-generate sub-queries for higher recall — off by default because it adds
+    latency and depends on the LLM backend being reachable (plain semantic search does not).
     The galaxy visualization will light up showing where the results live in the graph."""
     inc = "true" if include_images else "false"
+    exp = "true" if expand else "false"
     qid = _new_query_id()
-    result = await call_api(f"/search?q={quote(query)}&top_k={top_k}&expand=true&include_images={inc}")
+    result = await call_api(f"/search?q={quote(query)}&top_k={top_k}&expand={exp}&include_images={inc}")
     if "detail" in result and "query" not in result:
         return f"Search error: {result['detail']}"
     lines = [f"Search: \"{result['query']}\" — {result['total_entities']} entities, {result['total_chunks']} chunks [query:{qid}]"]
