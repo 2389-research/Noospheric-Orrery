@@ -4,7 +4,7 @@
 
 from collections import defaultdict, deque
 from fastapi import APIRouter, HTTPException, Depends, Query
-from ..dependencies import get_auth_store, AuthStore
+from ..dependencies import get_auth_store, AuthStore, query_id
 from ..broadcast import broadcast_search
 from ..repositories.graph_reads import (_chunks, domain_neighbours, entities_in_domain,
                                          entity_by_name, entity_silos)
@@ -105,6 +105,7 @@ async def get_neighborhood(
     depth: int = Query(1, ge=1, le=3),
     max_nodes: int = Query(30, ge=1, le=100),
     auth: AuthStore = Depends(get_auth_store),
+    qid: str = Depends(query_id),
 ):
     """Multi-hop neighborhood around an entity. Returns nodes and edges within `depth` hops.
 
@@ -183,6 +184,7 @@ async def get_neighborhood(
 
     seed_sinfo = silo_info.get(seed_id, {})
     result = {
+        "query_id": qid,
         "seed": {"id": seed_id, "name": entity.canonical_name, "type": entity.type,
                  "silo_id": seed_sinfo.get("silo_id"), "kind": seed_sinfo.get("kind")},
         "depth": depth,
@@ -207,6 +209,7 @@ async def get_shared_context(
     a: str | None = Query(None, description="First entity id or name; prefer this."),
     b: str | None = Query(None, description="Second entity id or name; prefer this."),
     auth: AuthStore = Depends(get_auth_store),
+    qid: str = Depends(query_id),
 ):
     """Find shared context between two entities: shared documents, shared neighbors, shared domains."""
     store = auth.store
@@ -270,6 +273,7 @@ async def get_shared_context(
     store.close()
 
     result = {
+        "query_id": qid,
         "entity_a": {"id": ea.id, "name": ea.canonical_name, "type": ea.type},
         "entity_b": {"id": eb.id, "name": eb.canonical_name, "type": eb.type},
         "direct_weight": direct_weight,
@@ -299,6 +303,7 @@ async def find_paths(
     b: str | None = Query(None, description="Second entity id or name; prefer this."),
     max_depth: int = Query(4, ge=1, le=6),
     auth: AuthStore = Depends(get_auth_store),
+    qid: str = Depends(query_id),
 ):
     """Find shortest path(s) between two entities through co-occurrence edges."""
     store = auth.store
@@ -366,6 +371,7 @@ async def find_paths(
     store.close()
 
     result = {
+        "query_id": qid,
         "entity_a": {"id": ea.id, "name": ea.canonical_name, "type": ea.type},
         "entity_b": {"id": eb.id, "name": eb.canonical_name, "type": eb.type},
         "paths": resolved_paths,
@@ -388,6 +394,7 @@ async def find_paths(
 async def get_subgraph(
     body: dict,
     auth: AuthStore = Depends(get_auth_store),
+    qid: str = Depends(query_id),
 ):
     """Get the subgraph connecting a set of entities. Pass {"entity_names": [...], "max_hops": 1}."""
     store = auth.store
@@ -454,6 +461,7 @@ async def get_subgraph(
     store.close()
 
     result = {
+        "query_id": qid,
         "seeds": list(seeds.values()),
         "nodes": list(all_nodes.values()),
         "edges": final_edges,
@@ -473,6 +481,7 @@ async def get_subgraph(
 async def explore_domain(
     domain_path: str,
     auth: AuthStore = Depends(get_auth_store),
+    qid: str = Depends(query_id),
 ):
     """Overview of a domain: top entities, entity type distribution, document list, related domains."""
     store = auth.store
@@ -520,6 +529,7 @@ async def explore_domain(
     store.close()
 
     result = {
+        "query_id": qid,
         "domain": {"path": domain_path, "document_count": len(documents), "spec_version": domain.spec_version},
         "documents": documents,
         "top_entities": top_entities,
@@ -540,6 +550,7 @@ def domain_neighbours_route(
     domain_path: str,
     limit: int = 10,
     auth: AuthStore = Depends(get_auth_store),
+    qid: str = Depends(query_id),
 ):
     """Domains sharing entities with `domain_path`, strongest first.
 

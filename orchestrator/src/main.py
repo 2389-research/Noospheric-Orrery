@@ -125,17 +125,14 @@ app = FastAPI(title="Orrery", lifespan=lifespan)
 
 
 # ── Query correlation id (issue #93; owned by the API, not any one client) ─────
-# Every read mints a `query_id` and returns it — in an `X-Query-Id` header AND injected
-# into the top-level JSON body — so ANY caller (the MCP, a bare `curl`, an SDK) gets a
-# stable handle it can log and later correlate to the graph nodes it touched. This is the
-# authoritative source of the id; the MCP surfaces this rather than minting its own.
-# Entity ids already ride in the response bodies; this adds the correlation id beside them.
-import json as _json
+# Every request mints a `query_id`, stashed on request.state and returned in the `X-Query-Id`
+# header. The capture-relevant READ routes (search / entity / graph reads / document reads)
+# ALSO put it in their JSON body via the `query_id` dependency — so a bare `curl` (which won't
+# see a header without -i) still logs it beside the entity ids already in the body. The
+# middleware itself never touches a response body: it only sets the header. This keeps file
+# downloads, lists, streams, and error responses untouched — nothing to buffer or re-serialize.
 import uuid as _uuid
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response as _Response
-
-_QUERY_ID_MAX_INJECT_BYTES = 1_000_000  # skip body-injection for huge payloads (e.g. /graph); header still set
 
 
 class QueryIdMiddleware(BaseHTTPMiddleware):
@@ -144,41 +141,9 @@ class QueryIdMiddleware(BaseHTTPMiddleware):
         request.state.query_id = qid
         response = await call_next(request)
         response.headers["X-Query-Id"] = qid
-        # Only worth injecting into read (GET) JSON bodies; writes have their own ids.
-        if request.method != "GET":
-            return response
-        ctype = response.headers.get("content-type", "")
-        if not ctype.startswith("application/json"):
-            return response
-        # NEVER touch a file/streamed body. `GET /documents/{id}/file` serves a .ipynb as a
-        # FileResponse with media_type=application/json — buffering + re-serializing it would
-        # inject a spurious top-level key and re-encode the bytes, corrupting the raw file (a
-        # hash/nbformat check would then fail). FileResponse sets `accept-ranges: bytes`;
-        # JSONResponse does not — so this cleanly skips downloads while the header still carries qid.
-        if response.headers.get("accept-ranges"):
-            return response
-        clen = int(response.headers.get("content-length") or 0)
-        if clen and clen > _QUERY_ID_MAX_INJECT_BYTES:
-            return response  # too big to reparse (the /graph viz payload) — header carries it
-        body = b"".join([chunk async for chunk in response.body_iterator])
-        try:
-            data = _json.loads(body)
-        except Exception:
-            data = None
-        if isinstance(data, dict) and "query_id" not in data:
-            data["query_id"] = qid
-            body = _json.dumps(data, default=str).encode()
-        # body_iterator is now consumed — rebuild the response either way (preserve any
-        # background task the route attached).
-        new = _Response(content=body, status_code=response.status_code, media_type="application/json",
-                        background=response.background)
-        for k, v in response.headers.items():
-            if k.lower() != "content-length":
-                new.headers[k] = v
-        return new
+        return response
 
 
-# Runs INNERMOST (added before gzip) so it sees the raw JSON before compression.
 app.add_middleware(QueryIdMiddleware)
 
 # The graph payload is large and highly repetitive, and nothing was compressing it:

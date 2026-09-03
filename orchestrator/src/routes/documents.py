@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse, PlainTextResponse
-from ..dependencies import get_auth_store, AuthStore
+from ..dependencies import get_auth_store, AuthStore, query_id
 from ..repositories.factory import get_store
 from ..pipeline.file_extractor import (
     TEXT_EXTENSIONS, PDF_EXTENSIONS, DOCX_EXTENSIONS, NOTEBOOK_EXTENSIONS,
@@ -32,7 +32,7 @@ def list_documents(limit: int = 50, offset: int = 0, auth: AuthStore = Depends(g
     return result
 
 @router.get("/documents/{document_id}")
-def get_document(document_id: str, auth: AuthStore = Depends(get_auth_store)):
+def get_document(document_id: str, auth: AuthStore = Depends(get_auth_store), qid: str = Depends(query_id)):
     store = auth.store
     doc = store.documents.get(document_id)
     if not doc:
@@ -55,6 +55,7 @@ def get_document(document_id: str, auth: AuthStore = Depends(get_auth_store)):
         "silo_id": doc.silo_id, "kind": kind,
         "domains": [{"path": d.domain_path, "is_primary": d.is_primary, "confidence": d.confidence} for d in domains],
         "entities": [{"id": e.id, "canonical_name": e.canonical_name, "type": e.type} for e in entities],
+        "query_id": qid,
     }
 
 

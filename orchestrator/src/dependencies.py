@@ -13,10 +13,18 @@ Usage:
 """
 
 from dataclasses import dataclass
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from .auth import get_current_user, AuthUser
 from .repositories.factory import get_store
 from .repositories.interfaces import DataStore
+
+
+def query_id(request: Request) -> str:
+    """The per-request correlation id minted by QueryIdMiddleware (issue #93). Capture-relevant
+    READ routes depend on this and include it in their JSON body, so a session log (MCP or a bare
+    curl) can correlate the call to the graph nodes it returned. Falls back to '' if the middleware
+    isn't in the stack (e.g. a direct ASGI test)."""
+    return getattr(request.state, "query_id", "") or ""
 
 
 @dataclass
