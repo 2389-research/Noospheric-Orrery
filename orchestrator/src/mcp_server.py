@@ -39,14 +39,13 @@ Tools — Corrections (write; human-gated):
 
 Machine-traceable ids (issue #93): every read tool emits stable ids alongside the prose so
 a session's graph use can be correlated to the exact nodes it touched from its own log —
-`[query:qry_…]` (per-call correlation id, minted here) on each response header, and
-`[entity:…]` / `[doc:…]` on the lines (mirrors the pre-existing `[image:{document_id}]`).
-See _new_query_id / _eid / _did below and tests/test_mcp_capture_ids.py.
+`[query:qry_…]` (the API-owned correlation id, SURFACED from the response body — the MCP never
+mints its own), and `[entity:…]` / `[doc:…]` on the lines (mirrors `[image:{document_id}]`).
+See _query_tag / _eid / _did below and tests/test_mcp_capture_ids.py.
 """
 
 import os
 import json
-import uuid
 import httpx
 from mcp.server.fastmcp import FastMCP
 from urllib.parse import quote
@@ -65,12 +64,16 @@ mcp = FastMCP("noospheric-orrery")
 # (images keep their own prefix), and ignore other bracketed text — document titles are
 # printed in `[...]` and are free-form, so match the prefixes, not any `[...]`. One
 # alternation `\[(query|entity|doc|image):([^\]]+)\]` recovers them all.
-# query_id is minted here (MCP-side) — sufficient to prove the round-trip and, later,
-# handed to the orchestrator as X-Query-Id for a two-sided server-side query log.
+# The `query_id` is OWNED BY THE API (issue #93): every read endpoint mints it and returns it
+# in the response body (and an X-Query-Id header). The MCP SURFACES that id — it never mints its
+# own — so an MCP call and a bare `curl` to the same endpoint reference one id-space, and the
+# server-side query_log (future) is the single source of truth.
 
-def _new_query_id() -> str:
-    """A per-call correlation id. Prefixed so it's unmistakable when grepping a transcript."""
-    return f"qry_{uuid.uuid4().hex}"
+def _query_tag(result) -> str:
+    """The server's per-request correlation id, surfaced from the response body. Empty string
+    when the endpoint didn't return one (e.g. list endpoints, or an error) — never minted here."""
+    qid = result.get("query_id") if isinstance(result, dict) else None
+    return f" [query:{qid}]" if qid else ""
 
 
 def _eid(entity: dict) -> str:
@@ -179,11 +182,10 @@ async def search_knowledge_graph(query: str, top_k: int = 15, include_images: bo
     The galaxy visualization will light up showing where the results live in the graph."""
     inc = "true" if include_images else "false"
     exp = "true" if expand else "false"
-    qid = _new_query_id()
     result = await call_api(f"/search?q={quote(query)}&top_k={top_k}&expand={exp}&include_images={inc}")
     if "detail" in result and "query" not in result:
         return f"Search error: {result['detail']}"
-    lines = [f"Search: \"{result['query']}\" — {result['total_entities']} entities, {result['total_chunks']} chunks [query:{qid}]"]
+    lines = [f"Search: \"{result['query']}\" — {result['total_entities']} entities, {result['total_chunks']} chunks{_query_tag(result)}"]
     subs = result.get("sub_queries_used") or []
     # With expand=false the pipeline reports the original query as its own sole sub-query;
     # don't echo it back as a "Sub-queries" line — only show genuine expansion.
@@ -222,14 +224,13 @@ async def search_images(query: str, top_k: int = 10) -> str:
     matches the text query — pictures of "miniature painting", "city street", "fish tank",
     etc., even when the query text doesn't appear in the image description.
     Falls back to sentence-transformer text similarity on descriptions if SigLIP is unavailable."""
-    qid = _new_query_id()
     result = await call_api(f"/search?q={quote(query)}&top_k={top_k}&expand=false&include_images=true")
     if "detail" in result and "query" not in result:
         return f"Image search error: {result['detail']}"
     images = result.get("images") or []
     if not images:
         return f"No image documents matched \"{query}\"."
-    lines = [f"Image search: \"{query}\" — {len(images)} matches [query:{qid}]"]
+    lines = [f"Image search: \"{query}\" — {len(images)} matches{_query_tag(result)}"]
     for img in images:
         lines.append(f"  [image:{img['document_id']}] {img['title']} (score {img.get('score', 0):.3f})")
         desc = (img.get('description') or '').strip()
@@ -267,7 +268,6 @@ async def get_entity(name: str) -> str:
         if seed.get("status") == 404:
             return f"Entity '{name}' not found"
         return f"Error looking up '{name}': {seed['detail']}"
-    qid = _new_query_id()
     entity_id = seed["seed"]["id"]
     detail = await call_api(f"/entities/{entity_id}")
     if isinstance(detail, dict) and "canonical_name" not in detail:
@@ -278,7 +278,7 @@ async def get_entity(name: str) -> str:
         # Distinguish "fetch failed" from "no co-occurrences" so the agent isn't misled.
         cooc_warning = coocs["detail"]
         coocs = []
-    lines = [f"{detail['canonical_name']} ({detail['type']}) [entity:{entity_id}] [query:{qid}]"]
+    lines = [f"{detail['canonical_name']} ({detail['type']}) [entity:{entity_id}]{_query_tag(detail)}"]
     lines.append(f"Sources: {len(detail['sources'])} mentions across {len(set(s['document_id'] for s in detail['sources']))} docs")
     # Silo + kind per source (task 11a) — resolved live by the orchestrator on every
     # call, so a source re-classified after ingest is reflected immediately here too.
@@ -315,8 +315,7 @@ async def get_document(title: str) -> str:
         return f"Error reading document: {reader['detail']}"
     doc = reader["document"]
     content_type = doc.get("content_type") or match.get("content_type") or "text"
-    qid = _new_query_id()
-    lines = [f"Document: {doc['title']} ({content_type}){_did(doc)} [query:{qid}]"]
+    lines = [f"Document: {doc['title']} ({content_type}){_did(doc)}{_query_tag(reader)}"]
     if content_type == "image":
         lines.append(f"Image URL: /images/{doc['id']}")
     lines.append(f"Entities: {len(reader['entities'])} | Mentions: {reader['total_mentions']}")
@@ -347,8 +346,7 @@ async def list_entities(type: str = "", limit: int = 20) -> str:
     if type:
         path += f"&type={type}"
     entities = await call_api(path)
-    qid = _new_query_id()
-    lines = [f"Entities ({len(entities)}): [query:{qid}]\n"]
+    lines = [f"Entities ({len(entities)}):{_query_tag(entities)}\n"]
     for e in entities:
         lines.append(f"  • {e['canonical_name']} ({e['type']}) — {e['source_count']} sources{_eid(e)}")
     return "\n".join(lines)
@@ -364,12 +362,11 @@ async def get_neighborhood(entity_name: str, depth: int = 1, max_nodes: int = 20
     result = await call_api(f"/graph/neighborhood?name={quote(entity_name, safe='')}&depth={depth}&max_nodes={max_nodes}")
     if "detail" in result:
         return f"Error: {result['detail']}"
-    qid = _new_query_id()
     seed = result["seed"]
     seed_kind = seed.get("kind") or "unspecified kind"
     seed_silo = seed.get("silo_id") or "no silo"
     lines = [f"Neighborhood of {seed['name']} ({seed['type']}) [{seed_silo}, {seed_kind}]{_eid(seed)} — "
-             f"{result['node_count']} nodes, {result['edge_count']} edges, depth {result['depth']} [query:{qid}]"]
+             f"{result['node_count']} nodes, {result['edge_count']} edges, depth {result['depth']}{_query_tag(result)}"]
     # Group nodes by depth
     by_depth: dict[int, list] = {}
     for n in result["nodes"]:
@@ -395,10 +392,9 @@ async def get_shared_context(entity_a: str, entity_b: str) -> str:
     result = await call_api(f"/graph/shared-context?a={quote(entity_a, safe='')}&b={quote(entity_b, safe='')}")
     if "detail" in result:
         return f"Error: {result['detail']}"
-    qid = _new_query_id()
     ea, eb = result["entity_a"], result["entity_b"]
     summary = result["summary"]
-    lines = [f"Shared context: {ea['name']} ({ea['type']}){_eid(ea)} ↔ {eb['name']} ({eb['type']}){_eid(eb)} [query:{qid}]"]
+    lines = [f"Shared context: {ea['name']} ({ea['type']}){_eid(ea)} ↔ {eb['name']} ({eb['type']}){_eid(eb)}{_query_tag(result)}"]
     if result["direct_weight"]:
         lines.append(f"  Direct co-occurrence weight: {result['direct_weight']}")
     lines.append(f"  {summary['docs_in_common']} shared documents, {summary['neighbors_in_common']} shared neighbors, {summary['domains_in_common']} shared domains")
@@ -422,9 +418,8 @@ async def find_paths(entity_a: str, entity_b: str, max_depth: int = 4) -> str:
     result = await call_api(f"/graph/paths?a={quote(entity_a, safe='')}&b={quote(entity_b, safe='')}&max_depth={max_depth}")
     if "detail" in result:
         return f"Error: {result['detail']}"
-    qid = _new_query_id()
     ea, eb = result["entity_a"], result["entity_b"]
-    lines = [f"Paths: {ea['name']} → {eb['name']} — {result['path_count']} path(s) found (searched up to depth {result['searched_depth']}) [query:{qid}]"]
+    lines = [f"Paths: {ea['name']} → {eb['name']} — {result['path_count']} path(s) found (searched up to depth {result['searched_depth']}){_query_tag(result)}"]
     if not result["paths"]:
         lines.append("  No path found within the search depth.")
     for i, path in enumerate(result["paths"]):
@@ -440,9 +435,8 @@ async def get_subgraph(entity_names: list[str], max_hops: int = 1) -> str:
     result = await call_api("/graph/subgraph", method="POST", body={"entity_names": entity_names, "max_hops": max_hops})
     if "detail" in result:
         return f"Error: {result['detail']}"
-    qid = _new_query_id()
     seed_names = [s["name"] for s in result["seeds"]]
-    lines = [f"Subgraph around {len(result['seeds'])} seeds: {', '.join(seed_names)} [query:{qid}]"]
+    lines = [f"Subgraph around {len(result['seeds'])} seeds: {', '.join(seed_names)}{_query_tag(result)}"]
     lines.append(f"  {result['node_count']} nodes, {result['edge_count']} edges (max_hops={max_hops})")
     # Show seeds
     lines.append("\n  Seed entities:")
@@ -476,11 +470,10 @@ async def explore_domain(domain_path: str) -> str:
     result = await call_api(f"/graph/domain-overview/{quote(domain_path, safe='/')}")
     if "detail" in result:
         return f"Error: {result['detail']}"
-    qid = _new_query_id()
     domain = result["domain"]
     lines = [f"Domain: {domain['path']} — {domain['document_count']} documents" +
              (f", spec v{domain['spec_version']}" if domain.get("spec_version") else ", no spec") +
-             f" [query:{qid}]"]
+             _query_tag(result)]
     # Documents
     lines.append(f"\n  Documents ({len(result['documents'])}):")
     for doc in result["documents"]:
