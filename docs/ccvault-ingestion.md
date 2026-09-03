@@ -86,71 +86,62 @@ between `worker/src/silo.py` and `orchestrator/src/pipeline/silo.py`** (enforced
 resolves `resolve_kind(flow_default_kind("ccvault"), override)`, and `backfill_provenance_kind`
 derives from the same map, so both paths get `agent_report` for free once the key exists.
 
-## The two flows
+## A session is recursively summarized (one silo; group over leaves)
 
-One ingest trigger runs both, over the sessions in the staged artifact, into the clone.
+**silo vs kind — orthogonal, both at the silo level.** `silo` = *where it came from + which flow*
+(the `documents.silo_id` → one `ccvault` collection, same as a vault is one silo or a repo is one
+silo). `kind` = *how reputable / what made it* (`provenance_kind = agent_report` — an agent's own
+account, not neutral evidence). **All ccvault sessions live in the ONE ccvault silo**, all
+`agent_report`. Sessions and segments are **structure inside** that silo (collection roles), never
+their own silos or kinds.
 
-### Flow A — session summarization (the tracker-run analogue)
+A Claude Code session has internal structure (turns, tool calls), so it is **recursively
+summarized like a repo** (`codesum`: file→module→repo): framing flows down, evidence flows up.
+Mapped onto `document_collections(role, parent_path, emits_cooccurrence)` inside the one ccvault
+collection:
 
-A Claude Code session has internal structure (turn clusters, tool calls, results), like a tracker
-run has rounds/steps. So a session plays the structural role a repo/run plays — it is
-**recursively summarized** (turn-clusters → per-cluster summary → session summary). This is a
-*pattern* borrowed from codesum/tracksum (bounded, non-agentic relay summarization with the
-extraction model, **neutral / no judgment**), **not** a reuse of their code — codesum summarizes a
-filesystem and tracksum summarizes tracker activity; neither understands ccvault turn-clusters, so
-Flow A needs new session-summarization code in that shape.
+- **`leaf` = a segment.** `iter_segments` (`ccvault_reader.py`) partitions the session into ordered
+  ~`target_chars` segments; each is summarized **node-locally** (bounded, non-agentic
+  `relay.complete`, neutral, no judgment — a *pattern* borrowed from codesum/tracksum, **new code**,
+  not a reuse). `parent_path` = the session's title (so leaves bucket under their session).
+- **`group` = the session rollup.** One summary composed over the segment summaries; the session is
+  **classified once** on this rollup and the whole tree shares that domain.
+- **Segment order lives on edges, not the tree:** consecutive segment leaves are joined by a
+  `collection_edges` `type='turn_next'` (like tracker-run `chain_next`), never via `parent_path`.
+- **`emits_cooccurrence = 0`** for every ccvault doc — an `agent_report` account is not neutral
+  co-occurrence evidence (`recompute_cooccurrence` also gates the `agent_report` silo regardless).
 
-- Output: `agent_report` documents (a dedicated `content_type`, e.g. `session_intent`), classified
-  via `classify_document`, then `extract_batch` enqueued scoped to that content_type — identical
-  downstream to `ingest_tracker_runs`, but **not** sharing the repo/tracker `code_intent` scope
-  (so an unrelated repo ingest's batch never sweeps ccvault docs, and vice-versa).
-- Dedup unit: the **session** (has this session already been summarized in this clone?).
+### Active work is a *leaf type*, not a separate doc
 
-Scope of Flow A is deliberately open — we cannot predict what a session contains, so early testing
-runs it into the clone and filters later (by project, size, or excluding pure-debugging sessions).
+A segment that reached the graph (carries `query_id`/entity ids) becomes an **`active_work` leaf**
+instead of a neutral one — it sits at `parent_path = session title` right beside the neutral segment
+leaves, part of the same recursive tree:
 
-### Flow B — active-work extraction (the recursive graph loop)
+- **Detect graph-work per segment** from the correlation id the API returns — captured from BOTH
+  shapes: MCP reserved-prefix tags (`[entity:…]`/`[query:…]`) AND raw orrery-API JSON in a `Bash`
+  tool result (bare `curl`/SDK). One `qry_[0-9a-f]{32}` regex recovers the `query_id` from either
+  form; a JSON walk harvests entity ids from bare responses. (Recovery of `[entity:]`/`[doc:]` tags
+  is by reserved prefix only — titles are printed bracketed.)
+- **Anchor by DIRECT entity-id link, not re-extraction.** The resolved entity ids get `entity_sources`
+  rows (chunk-less) to the already-existing nodes; the `active_work` leaf carries terminal
+  `status='extracted'` so `extract_batch` never sweeps it and never re-derives entities from prose.
+- **Recall two ways:** the entity channel (search → entity → its `active_work` sources) AND semantic
+  search — the leaf still gets one chunk (the summary), lazily embedded by the search layer.
+- A graph segment whose ids **don't resolve** in this silo degrades to a **neutral `session_intent`
+  leaf** (still captured/searchable/extracted), with its `query_id` recorded so it isn't reprocessed.
 
-Within the same pass, detect the segments where the agent worked **against the Orrery graph** and
-turn each into an entity-anchored artifact.
+### Extraction & dedup
 
-- **Detect:** sessions/turns whose `tool_uses.tool_name` is `mcp__noospheric-orrery__*`, and whose
-  `raw_json` carries `[query:…]` tags.
-- **Slice the unit of work:** `tool_use → tool_result → the following assistant turns` where the
-  agent synthesized from the results (the slice `pipeline_extract.py` proved out).
-- **Record ids:** parse `[query:qry_…]`, `[entity:…]`, `[doc:…]`, `[image:…]` from `raw_json` by
-  **reserved prefix** (per the #93 contract; do not match arbitrary `[...]`, since titles are
-  printed bracketed). Alternation: `\[(query|entity|doc|image):([^\]]+)\]`.
-- **Summarize neutrally:** an "active work" summary of what the agent learned/did with the graph.
-- **Anchor by DIRECT entity-id link, not re-extraction.** We already hold the exact `[entity:…]`
-  ids, and they resolve in the clone (it's a copy of the queried graph). So the Flow B doc attaches
-  to those existing nodes directly (write `entity_sources` rows linking the new doc to the known
-  entity ids) — it must **not** go through `extract_batch`, which would mint fresh silo-local
-  entities and, under silo-scoped normalization, never link back to the originals. Ids that don't
-  resolve in the clone (stale/deleted, or a different source workspace) are dropped with a note.
-- **Store:** an `agent_report` document, linked to the resolved entity ids. Give it a **terminal
-  `status`** after linking (`documents.create` defaults `status='pending'`; a Flow B doc skips
-  extraction, so set it complete explicitly or it lingers `pending` and skews status counts).
+- **Neutral leaves + the group rollup are `session_intent`** → `extract_batch` (scope `session_intent`,
+  a dedicated content_type so ccvault and repo/tracker batches never sweep each other). `active_work`
+  leaves are excluded (entity-linked already).
+- **Dedup:** per-session `ccvault_sessions_seen` (the whole tree is written or not), plus a per-`query_id`
+  `ccvault_processed` ledger for the graph segments. `query_id` is unique per call, so re-ingest is a
+  no-op — the same discipline the watched-source sync uses (`commit_sha`/mtime). Empty MODEL output
+  does NOT watermark (retry next pass); empty INPUT sessions do.
 
-**How Flow B docs are recalled — two paths.** (1) **Entity channel:** the doc is linked to the
-exact entities it analyzed, so search → entity → `get_entity`/`/entities/{id}` sources → the doc.
-(2) **Semantic:** the doc also gets ONE chunk (the summary), and the orchestrator's search layer
-lazily embeds any chunk with no embedding — so the summary text itself surfaces in semantic search.
-Anchoring still uses the DIRECT entity-id links (not the chunk), so the doc is never run through
-`extract_batch` and never re-derives entities from its prose; the chunk is purely for recall.
-Co-occurrence stays gated regardless (agent_report silo + `emits_cooccurrence=0`). Recursive
-PARTITIONING of a long session's work into multiple segment chunks (à la tracker-run rollup) is a
-further refinement, not required for recall.
-
-Note: linking a Flow B doc to a pre-existing formal entity adds the `ccvault`/`agent_report` silo to
-that entity's silo membership (its `entity_sources` gains a row whose doc has `silo_id=ccvault`).
-Benign in a throwaway clone (co-occurrence stays gated; `silo_match` is NULL-safe), but noted.
-
-**Trigger condition — unseen `query_id`.** Flow B runs for a graph-work segment **only if its
-`query_id` has not already been ingested in this clone.** `query_id` is unique per MCP call
-(`qry_{uuid4().hex}`), so this is the natural incremental key — re-ingesting the same session is a
-no-op (all query_ids seen) and only genuinely new graph work is captured. Same discipline the
-watched-source sync uses (repos skip on unchanged `commit_sha`; vault docs on `source_path`/mtime).
+Note: an `active_work` leaf adds the `ccvault`/`agent_report` silo to a pre-existing entity's silo
+membership. Benign (co-occurrence gated; `silo_match` NULL-safe), but noted.
 
 ## Dedup state (per workspace/clone)
 

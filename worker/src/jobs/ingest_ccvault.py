@@ -1,6 +1,7 @@
 # ABOUTME: Ingest ccvault agent-session archives into the graph (docs/ccvault-ingestion.md).
-# ABOUTME: Flow A — summarize each session into a NEUTRAL agent_report doc, classify, extract_batch.
-# ABOUTME: Flow B — extract graph-work (the #93 MCP tags), summarize, link BY ENTITY-ID (skip extract).
+# ABOUTME: One ccvault silo (agent_report). Each SESSION is recursively summarized like a repo:
+# ABOUTME: a 'group' doc (session rollup) over 'leaf' docs (segments). Graph-using segments are
+# ABOUTME: leaves anchored by entity-id links (active_work); neutral segments are extracted.
 
 import hashlib
 import json
@@ -11,32 +12,30 @@ from orrery_relay import Relay
 from ..classifier import classify_document
 from ..config import get_settings
 from ..db import get_connection, mark_graph_dirty
-from .ccvault_reader import open_archive, list_sessions, session_transcript, graph_work
+from .ccvault_reader import open_archive, list_sessions, iter_segments
 
 # Dedicated content types so extract_batch's session sweep never collides with the
-# repo/tracker `code_intent` sweep. Flow B docs (active_work) are never extracted at all —
-# they're linked by entity-id directly — so they carry a terminal status from the start.
+# repo/tracker `code_intent` sweep. active_work leaves are never extracted (they're linked
+# by entity-id directly), so they carry a terminal status from the start.
 SESSION_CONTENT_TYPE = "session_intent"
 ACTIVE_WORK_CONTENT_TYPE = "active_work"
 # Same fallback ingest_repo uses: a local model can return a payload with no usable
 # primary_domain, and we must not crash the whole archive or write a null-path domain.
 _UNCLASSIFIED_DOMAIN = "unclassified/needs-review"
 
-_SUMMARY_INSTRUCTIONS = (
-    "You are summarizing an AI coding-agent session for a knowledge graph. Write a NEUTRAL, "
-    "factual summary of what the session worked on and did: the task, the areas / files / "
-    "systems / topics touched, decisions made, and outcomes. Describe — do not evaluate, "
-    "praise, rate, or criticize. No first person. Do not invent detail absent from the "
-    "transcript. A few short paragraphs."
+_SEGMENT_INSTRUCTIONS = (
+    "You are summarizing ONE SEGMENT of an AI coding-agent session for a knowledge graph. Write a "
+    "NEUTRAL, factual summary of what happened in THIS segment only: what was examined / done, the "
+    "files / systems / topics / entities touched, and any finding. Describe — do not evaluate, "
+    "praise, or criticize. No first person. Do not reference other segments or judge overall "
+    "success. Do not invent detail absent from the segment. Two or three sentences."
 )
 
-_ACTIVE_WORK_INSTRUCTIONS = (
-    "You are recording, for a knowledge graph, the ANALYSIS an agent performed USING that graph "
-    "in one session — so a later agent asking a similar question can read this instead of redoing "
-    "the work. Write a NEUTRAL, factual summary: what was investigated (the questions/queries), "
-    "what was found or concluded, and how the named entities relate. Describe — do not evaluate, "
-    "praise, or criticize. No first person. Do not invent detail beyond the queries, results, and "
-    "the agent's own synthesis provided. A few short paragraphs."
+_ROLLUP_INSTRUCTIONS = (
+    "You are writing the top-level NEUTRAL summary of an AI coding-agent session for a knowledge "
+    "graph, from the per-segment summaries below. State what the session set out to do, the areas / "
+    "systems / topics it worked across, and its outcome. Describe — do not evaluate or praise. No "
+    "first person. A few short paragraphs."
 )
 
 
@@ -53,33 +52,53 @@ def _session_title(meta: dict) -> str:
     return f"Session {sid[:8]} — {base}" if base else f"Session {sid[:8]}"
 
 
-async def _summarize_session(relay, model, meta: dict, transcript: str) -> str:
+async def _summarize_segment(relay, model, meta: dict, segment: dict) -> str:
     prompt = (
-        f"{_SUMMARY_INSTRUCTIONS}\n\n"
+        f"{_SEGMENT_INSTRUCTIONS}\n\n"
+        f"Session project: {meta.get('project_path') or '(unknown)'}\n\n"
+        f"SEGMENT (chronological turns):\n{segment['text'][:8000]}\n\n"
+        "Neutral segment summary:"
+    )
+    resp = await relay.complete(model=model, max_tokens=384,
+                                messages=[{"role": "user", "content": prompt}])
+    return (resp.text or "").strip()
+
+
+async def _summarize_rollup(relay, model, meta: dict, segment_summaries: list[str]) -> str:
+    joined = "\n".join(f"- {s}" for s in segment_summaries)
+    prompt = (
+        f"{_ROLLUP_INSTRUCTIONS}\n\n"
         f"Session project: {meta.get('project_path') or '(unknown)'}\n"
         f"Started: {meta.get('started_at')}\n\n"
-        f"TRANSCRIPT (user/assistant turns, chronological):\n{transcript}\n\n"
-        "Neutral summary:"
+        f"PER-SEGMENT SUMMARIES (in order):\n{joined}\n\n"
+        "Neutral session summary:"
     )
     resp = await relay.complete(model=model, max_tokens=1024,
                                 messages=[{"role": "user", "content": prompt}])
     return (resp.text or "").strip()
 
 
-async def _summarize_active_work(relay, model, meta: dict, work: dict, entity_names: list[str]) -> str:
-    queries = "\n".join(f"- {name}({json.dumps(inp)[:160]})" for name, inp in work["tool_calls"]) or "(none captured)"
-    ents = ", ".join(entity_names) if entity_names else "(none resolved)"
-    prompt = (
-        f"{_ACTIVE_WORK_INSTRUCTIONS}\n\n"
-        f"Session project: {meta.get('project_path') or '(unknown)'}\n"
-        f"Graph queries the agent ran:\n{queries}\n\n"
-        f"Entities examined: {ents}\n\n"
-        f"The agent's own synthesis:\n{work['synthesis'] or '(none)'}\n\n"
-        "Neutral summary of the active work:"
-    )
-    resp = await relay.complete(model=model, max_tokens=1024,
-                                messages=[{"role": "user", "content": prompt}])
-    return (resp.text or "").strip()
+def _write_doc(conn, collection_id, content, content_type, role, parent_path, status, title, dom):
+    """Write one collection doc (group or leaf) + its chunk + collection membership + domain.
+    emits_cooccurrence is always 0 — a ccvault doc is an agent_report account, not neutral
+    co-occurrence evidence (the silo gate also excludes it). Returns the doc id."""
+    doc_id = str(uuid.uuid4())
+    ch = hashlib.sha256(content.encode()).hexdigest()
+    conn.execute(
+        "INSERT INTO documents (id, title, content, content_hash, source_path, content_type, "
+        "status, silo_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (doc_id, title, content, ch, f"ccvault:{title}", content_type, status, collection_id))
+    conn.execute(
+        "INSERT INTO chunks (id, document_id, chunk_index, text, offset, length) VALUES (?, ?, 0, ?, 0, ?)",
+        (str(uuid.uuid4()), doc_id, content, len(content)))
+    conn.execute(
+        "INSERT INTO document_collections (document_id, collection_id, parent_path, role, "
+        "emits_cooccurrence) VALUES (?, ?, ?, ?, 0)", (doc_id, collection_id, parent_path, role))
+    conn.execute("UPDATE collections SET document_count = document_count + 1 WHERE id = ?", (collection_id,))
+    conn.execute("INSERT INTO document_domains (document_id, domain_path, is_primary, confidence) "
+                 "VALUES (?, ?, 1, 1.0)", (doc_id, dom))
+    conn.execute("UPDATE domains SET document_count = document_count + 1 WHERE path = ?", (dom,))
+    return doc_id
 
 
 def _resolve_entities(conn, entity_ids) -> list[str]:
@@ -100,28 +119,19 @@ def _resolve_entities(conn, entity_ids) -> list[str]:
     return out
 
 
-def _entity_names(conn, ids) -> dict:
-    if not ids:
-        return {}
-    ph = ",".join("?" * len(ids))
-    return {r[0]: r[1] for r in conn.execute(
-        f"SELECT id, canonical_name FROM entities WHERE id IN ({ph})", list(ids)).fetchall()}
-
-
 def _upsert_domain(conn, dom):
     conn.execute("INSERT OR IGNORE INTO domains (id, path, parent_path, document_count) VALUES (?, ?, ?, 0)",
                  (str(uuid.uuid4()), dom, _parent_of(dom)))
 
 
 async def run_ingest_ccvault(job: dict, db_path: str) -> None:
-    """Flow A + Flow B over a staged ccvault archive, into the ACTIVE (clone) workspace.
-
-    Per session: (A) if not yet summarized, write one neutral agent_report session doc; and
-    (B) if it used the orrery graph and has unseen query_ids, write one active-work doc linked
-    directly to the entity ids it touched. The two flows have independent watermarks
-    (ccvault_sessions_seen / ccvault_processed), so a session Flow-A'd before Flow B existed
-    still gets its active-work captured on a later pass. Each flow commits per session so a
-    crash never leaves a watermark without its doc.
+    """Recursively summarize each ccvault session into the ONE ccvault collection (silo,
+    agent_report). A session becomes a 'group' doc (rollup) over 'leaf' docs (segments):
+    framing flows down, evidence flows up, exactly like a repo (codesum). A graph-using
+    segment becomes an entity-anchored 'active_work' leaf instead of a neutral one — active
+    work is part of the session's recursive structure, not a separate doc. Segment order is
+    carried by 'turn_next' collection_edges. Per-session atomic: a session's whole tree +
+    its ccvault_sessions_seen watermark commit together.
     """
     settings = get_settings()
     relay = Relay.from_settings(settings)
@@ -133,7 +143,7 @@ async def run_ingest_ccvault(job: dict, db_path: str) -> None:
 
     arc = open_archive(archive_path)
     conn = get_connection(db_path)
-    summarized = skipped_seen = flow_b_docs = flow_b_unanchored = 0
+    sessions_done = skipped_seen = leaf_docs = active_work_docs = 0
     try:
         seen = {r[0] for r in conn.execute("SELECT session_id FROM ccvault_sessions_seen")}
         processed = {r[0] for r in conn.execute("SELECT query_id FROM ccvault_processed")}
@@ -141,119 +151,80 @@ async def run_ingest_ccvault(job: dict, db_path: str) -> None:
 
         for meta in list_sessions(arc):
             sid = meta["session_id"]
-
-            # ── Flow A: neutral session summary ──────────────────────────────
             if sid in seen:
                 skipped_seen += 1
-            else:
-                transcript = session_transcript(arc, sid)
-                if not transcript.strip():
-                    # Genuinely empty session (no user/assistant text) — nothing to summarize.
-                    # Watermark so we don't keep re-reading it.
-                    conn.execute("INSERT OR IGNORE INTO ccvault_sessions_seen (session_id) VALUES (?)", (sid,))
-                    conn.commit()
-                    seen.add(sid)
-                else:
-                    summary = await _summarize_session(relay, model, meta, transcript)
-                    if not summary:
-                        # Transient EMPTY MODEL OUTPUT (local models can return empty .text
-                        # without raising). Do NOT watermark — let it retry on the next pass
-                        # rather than permanently dropping the summary.
-                        print(f"[ingest_ccvault] session {sid[:8]}: empty summary, will retry", flush=True)
-                    else:
-                        title = _session_title(meta)
-                        cls = await classify_document(relay=relay, title=title, excerpt=summary[:4000],
-                                                      existing_taxonomy=taxonomy, model=model)
-                        dom = cls.get("primary_domain") or _UNCLASSIFIED_DOMAIN
-                        if dom not in taxonomy:
-                            taxonomy.append(dom)
-                        doc_id = str(uuid.uuid4())
-                        ch = hashlib.sha256(summary.encode()).hexdigest()
-                        conn.execute(
-                            "INSERT INTO documents (id, title, content, content_hash, source_path, "
-                            "content_type, status, silo_id) VALUES (?, ?, ?, ?, ?, ?, 'classified', ?)",
-                            (doc_id, title, summary, ch, f"ccvault:{sid}", SESSION_CONTENT_TYPE, collection_id))
-                        conn.execute(
-                            "INSERT INTO chunks (id, document_id, chunk_index, text, offset, length) "
-                            "VALUES (?, ?, 0, ?, 0, ?)", (str(uuid.uuid4()), doc_id, summary, len(summary)))
-                        # emits_cooccurrence=0: an agent_report doc is not neutral co-occurrence
-                        # evidence. The silo gate already excludes it; this is defense-in-depth.
-                        conn.execute(
-                            "INSERT INTO document_collections (document_id, collection_id, parent_path, "
-                            "role, emits_cooccurrence) VALUES (?, ?, NULL, 'leaf', 0)", (doc_id, collection_id))
-                        conn.execute("UPDATE collections SET document_count = document_count + 1 WHERE id = ?",
-                                     (collection_id,))
-                        _upsert_domain(conn, dom)
-                        conn.execute("INSERT INTO document_domains (document_id, domain_path, is_primary, "
-                                     "confidence) VALUES (?, ?, 1, 1.0)", (doc_id, dom))
-                        conn.execute("UPDATE domains SET document_count = document_count + 1 WHERE path = ?", (dom,))
-                        # Watermark in the SAME transaction as the doc (all-or-nothing).
-                        conn.execute("INSERT OR IGNORE INTO ccvault_sessions_seen (session_id) VALUES (?)", (sid,))
-                        conn.commit()
-                        seen.add(sid)
-                        summarized += 1
+                continue
 
-            # ── Flow B: active-work extraction (independent watermark) ────────
-            # Graph-work is detected from the correlation id the API returns, so it fires
-            # whether the agent reached the graph via the MCP or a bare API call.
-            work = graph_work(arc, sid)
-            if not work["query_ids"]:
-                continue  # this session never hit the graph
-            if not any(q not in processed for q in work["query_ids"]):
-                continue  # all of this session's graph calls already captured
-            resolved = _resolve_entities(conn, work["entity_ids"])
-            doc_id = None
-            if resolved:
-                names = _entity_names(conn, resolved)
-                summary = await _summarize_active_work(relay, model, meta, work, list(names.values()))
-                if not summary:
-                    # Resolvable entities but transient EMPTY MODEL OUTPUT — do NOT record the
-                    # query_ids as processed; retry next pass rather than losing the capture.
-                    print(f"[ingest_ccvault] session {sid[:8]}: empty active-work summary, will retry", flush=True)
-                    continue
-                title = f"Active work — session {sid[:8]}"
-                cls = await classify_document(relay=relay, title=title, excerpt=summary[:4000],
-                                              existing_taxonomy=taxonomy, model=model)
-                dom = cls.get("primary_domain") or _UNCLASSIFIED_DOMAIN
-                if dom not in taxonomy:
-                    taxonomy.append(dom)
-                doc_id = str(uuid.uuid4())
-                ch = hashlib.sha256(summary.encode()).hexdigest()
-                # Terminal status ('extracted'): the doc is anchored by direct entity-id links
-                # (below), so it must NOT be swept by extract_batch (which would re-derive
-                # entities from the prose). It still gets a chunk — the orchestrator's search
-                # layer lazily embeds any chunk with no embedding — so the summary is
-                # SEMANTICALLY searchable too, not only reachable via the entity channel.
-                # Co-occurrence stays gated regardless (agent_report silo + emits_cooccurrence=0).
-                conn.execute(
-                    "INSERT INTO documents (id, title, content, content_hash, source_path, "
-                    "content_type, status, silo_id) VALUES (?, ?, ?, ?, ?, ?, 'extracted', ?)",
-                    (doc_id, title, summary, ch, f"ccvault-work:{sid}", ACTIVE_WORK_CONTENT_TYPE, collection_id))
-                conn.execute(
-                    "INSERT INTO chunks (id, document_id, chunk_index, text, offset, length) "
-                    "VALUES (?, ?, 0, ?, 0, ?)", (str(uuid.uuid4()), doc_id, summary, len(summary)))
-                conn.execute(
-                    "INSERT INTO document_collections (document_id, collection_id, parent_path, "
-                    "role, emits_cooccurrence) VALUES (?, ?, NULL, 'leaf', 0)", (doc_id, collection_id))
-                conn.execute("UPDATE collections SET document_count = document_count + 1 WHERE id = ?",
-                             (collection_id,))
-                _upsert_domain(conn, dom)
-                conn.execute("INSERT INTO document_domains (document_id, domain_path, is_primary, "
-                             "confidence) VALUES (?, ?, 1, 1.0)", (doc_id, dom))
-                conn.execute("UPDATE domains SET document_count = document_count + 1 WHERE path = ?", (dom,))
-                for eid in resolved:  # already a de-duplicated set of resolvable ids
-                    conn.execute("INSERT INTO entity_sources (entity_id, document_id, extraction_pass) "
-                                 "VALUES (?, ?, 'ccvault_flowb')", (eid, doc_id))
-                flow_b_docs += 1
-            if doc_id is None:
-                flow_b_unanchored += 1  # graph-work seen but nothing resolved to anchor it
-            # Mark every query_id in the segment (INSERT OR IGNORE — one row per id),
-            # pointing at the doc it produced (NULL when unanchored) so re-ingest is a no-op.
-            for q in work["query_ids"]:
-                conn.execute("INSERT OR IGNORE INTO ccvault_processed (query_id, session_id, document_id) "
-                             "VALUES (?, ?, ?)", (q, sid, doc_id))
-                processed.add(q)
+            segments = [s for s in iter_segments(arc, sid) if s["text"].strip()]
+            if not segments:
+                # Empty session (no user/assistant text) — watermark so we don't re-read it.
+                conn.execute("INSERT OR IGNORE INTO ccvault_sessions_seen (session_id) VALUES (?)", (sid,))
+                conn.commit()
+                seen.add(sid)
+                continue
+
+            # Leaves: summarize each segment node-locally (evidence flows up).
+            leaves = []  # (segment, summary)
+            for seg in segments:
+                s = await _summarize_segment(relay, model, meta, seg)
+                if s:
+                    leaves.append((seg, s))
+            # Root/group: roll the session up from its segment summaries.
+            rollup = await _summarize_rollup(relay, model, meta, [s for _, s in leaves]) if leaves else ""
+            if not leaves or not rollup:
+                # Transient EMPTY MODEL OUTPUT (local models can return empty .text without
+                # raising). Do NOT watermark — retry next pass rather than dropping the session.
+                print(f"[ingest_ccvault] session {sid[:8]}: empty summary output, will retry", flush=True)
+                continue
+
+            # Classify the session once, on the rollup; the whole tree shares that domain.
+            title = _session_title(meta)
+            cls = await classify_document(relay=relay, title=title, excerpt=rollup[:4000],
+                                          existing_taxonomy=taxonomy, model=model)
+            dom = cls.get("primary_domain") or _UNCLASSIFIED_DOMAIN
+            if dom not in taxonomy:
+                taxonomy.append(dom)
+            _upsert_domain(conn, dom)
+
+            # group = the session rollup; leaves = its segments (parent_path = the group title).
+            _write_doc(conn, collection_id, rollup, SESSION_CONTENT_TYPE, "group",
+                       None, "classified", title, dom)
+            prev_leaf = None
+            for i, (seg, s) in enumerate(leaves):
+                leaf_title = f"{title} · part {i + 1}"
+                resolved = _resolve_entities(conn, seg["entity_ids"]) if seg["is_graph_work"] else []
+                unseen = [q for q in seg["query_ids"] if q not in processed]
+                if resolved and unseen:
+                    # Graph-using segment → active_work leaf: entity-anchored, terminal status
+                    # (never re-extracted), still chunked for semantic recall.
+                    leaf_id = _write_doc(conn, collection_id, s, ACTIVE_WORK_CONTENT_TYPE, "leaf",
+                                         title, "extracted", leaf_title, dom)
+                    for eid in resolved:
+                        conn.execute("INSERT INTO entity_sources (entity_id, document_id, extraction_pass) "
+                                     "VALUES (?, ?, 'ccvault_flowb')", (eid, leaf_id))
+                    active_work_docs += 1
+                else:
+                    # Neutral segment (or a graph segment whose ids don't resolve here) → a
+                    # session_intent leaf that extract_batch will mine for entities.
+                    leaf_id = _write_doc(conn, collection_id, s, SESSION_CONTENT_TYPE, "leaf",
+                                         title, "classified", leaf_title, dom)
+                # Record every query_id this segment touched (dedup key), pointing at its leaf.
+                for q in seg["query_ids"]:
+                    conn.execute("INSERT OR IGNORE INTO ccvault_processed (query_id, session_id, document_id) "
+                                 "VALUES (?, ?, ?)", (q, sid, leaf_id))
+                    processed.add(q)
+                # Segment order lives on edges, not the tree (like tracker's chain_next).
+                if prev_leaf is not None:
+                    conn.execute("INSERT OR IGNORE INTO collection_edges (source, target, type, weight) "
+                                 "VALUES (?, ?, 'turn_next', 1.0)", (prev_leaf, leaf_id))
+                prev_leaf = leaf_id
+                leaf_docs += 1
+
+            conn.execute("INSERT OR IGNORE INTO ccvault_sessions_seen (session_id) VALUES (?)", (sid,))
             conn.commit()
+            seen.add(sid)
+            sessions_done += 1
+            print(f"[ingest_ccvault] session {sid[:8]} -> {dom}: {len(leaves)} segment leaves", flush=True)
 
         # Phase 2: extract entities over session-summary docs. Gate on the DB, not the
         # in-memory counter: if a prior run committed session docs per-session but died
@@ -272,16 +243,16 @@ async def run_ingest_ccvault(job: dict, db_path: str) -> None:
             conn.execute(
                 "INSERT INTO jobs (id, type, target, status, config) VALUES (?, 'extract_batch', ?, 'queued', ?)",
                 (str(uuid.uuid4()), collection_id, json.dumps({"spec_id": spec_id, "scope": SESSION_CONTENT_TYPE})))
-        if summarized or flow_b_docs:
+        if sessions_done:
             mark_graph_dirty(conn)
         conn.commit()
 
-        result = {"sessions_summarized": summarized, "sessions_skipped_seen": skipped_seen,
-                  "active_work_docs": flow_b_docs, "active_work_unanchored": flow_b_unanchored}
+        result = {"sessions_ingested": sessions_done, "sessions_skipped_seen": skipped_seen,
+                  "segment_leaves": leaf_docs, "active_work_leaves": active_work_docs}
         conn.execute("UPDATE jobs SET result = ? WHERE id = ?", (json.dumps(result), job["id"]))
         conn.commit()
-        print(f"[ingest_ccvault] done: {summarized} session docs, {flow_b_docs} active-work docs "
-              f"({flow_b_unanchored} unanchored), {skipped_seen} sessions already seen", flush=True)
+        print(f"[ingest_ccvault] done: {sessions_done} sessions ({leaf_docs} segment leaves, "
+              f"{active_work_docs} active-work), {skipped_seen} already seen", flush=True)
     finally:
         conn.close()
         arc.close()

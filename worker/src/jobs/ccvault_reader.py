@@ -214,3 +214,90 @@ def graph_work(conn, session_id, max_synthesis_chars=16000):
         synthesis = synthesis[:max_synthesis_chars] + f"\n…[{len(synthesis) - max_synthesis_chars} chars elided]…"
     return {"query_ids": query_ids, "entity_ids": entity_ids, "doc_ids": doc_ids,
             "image_ids": image_ids, "tool_calls": tool_calls, "synthesis": synthesis}
+
+
+def _event_of_turn(r):
+    """One transcript event from a turn: its readable text, plus any graph ids harvested from
+    its tool_result content (tags AND bare-API JSON). Ids are pulled BEFORE the text is
+    truncated for display, so nothing is lost to the cap."""
+    text_parts, qids, eids, dids = [], [], set(), set()
+    blocks = _content_blocks(_turn_message(r["raw_json"]))
+    if not blocks:
+        if r["type"] in ("user", "assistant") and (r["content"] or "").strip():
+            text_parts.append(f"[{r['type']}] {r['content'].strip()}")
+        return {"text": "\n".join(text_parts), "query_ids": qids, "entity_ids": eids, "doc_ids": dids}
+    for b in blocks:
+        t = b.get("type")
+        if t == "text" and (b.get("text") or "").strip():
+            text_parts.append(f"[{r['type']}] {b['text'].strip()}")
+        elif t == "tool_use":
+            nm = (b.get("name") or "").split("__")[-1]
+            inp = b.get("input")
+            text_parts.append(f"[tool:{nm}] {json.dumps(inp)[:300] if inp is not None else ''}")
+        elif t == "tool_result":
+            c = b.get("content")
+            txt = c if isinstance(c, str) else "".join(
+                x.get("text", "") for x in c if isinstance(x, dict)) if isinstance(c, list) else ""
+            txt = txt or ""
+            for kind, val in _TAG_RE.findall(txt):
+                (eids if kind == "entity" else dids).add(val)
+            for q in _QID_RE.findall(txt):
+                if q not in qids:
+                    qids.append(q)
+            _harvest_json(txt, eids, dids)
+            text_parts.append(f"[result] {txt[:400]}")
+    return {"text": "\n".join(text_parts), "query_ids": qids, "entity_ids": eids, "doc_ids": dids}
+
+
+def iter_segments(conn, session_id, target_chars=3000, max_segments=8):
+    """Partition a session into ordered SEGMENTS — the leaves of the session's recursive
+    summary (docs/ccvault-ingestion.md). A segment is a contiguous run of turns of roughly
+    `target_chars`, so the model summarizes coherent units of work rather than one giant blob.
+    Each segment carries the graph ids (query_ids/entity_ids/doc_ids) harvested from its own
+    tool results, so a graph-using segment can become an entity-anchored active-work leaf while
+    its neighbours become neutral leaves. Capped at `max_segments` (tail merged) to bound cost.
+    """
+    rows = conn.execute(
+        "SELECT type, content, raw_json FROM turns WHERE session_id = ? ORDER BY timestamp, id",
+        (session_id,),
+    ).fetchall()
+
+    def _fresh():
+        return {"text": [], "query_ids": [], "entity_ids": set(), "doc_ids": set(), "size": 0}
+
+    def _finalize(seg):
+        return {"text": "\n\n".join(t for t in seg["text"] if t.strip()),
+                "query_ids": seg["query_ids"],
+                "entity_ids": seg["entity_ids"], "doc_ids": seg["doc_ids"],
+                "is_graph_work": bool(seg["query_ids"] or seg["entity_ids"])}
+
+    segments, cur = [], _fresh()
+    for r in rows:
+        ev = _event_of_turn(r)
+        if not ev["text"] and not ev["query_ids"] and not ev["entity_ids"]:
+            continue
+        cur["text"].append(ev["text"])
+        cur["size"] += len(ev["text"])
+        for q in ev["query_ids"]:
+            if q not in cur["query_ids"]:
+                cur["query_ids"].append(q)
+        cur["entity_ids"] |= ev["entity_ids"]
+        cur["doc_ids"] |= ev["doc_ids"]
+        if cur["size"] >= target_chars:
+            segments.append(cur)
+            cur = _fresh()
+    if cur["size"] > 0:
+        segments.append(cur)
+
+    # Cap segment count by merging the smallest-adjacent pairs from the end (keeps order).
+    while len(segments) > max_segments:
+        a = segments.pop()
+        b = segments[-1]
+        b["text"] += a["text"]
+        b["size"] += a["size"]
+        for q in a["query_ids"]:
+            if q not in b["query_ids"]:
+                b["query_ids"].append(q)
+        b["entity_ids"] |= a["entity_ids"]
+        b["doc_ids"] |= a["doc_ids"]
+    return [_finalize(s) for s in segments]
