@@ -13,11 +13,16 @@ router = APIRouter()
 
 
 @router.get("/search")
-async def search_query(q: str, top_k: int = 20, expand: bool = True, include_images: bool = False, auth: AuthStore = Depends(get_auth_store), qid: str = Depends(query_id)):
+async def search_query(q: str, top_k: int = 20, expand: bool = False, include_images: bool = False, auth: AuthStore = Depends(get_auth_store), qid: str = Depends(query_id)):
     """Search the knowledge graph.
 
     Full 5-stage pipeline: expansion → retrieval → entity-boost → fusion → response.
     include_images=true adds parallel image search results.
+
+    expand defaults to FALSE. Query expansion is the only search stage that makes an LLM
+    call (sub-query generation), so it adds latency and a hard per-search dependency on
+    the configured backend — a search should not 500 because the LLM backend is momentarily
+    unreachable. Callers who want the recall boost opt in with expand=true.
     """
     settings = get_settings()
     store = auth.store
