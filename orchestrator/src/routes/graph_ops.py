@@ -568,6 +568,7 @@ def domain_neighbours_route(
     store = auth.store
     try:
         return {"domain": domain_path,
-                "neighbours": domain_neighbours(store.conn, domain_path, limit=limit)}
+                "neighbours": domain_neighbours(store.conn, domain_path, limit=limit),
+                "query_id": qid}
     finally:
         store.close()
