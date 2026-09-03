@@ -1,6 +1,6 @@
 # ABOUTME: ccvault ingestion (docs/ccvault-ingestion.md) — a session is recursively summarized
 # ABOUTME: into the ONE ccvault silo: a 'group' doc (rollup) over 'leaf' docs (segments); graph-using
-# ABOUTME: segments become entity-anchored active_work leaves; order via turn_next edges.
+# ABOUTME: segments become entity-anchored active_work leaves; order via part-N leaf titles.
 
 import asyncio
 import json

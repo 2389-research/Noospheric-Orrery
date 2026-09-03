@@ -262,6 +262,18 @@ def iter_segments(conn, session_id, target_chars=3000, max_segments=8):
         (session_id,),
     ).fetchall()
 
+    events = [_event_of_turn(r) for r in rows]
+    events = [e for e in events if e["text"] or e["query_ids"] or e["entity_ids"]]
+    if not events:
+        return []
+
+    # Adaptive target so the count lands at ~max_segments WITHOUT a lossy tail-merge: with a
+    # fixed target_chars a long session would overflow into one giant final segment (then
+    # truncated by the summarizer). Sizing the target to total/max_segments keeps segments
+    # balanced and bounded.
+    total = sum(len(e["text"]) for e in events)
+    eff_target = max(target_chars, -(-total // max_segments))  # ceil division
+
     def _fresh():
         return {"text": [], "query_ids": [], "entity_ids": set(), "doc_ids": set(), "size": 0}
 
@@ -272,10 +284,7 @@ def iter_segments(conn, session_id, target_chars=3000, max_segments=8):
                 "is_graph_work": bool(seg["query_ids"] or seg["entity_ids"])}
 
     segments, cur = [], _fresh()
-    for r in rows:
-        ev = _event_of_turn(r)
-        if not ev["text"] and not ev["query_ids"] and not ev["entity_ids"]:
-            continue
+    for ev in events:
         cur["text"].append(ev["text"])
         cur["size"] += len(ev["text"])
         for q in ev["query_ids"]:
@@ -283,21 +292,11 @@ def iter_segments(conn, session_id, target_chars=3000, max_segments=8):
                 cur["query_ids"].append(q)
         cur["entity_ids"] |= ev["entity_ids"]
         cur["doc_ids"] |= ev["doc_ids"]
-        if cur["size"] >= target_chars:
+        # Don't start a new segment past the cap — let the last one absorb the remainder
+        # (already balanced by eff_target, so no unbounded growth).
+        if cur["size"] >= eff_target and len(segments) < max_segments - 1:
             segments.append(cur)
             cur = _fresh()
     if cur["size"] > 0:
         segments.append(cur)
-
-    # Cap segment count by merging the smallest-adjacent pairs from the end (keeps order).
-    while len(segments) > max_segments:
-        a = segments.pop()
-        b = segments[-1]
-        b["text"] += a["text"]
-        b["size"] += a["size"]
-        for q in a["query_ids"]:
-            if q not in b["query_ids"]:
-                b["query_ids"].append(q)
-        b["entity_ids"] |= a["entity_ids"]
-        b["doc_ids"] |= a["doc_ids"]
     return [_finalize(s) for s in segments]

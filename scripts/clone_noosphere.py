@@ -64,7 +64,9 @@ def main():
     if os.path.exists(a.dst) and not a.force:
         sys.exit(f"destination exists (use --force to overwrite): {a.dst}")
     if os.path.exists(a.dst) and a.force:
-        os.remove(a.dst)
+        for suffix in ("", "-wal", "-shm"):  # clear the WAL sidecars too, not just the db file
+            if os.path.exists(a.dst + suffix):
+                os.remove(a.dst + suffix)
 
     conn = clone_db(a.src, a.dst)
     try:

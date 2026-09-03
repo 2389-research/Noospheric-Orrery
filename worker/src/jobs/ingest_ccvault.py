@@ -130,8 +130,8 @@ async def run_ingest_ccvault(job: dict, db_path: str) -> None:
     framing flows down, evidence flows up, exactly like a repo (codesum). A graph-using
     segment becomes an entity-anchored 'active_work' leaf instead of a neutral one — active
     work is part of the session's recursive structure, not a separate doc. Segment order is
-    carried by 'turn_next' collection_edges. Per-session atomic: a session's whole tree +
-    its ccvault_sessions_seen watermark commit together.
+    carried by the leaf titles ("part N") + created_at. Per-session atomic: a session's whole
+    tree + its ccvault_sessions_seen watermark commit together.
     """
     settings = get_settings()
     relay = Relay.from_settings(settings)
@@ -193,7 +193,6 @@ async def run_ingest_ccvault(job: dict, db_path: str) -> None:
             # group = the session rollup; leaves = its segments (parent_path = the group title).
             _write_doc(conn, collection_id, rollup, SESSION_CONTENT_TYPE, "group",
                        None, "classified", title, dom)
-            prev_leaf = None
             for i, (seg, s) in enumerate(leaves):
                 leaf_title = f"{title} · part {i + 1}"
                 resolved = _resolve_entities(conn, seg["entity_ids"]) if seg["is_graph_work"] else []
@@ -217,11 +216,11 @@ async def run_ingest_ccvault(job: dict, db_path: str) -> None:
                     conn.execute("INSERT OR IGNORE INTO ccvault_processed (query_id, session_id, document_id) "
                                  "VALUES (?, ?, ?)", (q, sid, leaf_id))
                     processed.add(q)
-                # Segment order lives on edges, not the tree (like tracker's chain_next).
-                if prev_leaf is not None:
-                    conn.execute("INSERT OR IGNORE INTO collection_edges (source, target, type, weight) "
-                                 "VALUES (?, ?, 'turn_next', 1.0)", (prev_leaf, leaf_id))
-                prev_leaf = leaf_id
+                # Segment order is carried by the leaf titles ("part N") + created_at. We do NOT
+                # write it to collection_edges: that table is collection↔collection (chain_next /
+                # uses), and graph_v5 ships every row as a scope:"collection" edge — putting
+                # leaf-document ids there would masquerade as collection edges. A dedicated `seq`
+                # column on document_collections is the right home if explicit ordering is needed.
                 leaf_docs += 1
 
             conn.execute("INSERT OR IGNORE INTO ccvault_sessions_seen (session_id) VALUES (?)", (sid,))

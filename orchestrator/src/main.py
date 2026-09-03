@@ -150,6 +150,13 @@ class QueryIdMiddleware(BaseHTTPMiddleware):
         ctype = response.headers.get("content-type", "")
         if not ctype.startswith("application/json"):
             return response
+        # NEVER touch a file/streamed body. `GET /documents/{id}/file` serves a .ipynb as a
+        # FileResponse with media_type=application/json — buffering + re-serializing it would
+        # inject a spurious top-level key and re-encode the bytes, corrupting the raw file (a
+        # hash/nbformat check would then fail). FileResponse sets `accept-ranges: bytes`;
+        # JSONResponse does not — so this cleanly skips downloads while the header still carries qid.
+        if response.headers.get("accept-ranges"):
+            return response
         clen = int(response.headers.get("content-length") or 0)
         if clen and clen > _QUERY_ID_MAX_INJECT_BYTES:
             return response  # too big to reparse (the /graph viz payload) — header carries it
@@ -161,8 +168,10 @@ class QueryIdMiddleware(BaseHTTPMiddleware):
         if isinstance(data, dict) and "query_id" not in data:
             data["query_id"] = qid
             body = _json.dumps(data, default=str).encode()
-        # body_iterator is now consumed — rebuild the response either way.
-        new = _Response(content=body, status_code=response.status_code, media_type="application/json")
+        # body_iterator is now consumed — rebuild the response either way (preserve any
+        # background task the route attached).
+        new = _Response(content=body, status_code=response.status_code, media_type="application/json",
+                        background=response.background)
         for k, v in response.headers.items():
             if k.lower() != "content-length":
                 new.headers[k] = v

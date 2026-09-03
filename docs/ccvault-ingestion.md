@@ -1,6 +1,6 @@
 # ccvault ingestion — design
 
-Status: **design / not built**. Consumes [ccvault](https://github.com/2389-research/ccvault)
+Status: **implemented** (PR #95, branch feat/ccvault-ingestion). Consumes [ccvault](https://github.com/2389-research/ccvault)
 session archives as an Orrery source, the same way repos and the Obsidian vault are sources.
 
 ## Why this exists
@@ -106,8 +106,9 @@ collection:
   not a reuse). `parent_path` = the session's title (so leaves bucket under their session).
 - **`group` = the session rollup.** One summary composed over the segment summaries; the session is
   **classified once** on this rollup and the whole tree shares that domain.
-- **Segment order lives on edges, not the tree:** consecutive segment leaves are joined by a
-  `collection_edges` `type='turn_next'` (like tracker-run `chain_next`), never via `parent_path`.
+- **Segment order** is carried by the leaf titles ("part N") + `created_at` — NOT `collection_edges`,
+  which is a collection↔collection table (`chain_next`/`uses`); a `seq` column on
+  `document_collections` is the right home if explicit ordering is ever needed.
 - **`emits_cooccurrence = 0`** for every ccvault doc — an `agent_report` account is not neutral
   co-occurrence evidence (`recompute_cooccurrence` also gates the `agent_report` silo regardless).
 
