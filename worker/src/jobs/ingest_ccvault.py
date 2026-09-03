@@ -11,8 +11,7 @@ from orrery_relay import Relay
 from ..classifier import classify_document
 from ..config import get_settings
 from ..db import get_connection, mark_graph_dirty
-from .ccvault_reader import (open_archive, list_sessions, session_transcript,
-                             uses_orrery_graph, graph_work)
+from .ccvault_reader import open_archive, list_sessions, session_transcript, graph_work
 
 # Dedicated content types so extract_batch's session sweep never collides with the
 # repo/tracker `code_intent` sweep. Flow B docs (active_work) are never extracted at all —
@@ -195,11 +194,13 @@ async def run_ingest_ccvault(job: dict, db_path: str) -> None:
                         summarized += 1
 
             # ── Flow B: active-work extraction (independent watermark) ────────
-            if not uses_orrery_graph(arc, sid):
-                continue
+            # Graph-work is detected from the correlation id the API returns, so it fires
+            # whether the agent reached the graph via the MCP or a bare API call.
             work = graph_work(arc, sid)
+            if not work["query_ids"]:
+                continue  # this session never hit the graph
             if not any(q not in processed for q in work["query_ids"]):
-                continue  # nothing new for this session
+                continue  # all of this session's graph calls already captured
             resolved = _resolve_entities(conn, work["entity_ids"])
             doc_id = None
             if resolved:

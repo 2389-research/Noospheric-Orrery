@@ -292,6 +292,81 @@ def test_flow_b_reingest_is_noop(tmp_path, monkeypatch, test_db):
         conn.close()
 
 
+# ── bare API calls (no MCP): query_id + entity ids come from the raw response JSON ─────
+
+_QID_BARE = "qry_" + "c" * 32
+
+
+def _make_ccvault_db_bare_api(path, entity_id="ent-auth", query_id=_QID_BARE):
+    """A session that reached the graph via a BARE `curl` to the API (no MCP). The API now
+    returns query_id in the JSON body, and entity ids ride as JSON fields — so the Bash
+    tool_result carries everything Flow B needs, with no [entity:]/[query:] tags."""
+    c = sqlite3.connect(path)
+    c.executescript("""
+        CREATE TABLE projects(id INTEGER PRIMARY KEY, path TEXT);
+        CREATE TABLE sessions(id TEXT PRIMARY KEY, project_id INTEGER, started_at TEXT, turn_count INTEGER, source TEXT);
+        CREATE TABLE turns(id TEXT PRIMARY KEY, session_id TEXT, parent_id TEXT, type TEXT, timestamp TEXT, content TEXT, raw_json BLOB);
+        CREATE TABLE tool_uses(id INTEGER PRIMARY KEY, turn_id TEXT, session_id TEXT, tool_name TEXT, timestamp TEXT);
+    """)
+    c.execute("INSERT INTO sessions VALUES ('sess-b', 1, '2026-09-03', 3, 'claude-code')")
+    # assistant runs a bare curl to the orrery API
+    tu = {"message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "b1", "name": "Bash",
+         "input": {"command": "curl -s http://127.0.0.1:8100/search?q=auth"}}]}}
+    api_json = json.dumps({
+        "query": "auth", "total_entities": 1, "total_chunks": 0,
+        "entities": [{"id": entity_id, "name": "Auth", "type": "Concept", "source_count": 1}],
+        "chunks": [], "query_id": query_id})
+    tr = {"message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "b1", "content": api_json}]}}
+    syn = {"message": {"role": "assistant", "content": [
+        {"type": "text", "text": "The graph shows Auth as a Concept with one source."}]}}
+    c.execute("INSERT INTO turns VALUES ('a','sess-b',NULL,'assistant','t1','curl', ?)", (json.dumps(tu).encode(),))
+    c.execute("INSERT INTO turns VALUES ('b','sess-b','a','user','t2','[result]', ?)", (json.dumps(tr).encode(),))
+    c.execute("INSERT INTO turns VALUES ('c','sess-b','b','assistant','t3','Auth is a Concept.', ?)", (json.dumps(syn).encode(),))
+    # NOTE: no mcp__noospheric tool_uses row — this session used the graph without the MCP
+    c.execute("INSERT INTO tool_uses VALUES (1,'a','sess-b','Bash','t1')")
+    c.commit(); c.close()
+
+
+def test_reader_graph_work_parses_bare_api_json(tmp_path):
+    arcp = str(tmp_path / "ccvault.db")
+    _make_ccvault_db_bare_api(arcp)
+    conn = ccvault_reader.open_archive(arcp)
+    try:
+        w = ccvault_reader.graph_work(conn, "sess-b")
+        assert w["query_ids"] == [_QID_BARE]        # from "query_id" in the JSON body
+        assert w["entity_ids"] == {"ent-auth"}       # from the JSON entities[].id, no tags
+        assert any(name == "bash-api" for name, _ in w["tool_calls"])
+    finally:
+        conn.close()
+
+
+def test_flow_b_captures_bare_api_session(tmp_path, monkeypatch, test_db):
+    """End-to-end: a session that hit the API with bare curl (no MCP) still produces an
+    active_work doc linked to the entity — capture no longer depends on the MCP wrapper."""
+    _stub(monkeypatch)
+    arcp = str(tmp_path / "ccvault.db")
+    _make_ccvault_db_bare_api(arcp)
+    cid = str(uuid.uuid4())
+    _seed_collection(test_db, cid)
+    _seed_entity(test_db, "ent-auth", "Auth")
+
+    asyncio.run(mod.run_ingest_ccvault(_job(arcp, cid, test_db), test_db))
+
+    conn = get_connection(test_db)
+    try:
+        aw = conn.execute("SELECT id FROM documents WHERE content_type='active_work'").fetchone()
+        assert aw is not None, "bare-API session must produce an active_work doc"
+        link = conn.execute("SELECT 1 FROM entity_sources WHERE entity_id='ent-auth' AND document_id=?",
+                            (aw[0],)).fetchone()
+        assert link is not None
+        pr = conn.execute("SELECT document_id FROM ccvault_processed WHERE query_id=?", (_QID_BARE,)).fetchone()
+        assert pr is not None and pr[0] == aw[0]
+    finally:
+        conn.close()
+
+
 # ── review fixes: robustness ───────────────────────────────────────────────────
 
 class _EmptyRelay:

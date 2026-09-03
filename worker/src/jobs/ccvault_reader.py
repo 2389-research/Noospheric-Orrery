@@ -10,9 +10,58 @@ import sqlite3
 # detect signal for graph-work (Flow B). Kept here so reader + job agree on the prefix.
 ORRERY_MCP_PREFIX = "mcp__noospheric-orrery__"
 
-# Recovery is by RESERVED PREFIX only (the #93 contract): document titles are printed
-# bracketed and are free-form, so match these prefixes, never any [...].
-_TAG_RE = re.compile(r"\[(query|entity|doc|image):([^\]]+)\]")
+# Two capture shapes, because the graph is reached two ways:
+#  - MCP output — reserved-prefix tags (the #93 contract): [entity:id], [doc:id], [query:qry_…].
+#    Titles are printed bracketed, so match the prefixes, never any [...].
+#  - Bare API JSON — a curl/SDK hit lands raw JSON in a Bash tool_result: entity ids as JSON
+#    fields and "query_id":"qry_…" (the API now returns it). Parsed by _harvest_json below.
+_TAG_RE = re.compile(r"\[(entity|doc|image):([^\]]+)\]")
+# query_id is prefixed + fixed-shape, so ONE regex recovers it from either form (tag or JSON).
+_QID_RE = re.compile(r"qry_[0-9a-f]{32}")
+
+
+def _looks_like_entity(d: dict) -> bool:
+    """An entity node across every API shape: an id plus a canonical/typed name. Excludes
+    documents ({id,title}) and chunks ({chunk_id,…}), whose ids are not entity ids."""
+    return isinstance(d, dict) and "id" in d and (
+        "canonical_name" in d or ("name" in d and "type" in d))
+
+
+def _walk_json_ids(obj, entity_ids: set, doc_ids: set):
+    """Recursively collect entity ids (entity-like dicts) and doc ids (document_id, or the
+    top-level id of an entity-detail's sources) from a parsed orrery-API response."""
+    if isinstance(obj, dict):
+        if _looks_like_entity(obj):
+            entity_ids.add(obj["id"])
+        if obj.get("document_id"):
+            doc_ids.add(obj["document_id"])
+        for v in obj.values():
+            _walk_json_ids(v, entity_ids, doc_ids)
+    elif isinstance(obj, list):
+        for v in obj:
+            _walk_json_ids(v, entity_ids, doc_ids)
+
+
+def _harvest_json(text: str, entity_ids: set, doc_ids: set):
+    """Best-effort: if a tool_result body is (or contains) an orrery-API JSON response, pull
+    entity/doc ids from it. Handles a clean `curl -s` body directly; falls back to the largest
+    balanced {...} substring when the model wrapped the JSON in other text."""
+    if not text or ('"id"' not in text and '"document_id"' not in text):
+        return
+    for candidate in (text, _largest_json_object(text)):
+        if not candidate:
+            continue
+        try:
+            _walk_json_ids(json.loads(candidate), entity_ids, doc_ids)
+            return
+        except Exception:
+            continue
+
+
+def _largest_json_object(text: str):
+    start = text.find("{")
+    end = text.rfind("}")
+    return text[start:end + 1] if 0 <= start < end else None
 
 
 def resolve_db_path(path: str) -> str:
@@ -125,6 +174,12 @@ def graph_work(conn, session_id, max_synthesis_chars=16000):
     image_ids: set[str] = set()
     tool_calls: list[tuple] = []
     synth: list[str] = []
+
+    def _note_query_ids(text):
+        for q in _QID_RE.findall(text or ""):
+            if q not in query_ids:
+                query_ids.append(q)
+
     for r in rows:
         blocks = _content_blocks(_turn_message(r["raw_json"]))
         if not blocks:
@@ -135,22 +190,25 @@ def graph_work(conn, session_id, max_synthesis_chars=16000):
             t = b.get("type")
             if t == "tool_use" and str(b.get("name", "")).startswith(ORRERY_MCP_PREFIX):
                 tool_calls.append((b["name"].split("__")[-1], b.get("input")))
+            elif t == "tool_use" and b.get("name") == "Bash":
+                cmd = (b.get("input") or {}).get("command", "") if isinstance(b.get("input"), dict) else ""
+                # A bare API call to the graph (curl/httpie/wget to a read endpoint) is graph-work too.
+                if any(p in cmd for p in ("/search", "/entities", "/graph/", "/documents", "/domains")) \
+                        and any(c in cmd for c in ("curl", "http", "wget", "fetch")):
+                    tool_calls.append(("bash-api", cmd[:200]))
             elif t == "text" and r["type"] == "assistant" and (b.get("text") or "").strip():
                 synth.append(b["text"].strip())
             elif t == "tool_result":
                 c = b.get("content")
                 txt = c if isinstance(c, str) else "".join(
                     x.get("text", "") for x in c if isinstance(x, dict)) if isinstance(c, list) else ""
-                for kind, val in _TAG_RE.findall(txt or ""):
-                    if kind == "query":
-                        if val not in query_ids:
-                            query_ids.append(val)
-                    elif kind == "entity":
-                        entity_ids.add(val)
-                    elif kind == "doc":
-                        doc_ids.add(val)
-                    elif kind == "image":
-                        image_ids.add(val)
+                txt = txt or ""
+                # MCP tags (entity/doc/image) + query_ids in either form ([query:…] or "query_id":…)
+                for kind, val in _TAG_RE.findall(txt):
+                    (entity_ids if kind == "entity" else doc_ids if kind == "doc" else image_ids).add(val)
+                _note_query_ids(txt)
+                # Bare API JSON: harvest entity/doc ids straight from the response body.
+                _harvest_json(txt, entity_ids, doc_ids)
     synthesis = "\n\n".join(synth)
     if len(synthesis) > max_synthesis_chars:
         synthesis = synthesis[:max_synthesis_chars] + f"\n…[{len(synthesis) - max_synthesis_chars} chars elided]…"

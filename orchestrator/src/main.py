@@ -123,6 +123,55 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Orrery", lifespan=lifespan)
 
+
+# ── Query correlation id (issue #93; owned by the API, not any one client) ─────
+# Every read mints a `query_id` and returns it — in an `X-Query-Id` header AND injected
+# into the top-level JSON body — so ANY caller (the MCP, a bare `curl`, an SDK) gets a
+# stable handle it can log and later correlate to the graph nodes it touched. This is the
+# authoritative source of the id; the MCP surfaces this rather than minting its own.
+# Entity ids already ride in the response bodies; this adds the correlation id beside them.
+import json as _json
+import uuid as _uuid
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as _Response
+
+_QUERY_ID_MAX_INJECT_BYTES = 1_000_000  # skip body-injection for huge payloads (e.g. /graph); header still set
+
+
+class QueryIdMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        qid = f"qry_{_uuid.uuid4().hex}"
+        request.state.query_id = qid
+        response = await call_next(request)
+        response.headers["X-Query-Id"] = qid
+        # Only worth injecting into read (GET) JSON bodies; writes have their own ids.
+        if request.method != "GET":
+            return response
+        ctype = response.headers.get("content-type", "")
+        if not ctype.startswith("application/json"):
+            return response
+        clen = int(response.headers.get("content-length") or 0)
+        if clen and clen > _QUERY_ID_MAX_INJECT_BYTES:
+            return response  # too big to reparse (the /graph viz payload) — header carries it
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        try:
+            data = _json.loads(body)
+        except Exception:
+            data = None
+        if isinstance(data, dict) and "query_id" not in data:
+            data["query_id"] = qid
+            body = _json.dumps(data, default=str).encode()
+        # body_iterator is now consumed — rebuild the response either way.
+        new = _Response(content=body, status_code=response.status_code, media_type="application/json")
+        for k, v in response.headers.items():
+            if k.lower() != "content-length":
+                new.headers[k] = v
+        return new
+
+
+# Runs INNERMOST (added before gzip) so it sees the raw JSON before compression.
+app.add_middleware(QueryIdMiddleware)
+
 # The graph payload is large and highly repetitive, and nothing was compressing it:
 # /graph served ~31 MB raw on the large graph with no content-encoding at all. It
 # gzips ~9x (to ~3.4 MB), because the bulk is repeated keys and ids. The 1 KB floor
