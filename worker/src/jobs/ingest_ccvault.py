@@ -139,7 +139,11 @@ async def run_ingest_ccvault(job: dict, db_path: str) -> None:
     archive_path = config["archive_path"]
     collection_id = config["collection_id"]
     spec_id = config["spec_id"]
-    model = settings.classification_model
+    # Summaries use the EXTRACTION model (haiku-class) — same as codesum/tracksum: this is
+    # high-volume clerk work, one call per segment + rollup. Only the single per-session
+    # classify uses the CLASSIFICATION model (sonnet-class).
+    sum_model = settings.extraction_model
+    classify_model = settings.classification_model
 
     arc = open_archive(archive_path)
     conn = get_connection(db_path)
@@ -166,11 +170,11 @@ async def run_ingest_ccvault(job: dict, db_path: str) -> None:
             # Leaves: summarize each segment node-locally (evidence flows up).
             leaves = []  # (segment, summary)
             for seg in segments:
-                s = await _summarize_segment(relay, model, meta, seg)
+                s = await _summarize_segment(relay, sum_model, meta, seg)
                 if s:
                     leaves.append((seg, s))
             # Root/group: roll the session up from its segment summaries.
-            rollup = await _summarize_rollup(relay, model, meta, [s for _, s in leaves]) if leaves else ""
+            rollup = await _summarize_rollup(relay, sum_model, meta, [s for _, s in leaves]) if leaves else ""
             if not leaves or not rollup:
                 # Transient EMPTY MODEL OUTPUT (local models can return empty .text without
                 # raising). Do NOT watermark — retry next pass rather than dropping the session.
@@ -180,7 +184,7 @@ async def run_ingest_ccvault(job: dict, db_path: str) -> None:
             # Classify the session once, on the rollup; the whole tree shares that domain.
             title = _session_title(meta)
             cls = await classify_document(relay=relay, title=title, excerpt=rollup[:4000],
-                                          existing_taxonomy=taxonomy, model=model)
+                                          existing_taxonomy=taxonomy, model=classify_model)
             dom = cls.get("primary_domain") or _UNCLASSIFIED_DOMAIN
             if dom not in taxonomy:
                 taxonomy.append(dom)
