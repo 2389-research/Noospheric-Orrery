@@ -132,12 +132,15 @@ turn each into an entity-anchored artifact.
   `status`** after linking (`documents.create` defaults `status='pending'`; a Flow B doc skips
   extraction, so set it complete explicitly or it lingers `pending` and skews status counts).
 
-**How Flow B docs are recalled — entity channel only.** A link-only doc (no chunks) surfaces
-through the **entity** path: search returns the entity → `get_entity` lists the doc among its
-sources → the agent reads it. It does **not** surface via semantic/chunk similarity to the summary
-text (Flow B creates no chunks, and the "relevant excerpts" block is chunk-backed). So the loop is:
-similar query → same entities → prior active-work doc. If we later want the summary text itself to
-be semantically searchable, Flow B would also need to chunk+embed the summary (deferred).
+**How Flow B docs are recalled — two paths.** (1) **Entity channel:** the doc is linked to the
+exact entities it analyzed, so search → entity → `get_entity`/`/entities/{id}` sources → the doc.
+(2) **Semantic:** the doc also gets ONE chunk (the summary), and the orchestrator's search layer
+lazily embeds any chunk with no embedding — so the summary text itself surfaces in semantic search.
+Anchoring still uses the DIRECT entity-id links (not the chunk), so the doc is never run through
+`extract_batch` and never re-derives entities from its prose; the chunk is purely for recall.
+Co-occurrence stays gated regardless (agent_report silo + `emits_cooccurrence=0`). Recursive
+PARTITIONING of a long session's work into multiple segment chunks (à la tracker-run rollup) is a
+further refinement, not required for recall.
 
 Note: linking a Flow B doc to a pre-existing formal entity adds the `ccvault`/`agent_report` silo to
 that entity's silo membership (its `entity_sources` gains a row whose doc has `silo_id=ccvault`).

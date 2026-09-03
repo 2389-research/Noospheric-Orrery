@@ -235,8 +235,9 @@ def test_flow_b_creates_active_work_doc_linked_to_entity(tmp_path, monkeypatch, 
             "SELECT chunk_id, extraction_pass FROM entity_sources WHERE entity_id = 'ent-auth' "
             "AND document_id = ?", (doc["id"],)).fetchone()
         assert link is not None and link["chunk_id"] is None and link["extraction_pass"] == "ccvault_flowb"
-        # NO chunk for an active_work doc (entity-channel recall only)
-        assert conn.execute("SELECT COUNT(*) FROM chunks WHERE document_id = ?", (doc["id"],)).fetchone()[0] == 0
+        # The doc gets ONE chunk (the summary) so it's semantically searchable too — the
+        # orchestrator lazily embeds it. The entity link above stays chunk-less (direct anchor).
+        assert conn.execute("SELECT COUNT(*) FROM chunks WHERE document_id = ?", (doc["id"],)).fetchone()[0] == 1
         # the query_id ledger points at the doc
         pr = conn.execute("SELECT document_id FROM ccvault_processed WHERE query_id = ?", (_QID,)).fetchone()
         assert pr is not None and pr[0] == doc["id"]

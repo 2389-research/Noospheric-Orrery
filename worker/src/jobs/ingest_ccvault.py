@@ -219,13 +219,19 @@ async def run_ingest_ccvault(job: dict, db_path: str) -> None:
                     taxonomy.append(dom)
                 doc_id = str(uuid.uuid4())
                 ch = hashlib.sha256(summary.encode()).hexdigest()
-                # Terminal status + NO chunk: an active_work doc is anchored by entity-id,
-                # not extracted, so it is never picked up by extract_batch and recalled only
-                # through the entity channel (get_entity lists it among the entity's sources).
+                # Terminal status ('extracted'): the doc is anchored by direct entity-id links
+                # (below), so it must NOT be swept by extract_batch (which would re-derive
+                # entities from the prose). It still gets a chunk — the orchestrator's search
+                # layer lazily embeds any chunk with no embedding — so the summary is
+                # SEMANTICALLY searchable too, not only reachable via the entity channel.
+                # Co-occurrence stays gated regardless (agent_report silo + emits_cooccurrence=0).
                 conn.execute(
                     "INSERT INTO documents (id, title, content, content_hash, source_path, "
                     "content_type, status, silo_id) VALUES (?, ?, ?, ?, ?, ?, 'extracted', ?)",
                     (doc_id, title, summary, ch, f"ccvault-work:{sid}", ACTIVE_WORK_CONTENT_TYPE, collection_id))
+                conn.execute(
+                    "INSERT INTO chunks (id, document_id, chunk_index, text, offset, length) "
+                    "VALUES (?, ?, 0, ?, 0, ?)", (str(uuid.uuid4()), doc_id, summary, len(summary)))
                 conn.execute(
                     "INSERT INTO document_collections (document_id, collection_id, parent_path, "
                     "role, emits_cooccurrence) VALUES (?, ?, NULL, 'leaf', 0)", (doc_id, collection_id))
