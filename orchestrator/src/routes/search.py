@@ -5,7 +5,7 @@ import numpy as np
 from fastapi import APIRouter, Depends
 from orrery_relay import Relay
 from ..config import get_settings
-from ..dependencies import get_auth_store, AuthStore
+from ..dependencies import get_auth_store, AuthStore, query_id
 from ..broadcast import broadcast_search
 from ..repositories.graph_reads import entity_silos
 
@@ -13,7 +13,7 @@ router = APIRouter()
 
 
 @router.get("/search")
-async def search_query(q: str, top_k: int = 20, expand: bool = False, include_images: bool = False, auth: AuthStore = Depends(get_auth_store)):
+async def search_query(q: str, top_k: int = 20, expand: bool = False, include_images: bool = False, auth: AuthStore = Depends(get_auth_store), qid: str = Depends(query_id)):
     """Search the knowledge graph.
 
     Full 5-stage pipeline: expansion → retrieval → entity-boost → fusion → response.
@@ -59,6 +59,7 @@ async def search_query(q: str, top_k: int = 20, expand: bool = False, include_im
         "sub_queries_used": result.sub_queries_used,
         "total_entities": result.total_entities,
         "total_chunks": result.total_chunks,
+        "query_id": qid,
     }
 
     # Parallel image search (opt-in)

@@ -123,6 +123,29 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Orrery", lifespan=lifespan)
 
+
+# ── Query correlation id (issue #93; owned by the API, not any one client) ─────
+# Every request mints a `query_id`, stashed on request.state and returned in the `X-Query-Id`
+# header. The capture-relevant READ routes (search / entity / graph reads / document reads)
+# ALSO put it in their JSON body via the `query_id` dependency — so a bare `curl` (which won't
+# see a header without -i) still logs it beside the entity ids already in the body. The
+# middleware itself never touches a response body: it only sets the header. This keeps file
+# downloads, lists, streams, and error responses untouched — nothing to buffer or re-serialize.
+import uuid as _uuid
+from starlette.middleware.base import BaseHTTPMiddleware
+
+
+class QueryIdMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        qid = f"qry_{_uuid.uuid4().hex}"
+        request.state.query_id = qid
+        response = await call_next(request)
+        response.headers["X-Query-Id"] = qid
+        return response
+
+
+app.add_middleware(QueryIdMiddleware)
+
 # The graph payload is large and highly repetitive, and nothing was compressing it:
 # /graph served ~31 MB raw on the large graph with no content-encoding at all. It
 # gzips ~9x (to ~3.4 MB), because the bulk is repeated keys and ids. The 1 KB floor

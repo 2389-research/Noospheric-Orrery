@@ -104,3 +104,20 @@ class TrackerRunsIngestRequest(BaseModel):
     path: str
     chain: list[str] | None = None
     runs_dir: str | None = None
+
+
+class CcvaultIngestRequest(BaseModel):
+    """A staged ccvault session archive to ingest into the ACTIVE (target) noosphere.
+
+    `path` is a server-side location holding ccvault's output — a `ccvault.db` file or a
+    directory containing one (staged the way repos stage under /data/repos). Ingestion is
+    incremental and idempotent per workspace via the ccvault_* ledgers, so re-pointing at
+    the same archive only picks up new sessions / unseen query_ids.
+
+    IMPORTANT: target a CLONE of the source noosphere (see docs/ccvault-ingestion.md) so
+    the [entity:…] ids in sessions resolve — never a formal/full noosphere. `label` names
+    the single persistent ccvault collection in this workspace (get-or-create).
+    """
+    path: str
+    label: str = "ccvault"
+    provenance_kind: str | None = None  # override; defaults to agent_report for a ccvault silo

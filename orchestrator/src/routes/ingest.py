@@ -13,7 +13,7 @@ from orrery_relay import Relay
 from ..config import get_settings
 from ..dependencies import get_auth_store, AuthStore
 from ..models import (IngestResult, DirectoryIngestRequest, RepoIngestRequest,
-                      TrackerRunsIngestRequest, TextIngestRequest)
+                      TrackerRunsIngestRequest, TextIngestRequest, CcvaultIngestRequest)
 from ..pipeline.chunker import chunk_document
 from ..pipeline.excerpt import build_classification_excerpt
 from ..pipeline.classifier import classify_document
@@ -574,3 +574,63 @@ async def ingest_tracker_runs(request: TrackerRunsIngestRequest,
         store.close()
 
     return {"job_id": job_id, "mode": "bundle" if bundled else "raw"}
+
+
+@router.post("/ingest/ccvault", status_code=status.HTTP_202_ACCEPTED)
+async def ingest_ccvault(request: CcvaultIngestRequest, auth: AuthStore = Depends(get_auth_store)):
+    """Ingest a staged ccvault session archive into the ACTIVE (target) noosphere.
+
+    Two-phase, like /ingest/repo: this creates (or reuses) the single per-workspace ccvault
+    collection and enqueues the worker job; the worker does all model work (Flow A session
+    summaries now; Flow B active-work extraction is a follow-up) and enqueues extract_batch.
+
+    Target a CLONE of the source noosphere (docs/ccvault-ingestion.md), never a formal one.
+    Idempotent: incrementality lives in the ccvault_* ledgers, so re-ingesting the same
+    archive reuses the collection and picks up only new sessions.
+    """
+    p = Path(request.path)
+    if not p.exists():
+        raise HTTPException(status_code=400, detail=f"Path not found: {request.path}")
+
+    store = auth.store
+    try:
+        # ONE persistent ccvault collection per workspace (not one per session — that would
+        # make every session its own silo). Get-or-create, keyed on the label as the unique
+        # `path`; incrementality comes from the ledgers, not a fresh collection each call.
+        existing = store.collections.get_by_path(request.label)
+        if existing:
+            collection_id = existing["id"]
+        else:
+            collection_id = str(uuid.uuid4())
+            try:
+                store.collections.create(collection_id, request.label, request.label,
+                                         request.path, kind="ccvault",
+                                         provenance_kind=request.provenance_kind)
+            except sqlite3.IntegrityError:
+                # get_by_path isn't a lock; a concurrent create wins the UNIQUE(path) race.
+                # Re-fetch and reuse it rather than 500 — the point is idempotency.
+                existing = store.collections.get_by_path(request.label)
+                if not existing:
+                    raise
+                collection_id = existing["id"]
+
+        # Reuse the workspace's general spec if present, else seed the built-in one — the
+        # Flow-A docs are extracted by extract_batch, which is spec-driven (same as repo).
+        spec = store.specs.get_general()
+        if spec:
+            spec_id = spec.id
+        else:
+            spec_id = str(uuid.uuid4())
+            store.specs.create(spec_id, None, 1, GENERAL_CODE_SPEC)
+
+        job_id = str(uuid.uuid4())
+        store.jobs.create(job_id, "ingest_ccvault", collection_id, {
+            "archive_path": request.path,
+            "collection_id": collection_id,
+            "collection_label": request.label,
+            "spec_id": spec_id,
+        })
+    finally:
+        store.close()
+
+    return {"job_id": job_id, "collection_id": collection_id}

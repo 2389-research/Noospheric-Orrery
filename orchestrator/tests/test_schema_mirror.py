@@ -52,7 +52,11 @@ _MIRRORED_TABLES = ["graph_snapshot", "domain_edges", "collections",
                     # writes proposals via propose_correction() and serves them to the
                     # CorrectionsPanel — a one-sided column edit breaks either writer or
                     # the reader silently.
-                    "graph_issues"]
+                    "graph_issues",
+                    # ccvault ingestion ledgers: the worker's ingest_ccvault job WRITES
+                    # the dedup watermarks and the orchestrator's /ingest/ccvault route
+                    # reads them (get-or-create + no-op re-ingest) — cross-service surface.
+                    "ccvault_sessions_seen", "ccvault_processed"]
 
 # Indexes on that surface. Table DDL alone is not enough: an index dropped from one
 # file costs nothing structurally and everything in latency, so it is exactly the kind

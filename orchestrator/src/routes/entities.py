@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from ..dependencies import get_auth_store, AuthStore
+from ..dependencies import get_auth_store, AuthStore, query_id
 from ..repositories.factory import get_store
 
 router = APIRouter()
@@ -44,7 +44,7 @@ def get_star_graph(entity_id: str, co_limit: int = 30, auth: AuthStore = Depends
 
 
 @router.get("/entities/{entity_id}")
-def get_entity(entity_id: str, auth: AuthStore = Depends(get_auth_store)):
+def get_entity(entity_id: str, auth: AuthStore = Depends(get_auth_store), qid: str = Depends(query_id)):
     store = auth.store
     entity = store.entities.get(entity_id)
     if not entity:
@@ -73,4 +73,5 @@ def get_entity(entity_id: str, auth: AuthStore = Depends(get_auth_store)):
                       "kind": titles.get(s.document_id, {}).get("kind")}
                      for s in sources],
         "merge_history": merge_history,
+        "query_id": qid,
     }

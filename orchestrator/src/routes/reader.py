@@ -2,7 +2,7 @@
 
 import re
 from fastapi import APIRouter, HTTPException, Depends
-from ..dependencies import get_auth_store, AuthStore
+from ..dependencies import get_auth_store, AuthStore, query_id
 from ..repositories.factory import get_store
 
 router = APIRouter()
@@ -96,7 +96,7 @@ def _get_snippets(text: str, spans: list[dict], entity_id: str, max_chars: int =
 
 
 @router.get("/documents/{document_id}/reader")
-def get_document_reader(document_id: str, auth: AuthStore = Depends(get_auth_store)):
+def get_document_reader(document_id: str, auth: AuthStore = Depends(get_auth_store), qid: str = Depends(query_id)):
     """Return document content with entity spans for the reader view."""
     store = auth.store
 
@@ -159,4 +159,5 @@ def get_document_reader(document_id: str, auth: AuthStore = Depends(get_auth_sto
         ],
         "segments": segments,
         "total_mentions": len(spans),
+        "query_id": qid,
     }
