@@ -12,7 +12,11 @@ dependencies = [
     # until then. The orchestrator already depends on faiss for search; the worker
     # needs its own declaration because neither package imports the other.
     "faiss-cpu>=1.7.0",
-    "numpy>=1.26.0",
+    # Cap mirrors orchestrator/pyproject.toml and worker-cloud/requirements.txt:
+    # numpy 2.1+ requires the x86_v2 CPU baseline (SSE4.2/POPCNT), which the docker
+    # host (and old Intel Macs running the Tauri desktop worker sidecar) may lack →
+    # SIGILL on import. Keep all three numpy consumers on the same bound.
+    "numpy>=1.26.0,<2.1",
     "pyyaml>=6.0",
     # simmer-sdk: install from PyPI or local path (see worker/Dockerfile)
     # "simmer-sdk>=0.2.0",
